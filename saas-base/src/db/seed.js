@@ -91,6 +91,19 @@ async function seed() {
     }
 
     logger.info(`Seeded ${SYSTEM_ROLES.length} system roles.`)
+
+    // super_admin debe quedar con TODOS los permisos existentes en BD,
+    // no solo con los del array PERMISSIONS de este archivo. El resto vive
+    // en migraciones de módulos (business_partners, production, etc.).
+    // Patrón espejo a migrations/146_super_admin_sync_all_permissions.js.
+    const { rowCount: syncedCount } = await client.query(
+      `INSERT INTO role_permissions (role_id, permission_id)
+       SELECT r.id, p.id
+         FROM roles r CROSS JOIN permissions p
+        WHERE r.name = 'super_admin' AND r.tenant_id IS NULL
+       ON CONFLICT (role_id, permission_id) DO NOTHING`
+    )
+    logger.info(`super_admin sync: ${syncedCount} permisos extra amarrados.`)
   })
 }
 
