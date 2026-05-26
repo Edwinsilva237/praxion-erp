@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import useAuthStore from '@/store/useAuthStore'
 import { membershipsApi } from '@/api/memberships'
@@ -10,6 +11,10 @@ import { membershipsApi } from '@/api/memberships'
  * Se oculta automáticamente si el usuario solo tiene 1 membresía (no hay
  * nada que elegir). En modo impersonación también se oculta — el actor
  * tiene su sesión "prestada", el switcher no aplica.
+ *
+ * El menú desplegable se renderiza vía React Portal en `document.body`
+ * para escapar los contenedores con `overflow: hidden` y `z-index`
+ * conflictivos del AppShell (sidebar y main area).
  */
 export default function TenantSwitcher() {
   const activeTenant   = useAuthStore((s) => s.tenant)
@@ -17,25 +22,58 @@ export default function TenantSwitcher() {
   const switchTenant   = useAuthStore((s) => s.switchTenant)
   const [open, setOpen] = useState(false)
   const [switching, setSwitching] = useState(null)
-  const ref = useRef(null)
+  const [coords, setCoords] = useState(null)
+  const btnRef = useRef(null)
+  const menuRef = useRef(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ['memberships', 'me'],
     queryFn:  membershipsApi.me,
     staleTime: 60 * 1000,
-    // No fetcheamos si estamos en impersonación: no aplica.
     enabled: !impersonation,
   })
 
   const memberships = data?.memberships || []
   const showSwitcher = memberships.length > 1 && !impersonation
 
+  // Calcular posición del menú al abrir y al hacer scroll/resize del viewport.
   useEffect(() => {
-    function onClick(e) {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    if (!open) return
+    function position() {
+      if (!btnRef.current) return
+      const r = btnRef.current.getBoundingClientRect()
+      setCoords({
+        top:   r.bottom + 4,                  // 4px debajo del botón
+        right: window.innerWidth - r.right,   // alineado al borde derecho del botón
+      })
     }
-    if (open) document.addEventListener('mousedown', onClick)
+    position()
+    window.addEventListener('resize', position)
+    window.addEventListener('scroll', position, true)
+    return () => {
+      window.removeEventListener('resize', position)
+      window.removeEventListener('scroll', position, true)
+    }
+  }, [open])
+
+  // Click outside cierra el menú (considerando portal: el menú no es hijo del botón).
+  useEffect(() => {
+    if (!open) return
+    function onClick(e) {
+      const inBtn  = btnRef.current  && btnRef.current.contains(e.target)
+      const inMenu = menuRef.current && menuRef.current.contains(e.target)
+      if (!inBtn && !inMenu) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
+  }, [open])
+
+  // Cerrar con Escape.
+  useEffect(() => {
+    if (!open) return
+    function onKey(e) { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
   }, [open])
 
   async function handlePick(tenantId) {
@@ -64,9 +102,80 @@ export default function TenantSwitcher() {
 
   const activeLabel = activeTenant?.name || 'Empresa'
 
+  const menu = open && coords && createPortal(
+    <div
+      ref={menuRef}
+      role="listbox"
+      style={{
+        position: 'fixed',
+        top:      `${coords.top}px`,
+        right:    `${coords.right}px`,
+        zIndex:   9999,
+      }}
+      className="
+        min-w-[260px] max-h-[60vh] overflow-y-auto
+        bg-bg-primary border border-line-subtle rounded-lg shadow-lg
+        py-1
+      "
+    >
+      <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-ink-tertiary">
+        Empresas
+      </div>
+      {memberships.map((m) => {
+        const isActive = m.id === activeTenant?.id
+        const isLoadingThis = switching === m.id
+        return (
+          <button
+            key={m.id}
+            onClick={() => handlePick(m.id)}
+            disabled={isLoadingThis}
+            className={`
+              w-full text-left px-3 py-2 text-xs flex items-center gap-2
+              ${isActive ? 'bg-surface-primary/[0.08]' : 'hover:bg-surface-primary/[0.04]'}
+              disabled:opacity-60 disabled:cursor-wait
+              transition-colors
+            `}
+            role="option"
+            aria-selected={isActive}
+          >
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium text-ink-primary truncate">{m.name}</span>
+                {m.is_sandbox && (
+                  <span className="badge badge-yellow text-[9px] px-1 py-0">sandbox</span>
+                )}
+                {!m.is_active && (
+                  <span className="badge badge-red text-[9px] px-1 py-0">suspendida</span>
+                )}
+              </div>
+              <div className="text-[10px] text-ink-tertiary mt-0.5 flex items-center gap-1.5">
+                <span>{m.role}</span>
+                <span>·</span>
+                <span className="truncate">{m.slug}</span>
+              </div>
+            </div>
+            {isActive && (
+              <svg className="w-4 h-4 text-positive shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            )}
+            {isLoadingThis && (
+              <svg className="w-3.5 h-3.5 animate-spin text-ink-tertiary shrink-0" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+              </svg>
+            )}
+          </button>
+        )
+      })}
+    </div>,
+    document.body
+  )
+
   return (
-    <div className="relative" ref={ref}>
+    <>
       <button
+        ref={btnRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         disabled={isLoading || switching}
@@ -93,68 +202,7 @@ export default function TenantSwitcher() {
             d="M19 9l-7 7-7-7" />
         </svg>
       </button>
-
-      {open && (
-        <div
-          role="listbox"
-          className="
-            absolute right-0 mt-1 z-30 min-w-[260px] max-h-[60vh] overflow-y-auto
-            bg-bg-primary border border-line-subtle rounded-lg shadow-lg
-            py-1
-          "
-        >
-          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-ink-tertiary">
-            Empresas
-          </div>
-          {memberships.map((m) => {
-            const isActive = m.id === activeTenant?.id
-            const isLoadingThis = switching === m.id
-            return (
-              <button
-                key={m.id}
-                onClick={() => handlePick(m.id)}
-                disabled={isLoadingThis}
-                className={`
-                  w-full text-left px-3 py-2 text-xs flex items-center gap-2
-                  ${isActive ? 'bg-surface-primary/[0.08]' : 'hover:bg-surface-primary/[0.04]'}
-                  disabled:opacity-60 disabled:cursor-wait
-                  transition-colors
-                `}
-                role="option"
-                aria-selected={isActive}
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-medium text-ink-primary truncate">{m.name}</span>
-                    {m.is_sandbox && (
-                      <span className="badge badge-yellow text-[9px] px-1 py-0">sandbox</span>
-                    )}
-                    {!m.is_active && (
-                      <span className="badge badge-red text-[9px] px-1 py-0">suspendida</span>
-                    )}
-                  </div>
-                  <div className="text-[10px] text-ink-tertiary mt-0.5 flex items-center gap-1.5">
-                    <span>{m.role}</span>
-                    <span>·</span>
-                    <span className="truncate">{m.slug}</span>
-                  </div>
-                </div>
-                {isActive && (
-                  <svg className="w-4 h-4 text-positive shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                )}
-                {isLoadingThis && (
-                  <svg className="w-3.5 h-3.5 animate-spin text-ink-tertiary shrink-0" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
-                  </svg>
-                )}
-              </button>
-            )
-          })}
-        </div>
-      )}
-    </div>
+      {menu}
+    </>
   )
 }
