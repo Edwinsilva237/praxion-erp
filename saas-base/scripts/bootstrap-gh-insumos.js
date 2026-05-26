@@ -28,11 +28,8 @@
  */
 
 require('dotenv').config()
-const bcrypt  = require('bcrypt')
-const request = require('supertest')
-const app     = require('../src/app')
-const { pool, query, withBypass, withTransaction } = require('../src/db')
-const config = require('../src/config')
+const { pool, query, withBypass } = require('../src/db')
+const tenantService = require('../src/modules/tenants/tenantService')
 
 const PROD_SLUG    = 'gh-insumos-prod'
 const SANDBOX_SLUG = 'gh-insumos-sandbox'
@@ -80,11 +77,12 @@ async function provisionTenant({ slug, name, isSandbox }) {
     return existing
   }
 
-  // El endpoint /api/tenants/provision crea tenant + admin + suscripción trial
-  // + membresía 'owner' (la última se agregó hoy en tenantService.provisionTenant).
-  const res = await request(app)
-    .post('/api/tenants/provision')
-    .send({
+  // Llamar al service directo (sin HTTP) para evitar requerir supertest en
+  // producción (es devDependency y el Docker corre con --omit=dev).
+  // El service crea tenant + admin + suscripción trial + membresía 'owner'.
+  let tenant
+  try {
+    const result = await tenantService.provisionTenant({
       slug,
       name,
       plan:          'owner',
@@ -92,9 +90,10 @@ async function provisionTenant({ slug, name, isSandbox }) {
       adminPassword: ADMIN_PASS,
       adminName:     ADMIN_NAME,
     })
-
-  if (res.status !== 201) fail(`POST /tenants/provision falló para ${slug} (${res.status})`, res.body)
-  const tenant = res.body.tenant
+    tenant = result.tenant
+  } catch (err) {
+    fail(`provisionTenant falló para ${slug}: ${err.message}`, err.stack)
+  }
   ok(`Tenant '${slug}' creado (id=${tenant.id})`)
 
   // Marcar is_sandbox si aplica
