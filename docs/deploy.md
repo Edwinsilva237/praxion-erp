@@ -1,148 +1,338 @@
-# Deploy y mantenimiento en Render
+# Deploy y operaciones en Render
 
-Guía operativa para actualizar el ERP en producción. Stack: Render Blueprint (`render.yaml`) con `praxion-api` (backend Docker), `praxion-web` (frontend Vite estático) y `praxion-db` (Postgres 16 managed).
+Guía operativa práctica para mantener el ERP en producción. Pensada para el día a día: subir cambios, hacer hotfixes, correr scripts, debugging.
 
-## Resumen del pipeline
+---
 
-```
-git push (rama por defecto)
-       ↓
-GitHub webhook
-       ↓
-Render detecta cambios
-       ↓
-praxion-api:
-  1. docker build (saas-base/Dockerfile)
-  2. preDeployCommand: node src/db/migrate.js   ← migraciones
-  3. si falla → mantiene la versión anterior
-  4. si pasa → cambia el tráfico al nuevo container
-praxion-web:
-  1. npm ci && npm run build
-  2. publica dist/ en el CDN
-```
+## 1. Arquitectura del deploy
 
-`autoDeploy: true` en ambos servicios. **No hay que apretar nada** después del push.
+### Stack en producción
 
-## Update normal (cambios de código sin migraciones nuevas)
+| Componente | Servicio Render | URL pública | Plan |
+|---|---|---|---|
+| Backend Node/Express | `praxion-api` | https://praxion-api.onrender.com | Starter ($7/mes) |
+| Frontend React/Vite | `praxion-web` | https://praxion-web.onrender.com | Static (gratis) |
+| Base de datos PostgreSQL 16 | `praxion-db` | (interna) | basic-256mb ($6/mes) |
+
+*Cuando configures los dominios custom, las URLs públicas serán `https://api.praxionops.com` y `https://praxionops.com` (ya declarados en `render.yaml`).*
+
+### Repo y rama
+
+- **GitHub:** https://github.com/Edwinsilva237/praxion-erp
+- **Rama por defecto:** `main`
+- **Local:** `C:\Users\admin\CLON ERP CLAUDE\` (Windows, Git bash o terminal)
+
+### Servicios externos vinculados (env vars en Render dashboard)
+
+- **Cloudflare R2:** object storage para logos, fotos de evidencia, PDFs adjuntos.
+- **Facturapi:** timbrado CFDI (modo live).
+- **Gmail SMTP:** correos transaccionales.
+- **Banxico:** tipos de cambio diarios.
+- **Sentry:** error tracking (opcional, puede quedar vacío).
+- **Stripe:** desactivado por ahora — billing responde 503 hasta que estés listo para cobrar.
+- **Upstash Redis:** desactivado por ahora — colas en modo síncrono fallback.
+
+---
+
+## 2. Subir cambios nuevos (flujo normal)
+
+### Escenario A — Cambios solo de código (sin migraciones, sin scripts)
 
 ```bash
+cd "C:/Users/admin/CLON ERP CLAUDE"
+
+# Ver qué cambió
+git status
+
+# Agregar todo lo modificado
 git add .
-git commit -m "feat: describe el cambio"
-git push origin <rama-por-defecto>
+
+# Commit con mensaje descriptivo (qué + por qué)
+git commit -m "feat: descripción corta del cambio"
+
+# Pushear → Render redeploya automáticamente
+git push origin main
 ```
 
-Render redeploya automáticamente. Tiempo típico: 2–5 minutos.
+**Tiempo de deploy:** 2–5 min. Render detecta el push, construye el container, lo deploya, cambia el tráfico.
 
-**Verificar en Render dashboard:**
-- `praxion-api` → ver logs del deploy. Buscar `Server listening on port 10000` al final.
-- `/health` debe responder `{"status":"ok"}` desde `https://api.praxionops.com/health`.
+**Verificar:** abre el ERP, refresca con `Ctrl+Shift+R` (hard refresh para invalidar cache del browser).
 
-## Update con migraciones nuevas
+### Escenario B — Cambios que incluyen migraciones nuevas
 
-Igual al flujo normal — el `preDeployCommand` ejecuta `node src/db/migrate.js` automáticamente antes de cambiar el tráfico.
+Igual al escenario A. El `preDeployCommand` en `render.yaml` corre `node src/db/migrate.js` automáticamente antes de cambiar el tráfico al nuevo container.
 
 **Si la migración falla:**
-- El deploy se aborta.
+- El deploy se aborta automáticamente.
 - La versión anterior sigue corriendo (sin downtime).
-- Hay que revisar logs en `praxion-api` → tab Deploys → ver output del preDeploy.
-- Causas típicas: constraint violado por datos existentes, sintaxis SQL inválida, columna ya existía.
-- Fix: ajustar la migración (idempotente / data-cleanup previo) y volver a empujar.
+- Revisar logs en Render → `praxion-api` → tab "Events" → click en el deploy fallido → ver output del preDeploy.
+- Causas típicas: constraint violado por datos existentes, sintaxis SQL inválida, columna ya existente.
+- Fix: ajustar el archivo de migración (hacerla idempotente o agregar cleanup previo) y volver a pushear.
 
-## Bootstrap inicial (BD limpia)
+### Escenario C — Cambios que requieren correr un script one-off
 
-Cuando el deploy está corriendo contra una BD recién creada (sin tenants/usuarios), hay que provisionar el tenant principal manualmente. Usar **Render Shell** desde el dashboard del servicio `praxion-api`:
+Después del deploy, abre Render Shell (ver sección 3) y corre:
 
 ```bash
-# Opcional: define el password del admin via env. Si no, usa el default.
-export ADMIN_PASSWORD='ContraseñaFuerteAleatoria!2026'
+node scripts/<nombre-del-script>.js
+```
 
+**Importante:** los scripts que corras en producción NO pueden usar `devDependencies` (ej. `supertest`, `jest`). El Dockerfile corre `npm ci --omit=dev`. Si necesitas un script, debe usar solo lo que está en `dependencies` o llamar directo a los services del backend (ver `bootstrap-gh-insumos.js` como ejemplo).
+
+---
+
+## 3. Operaciones rápidas en Render
+
+### Abrir Shell del backend
+
+1. https://dashboard.render.com → click en `praxion-api`.
+2. En la barra horizontal de pestañas (debajo del título): **Events | Logs | Shell | Environment | Settings | Metrics**.
+3. Click en **Shell**.
+4. Tarda 5–15 seg en conectar. Ya estás dentro del container con el código corriendo.
+
+### Ver logs en vivo
+
+1. `praxion-api` → pestaña **Logs**.
+2. Logs en tiempo real. Filtro por nivel disponible arriba.
+3. Para descargar histórico: botón "Download" arriba a la derecha.
+
+### Cambiar una variable de entorno
+
+1. `praxion-api` → pestaña **Environment**.
+2. Edita el valor (las marcadas con candado son secretas).
+3. Click "Save Changes".
+4. Render **redeploya automáticamente** el servicio con la nueva variable (tarda 2–3 min).
+
+⚠️ **No edites variables que vienen `fromDatabase`** (DB_HOST, DB_PORT, etc.) — son referencias automáticas a `praxion-db`.
+
+### Forzar un redeploy manual
+
+Útil si Render no detectó un push o quieres reintentar:
+
+1. `praxion-api` → botón arriba a la derecha **"Manual Deploy ▾"**.
+2. **"Deploy latest commit"** (usa el código actual del repo) o **"Clear build cache & deploy"** (si sospechas problema de cache).
+
+### Rollback a una versión anterior
+
+1. `praxion-api` → pestaña **Events**.
+2. Busca un deploy verde anterior (badge ✅ Deploy live).
+3. Click en el commit → botón **"Rollback to this deploy"**.
+4. Render recompila ese commit y vuelve a poner ese código en vivo.
+
+⚠️ Si el rollback es por una migración que rompió datos, el rollback **no revierte la migración** automáticamente — solo el código. Para revertir migración hay que correr el bloque `down` manualmente (ver sección 5).
+
+### Conectar a la BD desde la máquina local
+
+Para hacer queries directas, dumps, etc.:
+
+1. Render dashboard → `praxion-db` → pestaña "Connect".
+2. Copia **"External Database URL"** (empieza con `postgresql://...`, incluye credenciales).
+3. En tu terminal local:
+   ```bash
+   psql "postgresql://<usuario>:<pass>@<host>/<db>"
+   ```
+   *Requiere `psql` instalado (parte del paquete `postgresql-client`).*
+
+Para inspección rápida sin instalar psql, usa Render Shell + scripts Node:
+
+```bash
+# Dentro de Render Shell del praxion-api
+node -e "const{query,pool}=require('./src/db');(async()=>{const r=await query('SELECT slug,name,is_sandbox FROM tenants ORDER BY slug');console.log(r.rows);await pool.end()})()"
+```
+
+---
+
+## 4. Scripts one-off útiles
+
+### Bootstrap inicial (solo se corre 1 vez, BD limpia)
+
+```bash
+# En Render Shell del praxion-api
+export ADMIN_PASSWORD='TuPasswordFuerte!2026'
 node scripts/bootstrap-gh-insumos.js
 ```
 
-Esto crea:
-- `gh-insumos-prod` (sin datos, preset extrusión plástico)
-- `gh-insumos-sandbox` (`is_sandbox=true`, separado de prod)
-- Admin `administracion@ghinsumos.com` en ambos como cuenta espejo + platform admin
-- Membresías cruzadas para que el admin pueda cambiar entre ambos desde el switcher
+Crea `gh-insumos-prod` + `gh-insumos-sandbox` + admin con membership cruzada. Idempotente (puedes correrlo varias veces sin daño).
 
-El script es **idempotente**: si lo corres dos veces, los pasos repetidos se saltan sin error.
-
-## Variables de entorno críticas
-
-Configuradas en el dashboard de cada servicio (las marcadas `sync: false` en `render.yaml` se piden manualmente):
-
-**Backend (`praxion-api`):**
-- `JWT_SECRET` — string aleatorio ≥32 chars. Generar con `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
-- `DB_*` — se autocompletan desde `praxion-db` (referencias `fromDatabase` en `render.yaml`).
-- `R2_*` — credenciales Cloudflare R2 para uploads (logo del tenant, evidencias de entrega, etc.).
-- `FACTURAPI_KEY`, `FACTURAPI_USER_KEY` — credenciales Facturapi (timbrado CFDI).
-- `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM` — Gmail SMTP para correos transaccionales.
-- `BANXICO_TOKEN` — token público de Banxico para tipos de cambio.
-- `SENTRY_DSN`, `SENTRY_RELEASE` — error tracking.
-- `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` — vacíos por ahora (billing responde 503).
-- `REDIS_URL` — vacío por ahora (modo síncrono fallback).
-
-**Frontend (`praxion-web`):**
-- `VITE_API_URL` — `https://api.praxionops.com/api`
-- `VITE_SENTRY_DSN`, `VITE_SENTRY_ENV` — error tracking del browser.
-
-## Comandos de mantenimiento en Render Shell
-
-Render Shell es una terminal interactiva dentro del contenedor de prod. Acceso desde el dashboard del servicio → tab Shell.
+### Resetear password de un usuario
 
 ```bash
-# Ver migraciones aplicadas
-node -e "const{query,pool}=require('./src/db');(async()=>{const r=await query('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 10');console.log(r.rows);await pool.end()})()"
-
-# Resetear password de un usuario (NO en prod sin razón fuerte)
-node scripts/reset-password.js <email> <nuevo_password>
-
-# Inspección rápida de tenants
-node scripts/_inspect-tenants.js   # si existe — si no, query directo desde shell de psql
-
-# Conexión psql interactiva (necesita instalar postgresql-client en el container)
-psql "$DATABASE_URL"
+# En Render Shell
+node scripts/reset_password.js <email> <nuevo_password>
 ```
 
-## Rollback de emergencia
+### Inspeccionar tenants y usuarios
 
-**Si un deploy rompe prod:**
-1. Render dashboard → `praxion-api` → tab Deploys.
-2. Buscar el deploy verde previo.
-3. Click "Rollback to this deploy".
-4. Render recompila ese commit y vuelve atrás el tráfico.
+```bash
+# En Render Shell
+node -e "const{query,withBypass,pool}=require('./src/db');(async()=>{const r=await withBypass(()=>query('SELECT t.slug, t.is_sandbox, COUNT(u.id) AS users FROM tenants t LEFT JOIN users u ON u.tenant_id=t.id GROUP BY t.id ORDER BY t.slug'));console.log(r.rows);await pool.end()})()"
+```
 
-**Si la migración rompió la BD (no solo el código):**
-1. Las migraciones tienen `down` en cada archivo (`saas-base/src/db/migrations/*.js`).
-2. Por seguridad, el runner actual NO ejecuta downs automáticamente. Hay que correr manualmente:
-   ```bash
-   node scripts/migrate-down.js <numero_migracion>   # si existe
-   # O directo desde psql ejecutando el SQL del bloque `down`.
+### Listar membresías de un usuario
+
+```bash
+# En Render Shell
+node -e "const{query,withBypass,pool}=require('./src/db');(async()=>{const r=await withBypass(()=>query(\"SELECT u.email, t.slug, m.role FROM tenant_memberships m JOIN users u ON u.id=m.user_id JOIN tenants t ON t.id=m.tenant_id WHERE u.email='administracion@ghinsumos.com' ORDER BY t.slug\"));console.log(r.rows);await pool.end()})()"
+```
+
+---
+
+## 5. Migraciones — operación avanzada
+
+### Aplicar migraciones manualmente
+
+Normalmente esto pasa automático en cada deploy (`preDeployCommand`). Si necesitas correrlas manual:
+
+```bash
+# En Render Shell
+node src/db/migrate.js
+```
+
+Output: lista de migraciones pendientes y "Applied N migration(s)".
+
+### Ver qué migraciones están aplicadas
+
+```bash
+# En Render Shell
+node -e "const{query,pool}=require('./src/db');(async()=>{const r=await query('SELECT version, applied_at FROM schema_migrations ORDER BY version DESC LIMIT 10');console.table(r.rows);await pool.end()})()"
+```
+
+### Revertir una migración (rollback de BD)
+
+⚠️ **Siempre hacer backup antes**: Render → `praxion-db` → "Backups" → "Create backup".
+
+Cada archivo en `saas-base/src/db/migrations/` exporta un bloque `down` con el SQL de rollback. No hay runner automático de `down` (intencional, por seguridad). Para revertir:
+
+1. Lee el archivo, ej. `145_tenant_memberships.js`.
+2. Copia el SQL del `down`.
+3. Ejecuta desde Render Shell o psql conectado a la BD.
+4. Borra la fila correspondiente de `schema_migrations`:
+   ```sql
+   DELETE FROM schema_migrations WHERE version = '145_tenant_memberships';
    ```
-3. **Siempre** hacer backup antes: Render → `praxion-db` → tab Backups → "Create backup".
 
-## Dominio custom
+---
 
-`render.yaml` declara las URLs:
-- Frontend: `https://praxionops.com`
-- Backend: `https://api.praxionops.com`
+## 6. Troubleshooting conocido
 
-Configuración DNS apunta al CNAME que Render asigna. Para detalles ver [docs/historia/HANDOFF_SESION_23.md](historia/HANDOFF_SESION_23.md) sección dominio.
+### "We are unable to access your GitHub repository" (al conectar Render)
 
-## Checklist post-deploy
+**Causa:** Render no tiene permiso al repo privado.
 
-Después de cualquier deploy en prod:
+**Solución que funcionó:**
+1. GitHub → repo → Settings → Danger Zone → cambiar a **Public** temporalmente.
+2. En Render conectar el repo (ya no da error).
+3. Render → Settings → confirmar que el repo aparece correctamente conectado.
+4. Volver a GitHub → Settings → Danger Zone → cambiar de vuelta a **Private**.
+5. La conexión Render↔GitHub se mantiene (Render ya tiene la GitHub App instalada).
 
-- [ ] `/health` responde 200
-- [ ] Login funciona con admin existente
-- [ ] El switcher de tenant lista las empresas esperadas
-- [ ] Las funciones que cambiaron en este deploy funcionan en el ERP real
-- [ ] Sentry no muestra spike de errores nuevos
-- [ ] Los logs de `praxion-api` no muestran errores recurrentes
+### "Cannot find module 'supertest'" (al correr un script)
 
-## Próximos pasos pendientes para hardening
+**Causa:** el script usa una `devDependency` y Dockerfile corre `npm ci --omit=dev`.
 
-1. **Activar RLS** (Row-Level Security en Postgres) siguiendo [docs/RLS_ACTIVATION.md](RLS_ACTIVATION.md). Hoy está apagado por flag `app.rls_enforce`. El doble candado contra leaks cross-tenant solo aplica cuando se prende. Cuando haya >1 cliente real, **activar antes**.
-2. **Upstash Redis** para colas BullMQ con reintentos. Hoy modo síncrono — un email que falle no se reintenta.
-3. **Stripe live** cuando esté listo el flujo de cobro.
-4. **Backups automáticos**: Render Postgres incluye backups, pero conviene también un job de pg_dump → R2 con retención de 30 días.
+**Solución:** refactorizar el script para usar solo `dependencies`. Llamar services directo (ej. `tenantService.provisionTenant()`) en vez de hacer requests HTTP via supertest. Ver `scripts/bootstrap-gh-insumos.js` como ejemplo.
+
+### El dropdown / modal aparece detrás de otros elementos
+
+**Causa:** `overflow: hidden` en contenedores padre + conflicto de z-index con sidebar (`z-30`).
+
+**Solución:** usar React Portal con `createPortal` para renderizar el menú directo en `document.body`, con `position: fixed` y `z-index: 9999`. Ver `components/layout/TenantSwitcher.jsx`.
+
+### Tras un deploy, el ERP sigue mostrando código viejo
+
+**Causa:** cache del browser sirve el JS antiguo.
+
+**Solución:** `Ctrl+Shift+R` (hard refresh). En móvil: cerrar y abrir el navegador, o limpiar cache del sitio en settings.
+
+### "Token does not match tenant" (403) al cambiar de empresa
+
+**Causa:** el refresh token previo está bound al tenant anterior.
+
+**Solución:** ya está manejado por `useAuthStore.switchTenant()` — al cambiar emite nuevo par accessToken + refreshToken y revoca el anterior. Si pasa, hacer logout y login de nuevo.
+
+### Errores 503 en `/api/billing/*`
+
+**Causa esperada:** `STRIPE_SECRET_KEY` está vacío.
+
+**Esto NO es un bug** — el sistema responde 503 a billing intencionalmente cuando Stripe no está configurado, hasta que decidas activar cobros.
+
+---
+
+## 7. Checklists
+
+### Pre-push (antes de subir cambios)
+
+- [ ] `cd saas-base && npm test -- --forceExit` → tests verdes (ideal 37/535/9 o lo que corresponda)
+- [ ] `cd saas-erp-frontend && npx vite build --mode development` → build sin errores
+- [ ] `git status` → revisar que no se cuele nada que no quieras (especialmente `.env`, archivos personales)
+- [ ] `git diff --cached` → última pasada visual a lo que va al commit
+- [ ] Mensaje de commit descriptivo y en imperativo (`feat:`, `fix:`, `chore:`, `docs:`)
+
+### Post-deploy (después de pushear)
+
+- [ ] Render → `praxion-api` → Events → confirmar "Deploy live for <commit>"
+- [ ] `https://praxion-api.onrender.com/health` responde `{"status":"ok"}`
+- [ ] Render → `praxion-web` → Events → confirmar deploy del frontend también
+- [ ] Hard refresh del ERP (Ctrl+Shift+R)
+- [ ] Smoke test rápido: login funciona, switcher de empresa muestra ambas, página que cambiaste funciona
+- [ ] Sentry → revisar que NO haya spike de errores nuevos
+
+---
+
+## 8. Acceso a cuentas y credenciales
+
+Lista de dónde viven las cuentas/secretos. **No están escritos en este doc por seguridad.**
+
+| Servicio | Cuenta | Dónde encontrar credenciales |
+|---|---|---|
+| Render | (tu email/GitHub) | https://dashboard.render.com → Account Settings |
+| GitHub | `Edwinsilva237` | Tu password / SSH key personal |
+| Cloudflare R2 | (tu cuenta CF) | https://dash.cloudflare.com → R2 → API tokens |
+| Facturapi | (tu cuenta Facturapi) | https://dashboard.facturapi.io → API Keys |
+| Gmail SMTP | (cuenta de correos del ERP) | Google → App passwords |
+| Banxico | Token público | https://www.banxico.org.mx → registro |
+| Sentry | (tu cuenta Sentry) | https://sentry.io → Settings → Client Keys (DSN) |
+| ERP Admin | `administracion@ghinsumos.com` | El password lo definiste al correr el bootstrap |
+
+Para JWT_SECRET nuevo:
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+
+---
+
+## 9. Próximos pasos pendientes para hardening
+
+1. **Dominio custom configurado**: hoy las URLs son `*.onrender.com`. Apuntar `praxionops.com` y `api.praxionops.com` desde DNS al CNAME de Render.
+2. **Activar RLS** (Row-Level Security en Postgres) siguiendo `docs/RLS_ACTIVATION.md`. Hoy está apagado por flag `app.rls_enforce`. El doble candado contra leaks cross-tenant solo aplica cuando se prende. **Activar antes de tener más de 1 cliente real.**
+3. **Upstash Redis** para colas BullMQ con reintentos. Hoy modo síncrono → emails que fallan no se reintentan.
+4. **Stripe live** cuando esté listo el flujo de cobro.
+5. **Backups automáticos extra**: Render Postgres incluye backups managed (revisar pestaña Backups en `praxion-db`), pero conviene también un job de `pg_dump → R2` con retención de 30 días.
+6. **Migrar scripts de provisioning** (provision-frituras, provision-pasteleria, etc.) para que NO usen supertest — hoy mismo problema que tenía el bootstrap.
+
+---
+
+## 10. Resumen ultra-corto (cheatsheet)
+
+```bash
+# ── Subir un cambio ────────────────────────────────────────
+git add . && git commit -m "tu mensaje" && git push origin main
+# Espera 2-3 min, refresca el ERP con Ctrl+Shift+R
+
+# ── Correr script en prod ──────────────────────────────────
+# 1. Render dashboard → praxion-api → Shell
+# 2. node scripts/<script>.js
+
+# ── Ver logs ───────────────────────────────────────────────
+# Render → praxion-api → Logs
+
+# ── Cambiar env var ────────────────────────────────────────
+# Render → praxion-api → Environment → editar → Save
+# (redeploy automático)
+
+# ── Rollback ───────────────────────────────────────────────
+# Render → praxion-api → Events → click deploy verde anterior → Rollback
+
+# ── Inspeccionar BD desde Shell ────────────────────────────
+node -e "const{query,withBypass,pool}=require('./src/db');(async()=>{const r=await withBypass(()=>query('TU QUERY AQUI'));console.log(r.rows);await pool.end()})()"
+```
