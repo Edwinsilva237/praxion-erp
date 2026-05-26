@@ -1,0 +1,43 @@
+// ════════════════════════════════════════════════════════════════════════════
+// PARCHE PARA Sidebar.jsx
+// ════════════════════════════════════════════════════════════════════════════
+//
+// En tu archivo /saas-erp-frontend/src/components/layout/Sidebar.jsx,
+// localiza el array `NAV_SECTIONS` (alrededor de la línea 66).
+// Al FINAL del array (después del último objeto que tiene "Inventario"),
+// AGREGA esta nueva sección:
+
+  {
+    label: 'Configuración',
+    items: [
+      { label: 'Almacenes', to: '/configuracion/almacenes', icon: icons.gear, permission: 'inventario:manage' },
+    ],
+  },
+
+// ════════════════════════════════════════════════════════════════════════════
+// RESULTADO ESPERADO — el final de NAV_SECTIONS debe verse así:
+// ════════════════════════════════════════════════════════════════════════════
+//
+//     {
+//       label: 'Operaciones',
+//       items: [
+//         { label: 'Inventario', to: '/inventario', icon: icons.inventory, permission: null },
+//       ],
+//     },
+//     {
+//       label: 'Configuración',                                             ← NUEVO
+//       items: [                                                            ← NUEVO
+//         { label: 'Almacenes', to: '/configuracion/almacenes',             ← NUEVO
+//           icon: icons.gear, permission: 'inventario:manage' },            ← NUEVO
+//       ],                                                                  ← NUEVO
+//     },                                                                    ← NUEVO
+//   ]
+//
+// ════════════════════════════════════════════════════════════════════════════
+// NOTAS:
+//   - El ícono "gear" YA está definido en tu archivo (línea 53 aprox.)
+//   - El permiso 'inventario:manage' hace que solo super_admin y admin vean
+//     esta sección; operadores normales no la verán.
+//   - Si no usas permisos estrictos, puedes cambiar 'inventario:manage' por
+//     null para que se vea siempre.
+// ════════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,326 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --sidebar-width: 224px;
+    --topbar-height: 52px;
+    --bottomnav-height: 56px;
+    color-scheme: dark;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    overflow-x: hidden;
+    background: #0B0F12;
+  }
+
+  body {
+    @apply bg-bg-primary text-ink-primary antialiased;
+    font-family: 'Sora', 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+    /* Safe-area iOS (notch) */
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  /* Forzar tema oscuro en form controls nativos */
+  input, select, textarea, button { color-scheme: dark; }
+
+  /* iOS hace zoom automático cuando enfoca un input con font-size <16px.
+     En móvil subimos el tamaño base de los campos para evitarlo. */
+  @media (max-width: 640px) {
+    input, select, textarea {
+      font-size: 16px !important;
+    }
+
+    /* Tablas: scroll horizontal real cuando la tabla excede el ancho del card. */
+    .card:has(table),
+    .card.overflow-hidden:has(table),
+    div.card:has(table) {
+      overflow-x: auto !important;
+      overflow-y: visible;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    /* Modales full-screen en móvil. */
+    .fixed.inset-0:has(> .card) {
+      padding: 0 !important;
+    }
+    .fixed.inset-0 > .card,
+    .fixed.inset-0 > form.card {
+      width: 100vw !important;
+      max-width: 100vw !important;
+      height: 100dvh !important;
+      max-height: 100dvh !important;
+      border-radius: 0 !important;
+      border: 0 !important;
+      overflow-y: auto;
+      padding-top: max(1rem, env(safe-area-inset-top)) !important;
+      padding-bottom: max(1rem, env(safe-area-inset-bottom)) !important;
+    }
+  }
+
+  /* Scrollbar Praxion: angosto y oscuro */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2A3540;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3A4652;
+  }
+
+  /* Selección de texto con acento verde Praxion */
+  ::selection {
+    background: rgba(94, 159, 50, 0.30);
+    color: #F4F7F8;
+  }
+
+  /* Headings dark legibles */
+  h1, h2, h3, h4, h5, h6 { color: #F4F7F8; }
+
+  /* Detalles nativos varios para coherencia dark */
+  hr { border-color: #2A3540; }
+
+  /* Date pickers nativos en dark — invierte el icono del calendario en Chrome */
+  input[type="date"]::-webkit-calendar-picker-indicator,
+  input[type="time"]::-webkit-calendar-picker-indicator,
+  input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+    filter: invert(0.7);
+    cursor: pointer;
+  }
+}
+
+@layer components {
+  /* ── Eyebrow (etiqueta pequeña sobre títulos) ───────────────────────── */
+  .eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-300;
+  }
+
+  /* ── Botones ─────────────────────────────────────────────────────────── */
+  .btn {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium
+           min-h-[40px] transition-all duration-150
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn text-white border border-brand-300/40
+           shadow-[0_8px_20px_rgba(94,159,50,0.22)]
+           hover:-translate-y-[1px] active:translate-y-0 active:scale-[0.98];
+    background: linear-gradient(135deg, #5E9F32 0%, #7ABF45 100%);
+  }
+  .btn-primary:hover {
+    background: linear-gradient(135deg, #6FB33D 0%, #86CA51 100%);
+  }
+  .btn-secondary {
+    @apply btn bg-white/[0.04] text-ink-primary border border-line-subtle
+           hover:bg-white/[0.07] hover:border-line-strong active:scale-[0.98];
+  }
+  .btn-ghost {
+    @apply btn text-ink-secondary hover:text-ink-primary hover:bg-white/[0.04]
+           active:scale-[0.98];
+  }
+  .btn-danger {
+    @apply btn bg-status-danger/90 text-white border border-status-danger
+           hover:bg-status-danger active:scale-[0.98]
+           shadow-[0_8px_20px_rgba(217,92,92,0.18)];
+  }
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs rounded-md min-h-[32px];
+  }
+  @media (max-width: 640px) {
+    .btn-sm {
+      @apply min-h-[40px] px-3.5 py-2 text-sm;
+    }
+  }
+  .btn-icon {
+    @apply p-2 rounded-md min-h-[40px] min-w-[40px] justify-center;
+  }
+
+  /* ── Inputs ──────────────────────────────────────────────────────────── */
+  .input {
+    @apply w-full h-9 px-3 text-sm
+           bg-[#0F151C] border border-line-subtle rounded-md
+           placeholder-ink-muted text-ink-primary
+           focus:outline-none
+           focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20
+           transition-colors duration-150;
+  }
+  .input-error {
+    @apply border-status-danger focus:border-status-danger focus:ring-status-danger/20;
+  }
+  .label {
+    @apply block text-xs font-semibold text-ink-secondary mb-1;
+  }
+  .field-error {
+    @apply text-xs text-status-danger mt-1;
+  }
+
+  /* ── Select ──────────────────────────────────────────────────────────── */
+  .select {
+    @apply input appearance-none bg-no-repeat;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='%237E8A94'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+    background-position: right 10px center;
+    padding-right: 2rem;
+  }
+  .select option {
+    background-color: #121820;
+    color: #F4F7F8;
+  }
+
+  /* ── Cards ───────────────────────────────────────────────────────────── */
+  .card {
+    @apply border border-line-subtle rounded-lg p-5 shadow-card;
+    background: linear-gradient(180deg, #141B23 0%, #10161D 100%);
+  }
+  .card-sm {
+    @apply border border-line-subtle rounded-md p-4 shadow-card;
+    background: linear-gradient(180deg, #141B23 0%, #10161D 100%);
+  }
+
+  /* Recuadro "ficha" de dato dentro de una card */
+  .field-box {
+    @apply bg-surface-elevated/60 border border-line-subtle rounded-md px-3 py-2;
+  }
+  .field-box-label {
+    @apply text-[10px] font-bold text-ink-muted uppercase tracking-wide;
+  }
+  .field-box-value {
+    @apply text-sm font-semibold text-ink-primary mt-0.5 break-words;
+  }
+
+  /* ── Tabla ───────────────────────────────────────────────────────────── */
+  .table-wrap {
+    @apply w-full overflow-x-auto;
+  }
+  .table {
+    @apply w-full text-sm text-left;
+  }
+  .table thead th {
+    @apply px-4 py-2.5 text-xs font-medium text-ink-muted uppercase tracking-wide
+           bg-surface-primary/60 border-b border-line-subtle whitespace-nowrap;
+  }
+  .table tbody td {
+    @apply px-4 py-3 text-ink-secondary border-b border-line-subtle/60 whitespace-nowrap;
+  }
+  .table tbody tr:last-child td {
+    @apply border-0;
+  }
+  .table tbody tr {
+    @apply hover:bg-white/[0.025] transition-colors duration-100;
+  }
+
+  /* ── Badges / pills ──────────────────────────────────────────────────── */
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ring-1 ring-inset;
+  }
+  .badge-green  { @apply badge bg-brand-500/15  text-brand-300  ring-brand-500/40; }
+  .badge-amber  { @apply badge bg-status-warning/15 text-status-warning ring-status-warning/40; }
+  .badge-blue   { @apply badge bg-status-info/15    text-status-info    ring-status-info/40; }
+  .badge-red    { @apply badge bg-status-danger/15  text-status-danger  ring-status-danger/40; }
+  .badge-gray   { @apply badge bg-white/[0.05]     text-ink-secondary   ring-line-strong; }
+  .badge-purple { @apply badge bg-purple-500/15    text-purple-300      ring-purple-500/40; }
+  .badge-teal   { @apply badge bg-teal-500/15      text-teal-300        ring-teal-500/40; }
+
+  /* ── Alerts (los reusan páginas billing, admin, configuración) ────────── */
+  .alert-success {
+    @apply rounded-md border border-brand-500/40 bg-brand-500/10 text-brand-300 px-3 py-2 text-sm;
+  }
+  .alert-error {
+    @apply rounded-md border border-status-danger/40 bg-status-danger/10 text-status-danger px-3 py-2 text-sm;
+  }
+  .alert-info {
+    @apply rounded-md border border-status-info/40 bg-status-info/10 text-status-info px-3 py-2 text-sm;
+  }
+  .alert-warning {
+    @apply rounded-md border border-status-warning/40 bg-status-warning/10 text-status-warning px-3 py-2 text-sm;
+  }
+
+  /* ── Page header ─────────────────────────────────────────────────────── */
+  .page-header {
+    @apply flex items-center justify-between mb-6 gap-4;
+  }
+  .page-title {
+    @apply text-xl font-semibold text-ink-primary;
+  }
+  .page-subtitle {
+    @apply text-sm text-ink-muted mt-0.5;
+  }
+
+  /* ── Empty state ─────────────────────────────────────────────────────── */
+  .empty-state {
+    @apply flex flex-col items-center justify-center py-16 text-center;
+  }
+  .empty-state p {
+    @apply text-sm text-ink-muted mt-2;
+  }
+
+  /* ── Skeleton loader ─────────────────────────────────────────────────── */
+  .skeleton {
+    @apply bg-white/[0.04] rounded animate-pulse;
+  }
+}
+
+/* ── Animaciones ─────────────────────────────────────────────────────────── */
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.page-enter {
+  animation: fadeSlideIn 0.2s ease-out both;
+}
+
+@keyframes slideInLeft {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+.drawer-enter {
+  animation: slideInLeft 0.22s ease-out both;
+}
+
+/* Glow sutil verde para acentos premium ocasionales */
+.glow-praxion {
+  box-shadow: 0 0 0 1px rgba(94, 159, 50, 0.18), 0 12px 32px rgba(94, 159, 50, 0.12);
+}
+
+/* ── Rescate de estilos residuales del tema light que el sweep no toca ─────
+ * Estas reglas son una red de seguridad: si una página todavía usa colores
+ * inline tipo bg-yellow-50, ring-blue-500, etc., al menos el contraste es
+ * razonable sobre dark. Cuando se migre cada página formalmente, se pueden
+ * remover. */
+@layer utilities {
+  /* Forzar fondos claros residuales a algo apto para dark */
+  .bg-yellow-50  { background-color: rgba(216, 162, 58, 0.10) !important; }
+  .bg-orange-50  { background-color: rgba(216, 162, 58, 0.10) !important; }
+  .bg-indigo-50  { background-color: rgba(76, 140, 207, 0.10) !important; }
+
+  /* Texto en azul/cyan/violeta residual → versiones claras visibles en dark */
+  .text-cyan-700, .text-cyan-800, .text-cyan-900    { color: #67E8F9 !important; }
+  .text-indigo-700, .text-indigo-800, .text-indigo-900 { color: #A5B4FC !important; }
+
+  /* Rings de focus accidentales en azul-500 → verde Praxion */
+  .ring-blue-500 { --tw-ring-color: rgba(94, 159, 50, 0.50) !important; }
+}
+
+/* Cards que en algunas páginas se construyen como <div className="card"> +
+ * un <table> sin .table-wrap dentro: forzar overflow horizontal si excede. */
+.card > table { width: 100%; }
+
+/* Inputs con type=date/time/datetime-local heredan padding raro en algunos
+ * navegadores cuando se mete dentro de .input. Corregimos. */
+.input[type="date"],
+.input[type="time"],
+.input[type="datetime-local"],
+.input[type="month"] {
+  font-family: 'Sora', 'DM Sans', sans-serif;
+}

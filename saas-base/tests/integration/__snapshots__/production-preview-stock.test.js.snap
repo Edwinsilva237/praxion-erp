@@ -1,0 +1,56 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Golden master: GET /api/production/orders/:id/stock-availability Stock suficiente para la orden: ok=true 1`] = `
+{
+  "items": [
+    {
+      "availableKg": 100,
+      "missingKg": 0,
+      "name": "PP Virgen Test",
+      "ok": true,
+      "percentage": 100,
+      "rawMaterialId": "<UUID>",
+      "requiredKg": 30,
+      "sortOrder": 0,
+    },
+  ],
+  "meta": {
+    "ptKgEstimado": 25,
+    "reprocessFactor": 0.2,
+    "totalRequiredMpKg": 30,
+  },
+  "ok": true,
+  "totals": {
+    "availableKg": 100,
+    "missingKg": 0,
+    "requiredKg": 30,
+  },
+}
+`;
+
+exports[`Golden master: POST /api/production/orders/preview-stock Con fórmula y stock suficiente: ok=true, missingKg=0 1`] = `
+{
+  "items": [
+    {
+      "availableKg": 100,
+      "missingKg": 0,
+      "name": "PP Virgen Test",
+      "ok": true,
+      "percentage": 100,
+      "rawMaterialId": "<UUID>",
+      "requiredKg": 30,
+    },
+  ],
+  "meta": {
+    "ptKgEstimado": 25,
+    "reprocessFactor": 0.2,
+    "totalRequiredMpKg": 30,
+  },
+  "ok": true,
+  "totals": {
+    "availableKg": 100,
+    "missingKg": 0,
+    "requiredKg": 30,
+  },
+}
+`;

@@ -1,0 +1,694 @@
+'use strict'
+
+const express             = require('express')
+const multer              = require('multer')
+const { tenantResolver }  = require('../../middleware/tenantResolver')
+const { authGuard }       = require('../../middleware/authGuard')
+const { requireActiveTenant } = require('../../middleware/requireActiveTenant')
+const { checkPermission } = require('../../middleware/checkPermission')
+const requireModule       = require('../../middleware/requireModule')
+const purchaseOrderService    = require('./purchaseOrderService')
+const supplierReceiptService  = require('./supplierReceiptService')
+const documentParserService   = require('./documentParserService')
+const supplierInvoiceService  = require('./supplierInvoiceService')
+const cxpService              = require('./cxpService')
+const apAdvanceService        = require('./apAdvanceService')
+const attachmentService       = require('../attachments/attachmentService')
+const storage                 = require('../../utils/storage')
+const config                  = require('../../config')
+const { generatePurchaseOrderPDF } = require('./purchaseOrderPdfService')
+
+// Multer para XML y PDF de facturas/OC de proveedor
+const uploadDoc = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
+  fileFilter: (_req, file, cb) => {
+    const allowed = ['application/pdf', 'text/xml', 'application/xml']
+    const extOk   = file.originalname.toLowerCase().match(/\.(pdf|xml)$/)
+    allowed.includes(file.mimetype) || extOk
+      ? cb(null, true)
+      : cb(new Error('Solo se permiten archivos PDF o XML.'))
+  },
+})
+
+// Multer para evidencias de facturas/CXP (PDF, JPG, PNG, WebP).
+const uploadEvidence = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: config.uploads.maxSizeMb * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    config.uploads.allowedMimeTypes.includes(file.mimetype)
+      ? cb(null, true)
+      : cb(new Error(`Tipo no permitido: ${file.mimetype}. Acepta PDF, JPG, PNG, WebP.`))
+  },
+})
+
+const router = express.Router()
+
+router.use(tenantResolver)
+router.use(authGuard)
+router.use(requireActiveTenant)
+router.use(requireModule('purchases'))
+
+// ─── Órdenes de Compra ────────────────────────────────────────────────────────
+
+/**
+ * GET /api/purchases/orders
+ * Query: status, partnerId, from, to, page, limit
+ */
+router.get('/orders', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const { status, order_type, partnerId, search, from, to, page, limit } = req.query
+    const result = await purchaseOrderService.listOrders({
+      tenantId: req.tenant.id,
+      status, orderType: order_type, partnerId, search, from, to,
+      page:  parseInt(page || 1, 10),
+      limit: Math.min(parseInt(limit || 50, 10), 100),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
+ * GET /api/purchases/orders/:id
+ */
+router.get('/orders/:id', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const order = await purchaseOrderService.getOrder({
+      tenantId: req.tenant.id, orderId: req.params.id,
+    })
+    if (!order) return res.status(404).json({ error: 'OC no encontrada.' })
+    res.json(order)
+  } catch (err) { next(err) }
+})
+
+/**
+ * GET /api/purchases/orders/:id/pdf
+ * Descarga el PDF de la orden de compra (documento de control interno).
+ */
+router.get('/orders/:id/pdf', checkPermission('purchases', 'read'),
+  async (req, res, next) => {
+    try {
+      const buffer = await generatePurchaseOrderPDF({
+        tenantId: req.tenant.id, orderId: req.params.id,
+      })
+      // Buscamos el order_number para nombrar el archivo
+      const order = await purchaseOrderService.getOrder({
+        tenantId: req.tenant.id, orderId: req.params.id,
+      })
+      const filename = order?.order_number ? `${order.order_number}.pdf` : `OC-${req.params.id}.pdf`
+      res.setHeader('Content-Type', 'application/pdf')
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+      res.send(buffer)
+    } catch (err) { next(err) }
+  })
+
+/**
+ * POST /api/purchases/orders
+ * Body: {
+ *   partnerId?, isGeneric?, genericSupplier?,
+ *   currency?, expectedDate?, notes?,
+ *   lines: [{
+ *     itemType?, itemId?, description?,
+ *     quantity, unit?, unitPrice,
+ *     isEstimated?, estimatedQty?, estimatedPrice?,
+ *     isGeneric?, genericCategory?,
+ *     warehouseId?, notes?
+ *   }]
+ * }
+ */
+router.post('/orders', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    const { lines } = req.body
+    if (!lines || lines.length === 0) {
+      return res.status(400).json({ error: 'Se requiere al menos una línea.' })
+    }
+    const order = await purchaseOrderService.createOrder({
+      tenantId: req.tenant.id, ...req.body,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.status(201).json(order)
+  } catch (err) { next(err) }
+})
+
+/**
+ * PATCH /api/purchases/orders/:id
+ * Edita datos generales — solo en draft.
+ * Body: { expectedDate?, notes?, genericSupplier? }
+ */
+router.patch('/orders/:id', checkPermission('purchases', 'update'), async (req, res, next) => {
+  try {
+    const order = await purchaseOrderService.updateOrder({
+      tenantId: req.tenant.id, orderId: req.params.id,
+      ...req.body,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(order)
+  } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/orders/:id/confirm
+ * Confirma la OC — pasa a estatus 'sent'.
+ */
+router.post('/orders/:id/confirm', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    const order = await purchaseOrderService.confirmOrder({
+      tenantId: req.tenant.id, orderId: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(order)
+  } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/orders/:id/cancel
+ * Body: { reason? }
+ */
+router.post('/orders/:id/cancel', checkPermission('purchases', 'update'), async (req, res, next) => {
+  try {
+    const order = await purchaseOrderService.cancelOrder({
+      tenantId: req.tenant.id, orderId: req.params.id,
+      reason: req.body.reason,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(order)
+  } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/orders/:id/lines
+ * Agrega línea a OC en draft.
+ */
+router.post('/orders/:id/lines', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    const line = await purchaseOrderService.addOrderLine({
+      tenantId: req.tenant.id, orderId: req.params.id,
+      ...req.body, userId: req.auth.userId,
+    })
+    res.status(201).json(line)
+  } catch (err) { next(err) }
+})
+
+/**
+ * PATCH /api/purchases/orders/:id/lines/:lineId
+ * Edita línea en draft.
+ */
+router.patch('/orders/:id/lines/:lineId', checkPermission('purchases', 'update'), async (req, res, next) => {
+  try {
+    const line = await purchaseOrderService.updateOrderLine({
+      tenantId: req.tenant.id, orderId: req.params.id,
+      lineId: req.params.lineId, ...req.body,
+      userId: req.auth.userId,
+    })
+    res.json(line)
+  } catch (err) { next(err) }
+})
+
+/**
+ * DELETE /api/purchases/orders/:id/lines/:lineId
+ */
+router.delete('/orders/:id/lines/:lineId', checkPermission('purchases', 'update'), async (req, res, next) => {
+  try {
+    await purchaseOrderService.deleteOrderLine({
+      tenantId: req.tenant.id, orderId: req.params.id,
+      lineId: req.params.lineId, userId: req.auth.userId,
+    })
+    res.json({ message: 'Línea eliminada.' })
+  } catch (err) { next(err) }
+})
+
+// ─── Parseo de documentos de proveedor ───────────────────────────────────────
+
+/**
+ * POST /api/purchases/parse-document
+ * Parsea un XML (CFDI) o PDF (factura/remisión/OC) de proveedor.
+ * Devuelve los datos extraídos para precargar en la recepción o factura.
+ * No guarda nada — solo extrae y devuelve para que el usuario valide.
+ * Field: file (multipart)
+ */
+router.post('/parse-document',
+  checkPermission('purchases', 'create'),
+  uploadDoc.single('file'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'Se requiere un archivo PDF o XML.' })
+
+      const result = await documentParserService.parseSupplierDocument(
+        req.file.buffer,
+        req.file.mimetype,
+        req.file.originalname,
+      )
+      res.json(result)
+    } catch (err) { next(err) }
+  }
+)
+
+// ─── Recepciones de Mercancía ─────────────────────────────────────────────────
+
+/**
+ * GET /api/purchases/receipts
+ * Query: status, partnerId, purchaseOrderId, from, to, page, limit
+ */
+router.get('/receipts', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const { status, partnerId, purchaseOrderId, from, to, page, limit } = req.query
+    const result = await supplierReceiptService.listReceipts({
+      tenantId: req.tenant.id,
+      status, partnerId, purchaseOrderId, from, to,
+      page:  parseInt(page || 1, 10),
+      limit: Math.min(parseInt(limit || 50, 10), 100),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
+ * GET /api/purchases/receipts/pending-invoice
+ * Lista recepciones confirmadas sin factura del proveedor.
+ * Query: partner_id?
+ *
+ * IMPORTANTE: debe declararse ANTES de /receipts/:id porque Express
+ * captura 'pending-invoice' como :id (que espera UUID) y truena.
+ */
+router.get('/receipts/pending-invoice', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const { partner_id } = req.query
+    const params = [req.tenant.id]
+    let partnerFilter = ''
+    if (partner_id) { params.push(partner_id); partnerFilter = `AND sr.partner_id = $${params.length}` }
+    const { rows } = await require('../../db').query(
+      `SELECT sr.id, sr.receipt_number, sr.received_date, sr.status,
+              sr.invoiced_at,
+              bp.name AS partner_name,
+              COALESCE((
+                SELECT SUM(srl.subtotal) FROM supplier_receipt_lines srl
+                 WHERE srl.supplier_receipt_id = sr.id
+              ), 0)::numeric AS total_mxn
+       FROM supplier_receipts sr
+       LEFT JOIN business_partners bp ON bp.id = sr.partner_id
+       WHERE sr.tenant_id = $1
+         AND sr.status = 'confirmed'
+         AND sr.invoiced_at IS NULL
+         ${partnerFilter}
+       ORDER BY sr.received_date DESC
+       LIMIT 100`,
+      params
+    )
+    res.json(rows)
+  } catch (err) { next(err) }
+})
+
+/**
+ * GET /api/purchases/receipts/:id
+ */
+router.get('/receipts/:id', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const receipt = await supplierReceiptService.getReceipt({
+      tenantId: req.tenant.id, receiptId: req.params.id,
+    })
+    if (!receipt) return res.status(404).json({ error: 'Recepción no encontrada.' })
+    res.json(receipt)
+  } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/receipts
+ * Body: {
+ *   purchaseOrderId?, partnerId?, genericSupplier?,
+ *   warehouseId, receivedDate?, notes?,
+ *   lines: [{
+ *     purchaseOrderLineId?, itemType?, itemId?, description?,
+ *     quantityReceived, unit?, unitPrice?,
+ *     warehouseId?, isGeneric?, genericCategory?, notes?
+ *   }]
+ * }
+ */
+router.post('/receipts', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    const { warehouseId, lines } = req.body
+    if (!warehouseId) return res.status(400).json({ error: 'warehouseId es requerido.' })
+    if (!lines || lines.length === 0) return res.status(400).json({ error: 'Se requiere al menos una línea.' })
+
+    const receipt = await supplierReceiptService.createReceipt({
+      tenantId: req.tenant.id, ...req.body,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.status(201).json(receipt)
+  } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/receipts/:id/confirm
+ * Confirma la recepción: mueve inventario y actualiza estatus de OC.
+ */
+router.post('/receipts/:id/confirm', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    const receipt = await supplierReceiptService.confirmReceipt({
+      tenantId: req.tenant.id, receiptId: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json({ ...receipt, message: 'Recepción confirmada. Inventario actualizado.' })
+  } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/receipts/:id/cancel
+ * Body: { reason? }
+ */
+router.post('/receipts/:id/cancel', checkPermission('purchases', 'update'), async (req, res, next) => {
+  try {
+    const receipt = await supplierReceiptService.cancelReceipt({
+      tenantId: req.tenant.id, receiptId: req.params.id,
+      reason: req.body.reason,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(receipt)
+  } catch (err) { next(err) }
+})
+
+// ─── Facturas y CXP de proveedor ─────────────────────────────────────────────
+
+/**
+ * GET /api/purchases/invoices
+ * Query: type, status, supplierId, from, to, page, limit
+ */
+router.get('/invoices', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const { type, status, supplierId, from, to, page, limit } = req.query
+    const result = await supplierInvoiceService.listInvoices({
+      tenantId: req.tenant.id,
+      type, status, supplierId, from, to,
+      page:  parseInt(page || 1, 10),
+      limit: Math.min(parseInt(limit || 50, 10), 100),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
+ * GET /api/purchases/invoices/:id
+ */
+router.get('/invoices/:id', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const invoice = await supplierInvoiceService.getInvoice({
+      tenantId: req.tenant.id, invoiceId: req.params.id,
+    })
+    if (!invoice) return res.status(404).json({ error: 'Factura no encontrada.' })
+    res.json(invoice)
+  } catch (err) { next(err) }
+})
+
+/**
+ * Parsea un XML CFDI 4.0 y devuelve los datos extraídos + proveedor encontrado.
+ */
+router.post('/invoices/parse-xml',
+  checkPermission('purchases', 'create'),
+  uploadDoc.single('xml'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'Se requiere un archivo XML.' })
+      const parsed = await documentParserService.parseSupplierDocument(
+        req.file.buffer, req.file.mimetype, req.file.originalname
+      )
+      // Buscar proveedor por RFC en Socios de Negocio
+      let partner = null
+      if (parsed.emisor?.rfc) {
+        const { rows } = await require('../../db').query(
+          `SELECT id, name, rfc FROM business_partners
+           WHERE tenant_id=$1 AND rfc=$2 AND is_active=true LIMIT 1`,
+          [req.tenant.id, parsed.emisor.rfc]
+        )
+        if (rows[0]) partner = rows[0]
+      }
+      res.json({ ...parsed, matchedPartner: partner })
+    } catch (err) { next(err) }
+  }
+)
+
+/**
+ * POST /api/purchases/invoices
+ * Registra una factura o remisión de proveedor y genera CXP.
+ * Body: {
+ *   supplierId?, genericSupplier?,
+ *   documentType: 'invoice' | 'remission',
+ *   documentNumber, uuidSat?, serie?, folio?, rfcEmisor?,
+ *   invoiceDate, currency?, subtotal, tax, total,
+ *   receiptIds?: string[],   // múltiples recepciones
+ *   supplierReceiptId?,      // compatibilidad hacia atrás
+ *   purchaseOrderId?,
+ *   xmlContent?,
+ *   creditDays?, notes?
+ * }
+ */
+router.post('/invoices', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    const { documentNumber, total } = req.body
+    if (!documentNumber) return res.status(400).json({ error: 'documentNumber es requerido.' })
+    if (!total) return res.status(400).json({ error: 'total es requerido.' })
+
+    const invoice = await supplierInvoiceService.registerInvoice({
+      tenantId: req.tenant.id, ...req.body,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.status(201).json(invoice)
+  } catch (err) {
+    // Duplicado por (tenant_id, partner_id, invoice_number) o UUID SAT
+    if (err.code === '23505') {
+      if (err.constraint?.includes('uuid_sat')) {
+        return res.status(409).json({ error: 'Ya existe una factura registrada con ese UUID SAT.' })
+      }
+      if (err.constraint?.includes('si_number')) {
+        return res.status(409).json({
+          error: `Ya existe un documento con folio "${req.body.documentNumber}" para este proveedor. Verifica el número.`,
+        })
+      }
+      return res.status(409).json({ error: 'Documento duplicado.' })
+    }
+    next(err)
+  }
+})
+
+/**
+ * POST /api/purchases/payments
+ * Registra un pago a proveedor y lo aplica a facturas.
+ * Body: {
+ *   supplierId?, genericSupplier?,
+ *   paymentDate?, method, reference?,
+ *   amount, currency?,
+ *   applications: [{ apId, amountApplied }],
+ *   notes?
+ * }
+ */
+router.post('/payments', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    const { amount, method } = req.body
+    if (!amount) return res.status(400).json({ error: 'amount es requerido.' })
+    if (!method) return res.status(400).json({ error: 'method es requerido.' })
+
+    const payment = await supplierInvoiceService.registerPayment({
+      tenantId: req.tenant.id, ...req.body,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.status(201).json(payment)
+  } catch (err) { next(err) }
+})
+
+/**
+ * GET /api/purchases/suppliers/:id/statement
+ * Estado de cuenta de un proveedor.
+ * Query: from?, to?
+ */
+router.get('/suppliers/:id/statement', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const { from, to } = req.query
+    const statement = await supplierInvoiceService.getSupplierStatement({
+      tenantId: req.tenant.id, supplierId: req.params.id, from, to,
+    })
+    res.json(statement)
+  } catch (err) { next(err) }
+})
+
+// ─── CXP — Cuentas por pagar (vista centrada en accounts_payable) ────────────
+
+/**
+ * GET /api/purchases/cxp
+ * Query: status, partnerId, from, to, page, limit
+ */
+router.get('/cxp', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const { status, partnerId, from, to, page, limit } = req.query
+    const result = await cxpService.listCXP({
+      tenantId: req.tenant.id,
+      status, partnerId, from, to,
+      page:  parseInt(page || 1, 10),
+      limit: Math.min(parseInt(limit || 50, 10), 100),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
+ * GET /api/purchases/cxp/:id
+ */
+router.get('/cxp/:id', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const ap = await cxpService.getCXP({ tenantId: req.tenant.id, apId: req.params.id })
+    if (!ap) return res.status(404).json({ error: 'CXP no encontrado.' })
+    res.json(ap)
+  } catch (err) { next(err) }
+})
+
+// ─── Anticipos a proveedor (ap_advances) ─────────────────────────────────────
+
+/**
+ * GET /api/purchases/advances
+ * Query: partnerId?, onlyAvailable=1
+ */
+router.get('/advances', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const advances = await apAdvanceService.listAdvances({
+      tenantId: req.tenant.id,
+      partnerId: req.query.partnerId,
+      onlyAvailable: req.query.onlyAvailable === '1' || req.query.onlyAvailable === 'true',
+    })
+    res.json(advances)
+  } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/advances
+ * Registra un anticipo "manual" (no derivado de un pago a factura).
+ * Body: { partnerId, amount, currency?, paymentMethod, reference?,
+ *         bankAccountId?, paymentDate?, notes? }
+ */
+router.post('/advances', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    const advance = await apAdvanceService.registerAdvance({
+      tenantId: req.tenant.id, ...req.body,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.status(201).json(advance)
+  } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/advances/:id/apply
+ * Body: { apId, amount }
+ */
+router.post('/advances/:id/apply', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    const result = await apAdvanceService.applyAdvance({
+      tenantId: req.tenant.id, advanceId: req.params.id,
+      apId: req.body.apId, amount: req.body.amount,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+// ─── Evidencias de facturas de proveedor (attachments) ───────────────────────
+// Se vinculan a `supplier_invoices` (entityType='supplier_invoice'). Para
+// localizar desde CXP, primero se resuelve el supplier_invoice_id desde el AP.
+
+async function resolveSupplierInvoiceId({ tenantId, apIdOrInvoiceId }) {
+  const { rows } = await require('../../db').query(
+    `SELECT si.id
+       FROM supplier_invoices si
+      WHERE si.tenant_id = $1 AND si.id = $2
+      UNION
+     SELECT ap.document_id
+       FROM accounts_payable ap
+      WHERE ap.tenant_id = $1 AND ap.id = $2
+        AND ap.document_id IS NOT NULL
+      LIMIT 1`,
+    [tenantId, apIdOrInvoiceId]
+  )
+  return rows[0]?.id || null
+}
+
+/**
+ * GET /api/purchases/invoices/:id/attachments
+ * `:id` acepta supplier_invoice_id O accounts_payable.id (resuelve automático).
+ */
+router.get('/invoices/:id/attachments',
+  checkPermission('attachments', 'read'),
+  async (req, res, next) => {
+    try {
+      const siId = await resolveSupplierInvoiceId({
+        tenantId: req.tenant.id, apIdOrInvoiceId: req.params.id,
+      })
+      if (!siId) return res.json([])
+      const files = await attachmentService.listAttachments({
+        tenantId: req.tenant.id, entityType: 'supplier_invoice', entityId: siId,
+      })
+      res.json(files)
+    } catch (err) { next(err) }
+  }
+)
+
+/**
+ * POST /api/purchases/invoices/:id/attachments
+ * Form-data: file (PDF/JPG/PNG/WebP), description? (string)
+ */
+router.post('/invoices/:id/attachments',
+  checkPermission('attachments', 'create'),
+  uploadEvidence.single('file'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'Se requiere un archivo.' })
+      const siId = await resolveSupplierInvoiceId({
+        tenantId: req.tenant.id, apIdOrInvoiceId: req.params.id,
+      })
+      if (!siId) return res.status(404).json({ error: 'Factura no encontrada.' })
+
+      const attachment = await attachmentService.saveAttachment({
+        tenantId: req.tenant.id,
+        entityType: 'supplier_invoice', entityId: siId,
+        category: 'other',
+        originalFilename: req.file.originalname,
+        buffer: req.file.buffer, mimeType: req.file.mimetype,
+        description: req.body.description || null,
+        uploadedBy: req.auth.userId,
+      })
+      res.status(201).json(attachment)
+    } catch (err) { next(err) }
+  }
+)
+
+/**
+ * GET /api/purchases/invoices/:id/attachments/:attachmentId/download
+ */
+router.get('/invoices/:id/attachments/:attachmentId/download',
+  checkPermission('attachments', 'read'),
+  async (req, res, next) => {
+    try {
+      const file = await attachmentService.getAttachmentInfo({
+        tenantId: req.tenant.id, attachmentId: req.params.attachmentId,
+      })
+      if (!file) return res.status(404).json({ error: 'Archivo no encontrado.' })
+      await storage.serve(res, file.storage_path, {
+        filename:    file.filename,
+        mimeType:    file.mime_type,
+        disposition: 'inline',
+      })
+    } catch (err) { next(err) }
+  }
+)
+
+/**
+ * DELETE /api/purchases/invoices/:id/attachments/:attachmentId
+ */
+router.delete('/invoices/:id/attachments/:attachmentId',
+  checkPermission('attachments', 'delete'),
+  async (req, res, next) => {
+    try {
+      const result = await attachmentService.deleteAttachment({
+        tenantId: req.tenant.id, attachmentId: req.params.attachmentId,
+      })
+      if (!result) return res.status(404).json({ error: 'Archivo no encontrado.' })
+      res.json(result)
+    } catch (err) { next(err) }
+  }
+)
+
+module.exports = router

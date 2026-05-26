@@ -1,0 +1,83 @@
+'use strict'
+
+const router = require('express').Router()
+const { authGuard }       = require('../../middleware/authGuard')
+const checkPermission     = require('../../middleware/checkPermission')
+const inventoryService    = require('./inventoryService')
+
+// Todas las rutas requieren autenticación
+router.use(authGuard)
+
+// ── GET /api/inventory/warehouses ─────────────────────────────────────────────
+router.get('/warehouses', checkPermission('inventario', 'read'), async (req, res, next) => {
+  try {
+    const data = await inventoryService.getWarehouses({ tenantId: req.tenant.id })
+    res.json(data)
+  } catch (err) { next(err) }
+})
+
+// ── GET /api/inventory/summary ────────────────────────────────────────────────
+router.get('/summary', checkPermission('inventario', 'read'), async (req, res, next) => {
+  try {
+    const data = await inventoryService.getInventorySummary({ tenantId: req.tenant.id })
+    res.json(data)
+  } catch (err) { next(err) }
+})
+
+// ── GET /api/inventory/stock ──────────────────────────────────────────────────
+router.get('/stock', checkPermission('inventario', 'read'), async (req, res, next) => {
+  try {
+    const { warehouse_id, item_type, search, page, limit } = req.query
+    const data = await inventoryService.getStock({
+      tenantId:    req.tenant.id,
+      warehouseId: warehouse_id || null,
+      itemType:    item_type    || null,
+      search:      search       || null,
+      page:        parseInt(page)  || 1,
+      limit:       parseInt(limit) || 50,
+    })
+    res.json(data)
+  } catch (err) { next(err) }
+})
+
+// ── GET /api/inventory/movements ─────────────────────────────────────────────
+router.get('/movements', checkPermission('inventario', 'read'), async (req, res, next) => {
+  try {
+    const { item_type, item_id, warehouse_id, movement_type, date_from, date_to, page, limit } = req.query
+    const data = await inventoryService.getMovements({
+      tenantId:      req.tenant.id,
+      itemType:      item_type      || null,
+      itemId:        item_id        || null,
+      warehouseId:   warehouse_id   || null,
+      movementType:  movement_type  || null,
+      dateFrom:      date_from      || null,
+      dateTo:        date_to        || null,
+      page:          parseInt(page)  || 1,
+      limit:         parseInt(limit) || 50,
+    })
+    res.json(data)
+  } catch (err) { next(err) }
+})
+
+// ── POST /api/inventory/adjustment ───────────────────────────────────────────
+router.post('/adjustment', checkPermission('inventario', 'manage'), async (req, res, next) => {
+  try {
+    const { warehouse_id, item_type, item_id, quantity, unit_cost, notes } = req.body
+    if (!warehouse_id || !item_type || !item_id || quantity === undefined) {
+      return res.status(400).json({ error: 'Faltan campos requeridos: warehouse_id, item_type, item_id, quantity.' })
+    }
+    const movement = await inventoryService.createAdjustment({
+      tenantId:    req.tenant.id,
+      warehouseId: warehouse_id,
+      itemType:    item_type,
+      itemId:      item_id,
+      quantity:    parseFloat(quantity),
+      unitCost:    parseFloat(unit_cost || 0),
+      notes:       notes || null,
+      userId:      req.user.id,
+    })
+    res.status(201).json(movement)
+  } catch (err) { next(err) }
+})
+
+module.exports = router

@@ -1,0 +1,40 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Golden master: GET /api/production/shifts/active Lista el turno activo con todos los campos de detalle 1`] = `
+[
+  {
+    "active_order_id": null,
+    "closed_at": null,
+    "cost_per_unit": null,
+    "created_at": "<TIMESTAMP>",
+    "estimated_overhead_total": null,
+    "force_close_reason": null,
+    "force_closed_at": null,
+    "force_closed_by": null,
+    "handover_requested_at": null,
+    "handover_waiting_shift_id": null,
+    "id": "<UUID>",
+    "line_id": 1,
+    "mp_real_kg": "0.0000",
+    "mp_reserved_kg": "0.0000",
+    "operator_id": "<UUID>",
+    "operator_name": "Test Admin",
+    "process_loss_kg": null,
+    "process_loss_pct": null,
+    "production_order_id": null,
+    "pt_units_produced": "0",
+    "real_overhead_total": null,
+    "recosted_at": null,
+    "recosted_by_user_id": null,
+    "scrap_estimated_kg": "0.0000",
+    "shift_date": "<TIMESTAMP>",
+    "shift_number": "1",
+    "started_at": "<TIMESTAMP>",
+    "status": "active",
+    "supervisor_id": "<UUID>",
+    "supervisor_name": "Test Admin",
+    "tenant_id": "<UUID>",
+    "updated_at": "<TIMESTAMP>",
+  },
+]
+`;

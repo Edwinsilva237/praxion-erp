@@ -1,0 +1,20 @@
+// ════════════════════════════════════════════════════════════════════════════
+// PARCHE PARA app.js
+// ════════════════════════════════════════════════════════════════════════════
+//
+// En tu archivo /saas-base/src/app.js, justo DESPUÉS de la línea:
+//
+//     app.use('/api/inventory', require('./modules/inventory/routes'))
+//
+// AGREGA esta línea nueva:
+
+app.use('/api/warehouses', require('./modules/inventory/warehouseRoutes'))
+
+// ════════════════════════════════════════════════════════════════════════════
+// Resultado: el bloque de routers de inventario debe verse así:
+// ════════════════════════════════════════════════════════════════════════════
+//
+//     app.use('/api/inventory',  require('./modules/inventory/routes'))
+//     app.use('/api/warehouses', require('./modules/inventory/warehouseRoutes'))   ← NUEVO
+//
+// ════════════════════════════════════════════════════════════════════════════

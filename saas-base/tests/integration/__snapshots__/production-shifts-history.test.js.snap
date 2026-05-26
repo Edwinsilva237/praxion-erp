@@ -1,0 +1,43 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Golden master: GET /api/production/shifts/history Lista todos los turnos (sin filtro) con paginación 1`] = `
+{
+  "data": [
+    {
+      "closed_at": null,
+      "cost_per_unit": null,
+      "id": "<UUID>",
+      "line_id": 2,
+      "mp_real_kg": "0.0000",
+      "operator_name": "Test Admin",
+      "orders_count": "0",
+      "pt_units_produced": 0,
+      "shift_date": "<TIMESTAMP>",
+      "shift_number": "2",
+      "started_at": "<TIMESTAMP>",
+      "status": "active",
+      "supervisor_name": "Test Admin",
+      "total_meters": "0",
+    },
+    {
+      "closed_at": "<TIMESTAMP>",
+      "cost_per_unit": null,
+      "id": "<UUID>",
+      "line_id": 1,
+      "mp_real_kg": "0.0000",
+      "operator_name": "Test Admin",
+      "orders_count": "0",
+      "pt_units_produced": 0,
+      "shift_date": "<TIMESTAMP>",
+      "shift_number": "1",
+      "started_at": "<TIMESTAMP>",
+      "status": "pending_handover",
+      "supervisor_name": "Test Admin",
+      "total_meters": "0",
+    },
+  ],
+  "limit": 20,
+  "page": 1,
+  "total": 2,
+}
+`;

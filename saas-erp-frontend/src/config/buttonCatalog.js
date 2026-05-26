@@ -1,0 +1,274 @@
+/**
+ * Catálogo de botones controlables por rol.
+ *
+ * Cada entrada describe UN botón visible en alguna pantalla, atado a un
+ * permiso del sistema (formato "resource:action"). En el editor de rol
+ * se renderizan agrupados por pantalla; marcar/desmarcar la fila enciende
+ * o apaga el permiso atado.
+ *
+ * Campos:
+ *   - key:               id estable interno
+ *   - label:             texto visible en el editor
+ *   - screen:            grupo (pantalla) para agrupar
+ *   - permission:        permiso que controla el botón (resource:action)
+ *   - accessPermission:  permiso de "puede ver esta pantalla". Si el rol
+ *                        no lo tiene, el editor oculta toda la pantalla.
+ *                        Si se omite, la pantalla siempre se muestra.
+ *
+ * Mantenimiento: al envolver un botón nuevo con <Can do="...">, agrega
+ * la entrada aquí para que el admin lo pueda gobernar desde el editor.
+ */
+
+export const BUTTON_CATALOG = [
+  // ── Comercial ────────────────────────────────────────────────────────────
+  {
+    key:              'sales.new-order',
+    label:            'Nuevo pedido',
+    screen:           'Comercial · Pedidos',
+    accessPermission: 'sales:read',
+    permission:       'sales:create',
+  },
+  {
+    key:              'sales.new-quotation',
+    label:            'Nueva cotización',
+    screen:           'Comercial · Cotizaciones',
+    accessPermission: 'sales:read',
+    permission:       'sales:create',
+  },
+  {
+    key:              'sales.new-delivery-note',
+    label:            'Nueva remisión',
+    screen:           'Comercial · Remisiones',
+    accessPermission: 'sales:read',
+    permission:       'sales:create',
+  },
+  {
+    key:              'invoicing.new-invoice',
+    label:            'Nueva factura',
+    screen:           'Comercial · Facturación',
+    accessPermission: 'invoicing:read',
+    permission:       'invoicing:create',
+  },
+  {
+    key:              'financials.register-receipt',
+    label:            'Registrar pago recibido',
+    screen:           'Comercial · Pagos recibidos (CxC)',
+    accessPermission: 'financials:read',
+    permission:       'financials:create',
+  },
+
+  // ── Compras ──────────────────────────────────────────────────────────────
+  {
+    key:              'purchases.new-order',
+    label:            'Nueva orden de compra',
+    screen:           'Compras · Órdenes',
+    accessPermission: 'purchases:read',
+    permission:       'purchases:create',
+  },
+  {
+    key:              'purchases.new-receipt',
+    label:            'Nueva recepción',
+    screen:           'Compras · Recepciones',
+    accessPermission: 'purchases:read',
+    permission:       'purchases:create',
+  },
+  {
+    key:              'purchases.new-bill',
+    label:            'Capturar comprobante de proveedor',
+    screen:           'Compras · Comprobantes recibidos',
+    accessPermission: 'purchases:read',
+    permission:       'purchases:create',
+  },
+  {
+    key:              'financials.register-payment',
+    label:            'Registrar pago emitido',
+    screen:           'Compras · Pagos emitidos (CxP)',
+    accessPermission: 'financials:read',
+    permission:       'financials:create',
+  },
+  {
+    key:              'financials.register-advance',
+    label:            'Registrar anticipo a proveedor',
+    screen:           'Compras · Anticipos a proveedor',
+    accessPermission: 'financials:read',
+    permission:       'financials:create',
+  },
+
+  // ── Inventario ───────────────────────────────────────────────────────────
+  {
+    key:              'inventory.new-adjustment',
+    label:            'Nuevo ajuste de inventario',
+    screen:           'Inventario · Stock y kardex',
+    accessPermission: 'inventory:read',
+    permission:       'inventory:adjust',
+  },
+  {
+    key:              'inventory.new-count',
+    label:            'Nuevo conteo físico',
+    screen:           'Inventario · Conteos físicos',
+    accessPermission: 'inventory:read',
+    permission:       'inventory:create',
+  },
+  {
+    key:              'inventory.apply-count',
+    label:            'Aplicar conteo (ajusta stock)',
+    screen:           'Inventario · Conteos físicos',
+    accessPermission: 'inventory:read',
+    permission:       'inventory:adjust',
+  },
+
+  // ── Producción ───────────────────────────────────────────────────────────
+  {
+    key:              'production.new-order',
+    label:            'Nueva orden de producción',
+    screen:           'Producción · Órdenes',
+    accessPermission: 'production:read',
+    permission:       'production:manage',
+  },
+  {
+    key:              'production.configure-shifts',
+    label:            'Configurar horarios de turnos',
+    screen:           'Producción · Programación',
+    accessPermission: 'production:read',
+    permission:       'production:manage',
+  },
+  {
+    key:              'production.schedule-shift',
+    label:            'Programar turno (botón superior)',
+    screen:           'Producción · Programación',
+    accessPermission: 'production:read',
+    permission:       'production:manage',
+  },
+  {
+    key:              'production.assign-shift',
+    label:            'Asignar turno (celda vacía del calendario)',
+    screen:           'Producción · Programación',
+    accessPermission: 'production:read',
+    permission:       'production:manage',
+  },
+
+  // ── Tesorería ────────────────────────────────────────────────────────────
+  {
+    key:              'petty-cash.entry',
+    label:            'Capturar entrada a caja',
+    screen:           'Tesorería · Caja chica',
+    accessPermission: 'petty_cash:read',
+    permission:       'petty_cash:create',
+  },
+  {
+    key:              'petty-cash.expense',
+    label:            'Capturar salida de caja',
+    screen:           'Tesorería · Caja chica',
+    accessPermission: 'petty_cash:read',
+    permission:       'petty_cash:create',
+  },
+
+  // ── Sistema ──────────────────────────────────────────────────────────────
+  {
+    key:              'users.invite',
+    label:            'Invitar usuario nuevo',
+    screen:           'Sistema · Usuarios',
+    accessPermission: 'users:read',
+    permission:       'users:create',
+  },
+  {
+    key:              'roles.create',
+    label:            'Crear rol nuevo',
+    screen:           'Sistema · Roles y permisos',
+    accessPermission: 'roles:read',
+    permission:       'roles:create',
+  },
+
+  // ── Configuración ───────────────────────────────────────────────────────
+  {
+    key:              'settings.notifications.save',
+    label:            'Editar correo de notificaciones',
+    screen:           'Configuración · Notificaciones',
+    accessPermission: 'settings:read',
+    permission:       'settings:update',
+  },
+  {
+    key:              'settings.brand.save',
+    label:            'Editar identidad de marca (logo, nombre, colores)',
+    screen:           'Configuración · Identidad de marca',
+    accessPermission: 'settings:update',
+    permission:       'settings:update',
+  },
+  {
+    key:              'settings.fiscal.edit',
+    label:            'Editar datos fiscales (RFC, régimen, etc.)',
+    screen:           'Configuración · Datos fiscales',
+    accessPermission: 'settings:read',
+    permission:       'settings:update',
+  },
+  {
+    key:              'settings.fiscal.csd',
+    label:            'Subir/Reemplazar CSD del SAT',
+    screen:           'Configuración · Datos fiscales',
+    accessPermission: 'settings:read',
+    permission:       'settings:update',
+  },
+  {
+    key:              'bank-accounts.create',
+    label:            'Crear cuenta bancaria',
+    screen:           'Configuración · Cuentas bancarias',
+    accessPermission: 'financials:read',
+    permission:       'financials:create',
+  },
+  {
+    key:              'bank-accounts.update',
+    label:            'Editar cuenta bancaria',
+    screen:           'Configuración · Cuentas bancarias',
+    accessPermission: 'financials:read',
+    permission:       'financials:update',
+  },
+  {
+    key:              'bank-accounts.delete',
+    label:            'Desactivar cuenta bancaria',
+    screen:           'Configuración · Cuentas bancarias',
+    accessPermission: 'financials:read',
+    permission:       'financials:delete',
+  },
+  {
+    key:              'billing.change-plan',
+    label:            'Cambiar de plan / contratar',
+    screen:           'Configuración · Mi suscripción',
+    accessPermission: 'billing:manage',
+    permission:       'billing:manage',
+  },
+  {
+    key:              'billing.portal',
+    label:            'Abrir portal de Stripe (tarjeta y facturas)',
+    screen:           'Configuración · Mi suscripción',
+    accessPermission: 'billing:manage',
+    permission:       'billing:manage',
+  },
+]
+
+/**
+ * Agrupa el catálogo por pantalla, opcionalmente filtrando aquellas que
+ * requieren un accessPermission que el rol no tiene.
+ *
+ * @param {Set<string>} accessPermissionsSet conjunto de "resource:action"
+ *        que el rol/usuario tiene marcados. Si se omite, no filtra.
+ */
+export function groupedByScreen(accessPermissionsSet = null) {
+  const groups = new Map()
+  for (const b of BUTTON_CATALOG) {
+    if (accessPermissionsSet &&
+        b.accessPermission &&
+        !accessPermissionsSet.has(b.accessPermission)) {
+      continue  // este rol no puede ver esta pantalla
+    }
+    if (!groups.has(b.screen)) groups.set(b.screen, [])
+    groups.get(b.screen).push(b)
+  }
+  return [...groups.entries()].map(([screen, buttons]) => ({ screen, buttons }))
+}
+
+// Devuelve qué otros botones del catálogo comparten el mismo permiso
+// que `button`, excluyéndolo a sí mismo. Útil para mostrar la advertencia
+// "comparte interruptor con…".
+export function buttonsSharingPermission(button) {
+  return BUTTON_CATALOG.filter(b => b.permission === button.permission && b.key !== button.key)
+}

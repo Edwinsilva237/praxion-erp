@@ -1,0 +1,155 @@
+# Render Blueprint para Praxion Systems.
+# Define 3 servicios + 1 base de datos. Render lo detecta automáticamente al
+# conectar el repo en https://dashboard.render.com/blueprints.
+#
+# Antes de crear el Blueprint:
+#   1) Empujar este repo a GitHub.
+#   2) En Render: New + → Blueprint → conectar repo → revisar/Approve.
+#   3) Variables marcadas `sync: false` se piden en el dashboard durante el
+#      primer deploy (es el patrón seguro para secretos — no quedan en git).
+
+databases:
+  - name: praxion-db
+    plan: basic-256mb       # $6/mes, 256MB RAM, 1GB disco. Subir si crece.
+    region: virginia         # más cercano a México que oregon.
+    postgresMajorVersion: 16
+    # Permite que cualquier servicio dentro de este blueprint conecte.
+    ipAllowList: []
+
+services:
+  # ─── Backend Express + workers (BullMQ + pg-boss embebidos) ─────────────
+  - type: web
+    name: praxion-api
+    runtime: docker
+    region: virginia
+    plan: starter           # $7/mes, 512MB RAM. Suficiente para arrancar.
+    rootDir: saas-base
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true        # cada push a la rama por defecto redeploya.
+    # Render ejecuta este comando ANTES de cambiar el tráfico al nuevo
+    # contenedor. Si las migraciones fallan, el deploy se aborta y sigue
+    # corriendo la versión anterior — exactamente lo que queremos.
+    preDeployCommand: node src/db/migrate.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # ── Base de datos ──
+      - key: DB_HOST
+        fromDatabase: { name: praxion-db, property: host }
+      - key: DB_PORT
+        fromDatabase: { name: praxion-db, property: port }
+      - key: DB_NAME
+        fromDatabase: { name: praxion-db, property: database }
+      - key: DB_USER
+        fromDatabase: { name: praxion-db, property: user }
+      - key: DB_PASSWORD
+        fromDatabase: { name: praxion-db, property: password }
+
+      # ── URLs públicas (apuntan al dominio custom una vez configurado) ──
+      - key: APP_URL
+        value: https://praxionops.com
+      - key: APP_PUBLIC_URL
+        value: https://praxionops.com
+
+      # ── JWT — DEBE configurarse manualmente en el dashboard ──
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 8h
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 30d
+
+      # ── Cloudflare R2 (object storage) ──
+      - key: R2_BUCKET
+        value: praxion-uploads
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_REGION
+        value: auto
+
+      # ── Facturapi (timbrado CFDI) ──
+      # Estas son fallback global. Cada tenant configura las suyas en
+      # tenant_fiscal_profiles via el frontend.
+      - key: FACTURAPI_KEY
+        sync: false
+      - key: FACTURAPI_KEY_TEST
+        sync: false
+      - key: FACTURAPI_USER_KEY
+        sync: false
+
+      # ── SMTP (correos transaccionales) ──
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_SECURE
+        value: "true"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_FROM_NAME
+        value: Praxion Systems
+
+      # ── Banxico (tipos de cambio diarios) ──
+      - key: BANXICO_TOKEN
+        sync: false
+
+      # ── Sentry (error tracking) ──
+      - key: SENTRY_DSN
+        sync: false
+      - key: SENTRY_TRACES_SAMPLE_RATE
+        value: "0.1"
+      - key: SENTRY_RELEASE
+        sync: false
+
+      # ── Stripe (postergado — sin clientes activos todavía) ──
+      # Dejar vacío → el módulo billing responde 503 y el sistema funciona sin
+      # cobros. Cuando estés listo para cobrar, llena estos.
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+
+      # ── BullMQ (Upstash Redis — postergado) ──
+      # Vacío = colas en modo sincrónico (sin reintentos automáticos). Para
+      # activar: crear DB en upstash.com y pegar la rediss:// URL.
+      - key: REDIS_URL
+        sync: false
+
+  # ─── Frontend SPA (Vite build → estático) ───────────────────────────────
+  # Static sites se sirven desde el CDN global de Render — no llevan campo
+  # `region` (Render lo rechaza como inválido).
+  - type: web
+    name: praxion-web
+    runtime: static
+    rootDir: saas-erp-frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    autoDeploy: true
+    # SPA fallback — cualquier ruta no encontrada sirve index.html para que
+    # React Router maneje la navegación client-side.
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_APP_NAME
+        value: Praxion
+      - key: VITE_API_URL
+        value: https://api.praxionops.com/api
+      - key: VITE_SENTRY_DSN
+        sync: false
+      - key: VITE_SENTRY_ENV
+        value: production
+      - key: VITE_SENTRY_TRACES_SAMPLE_RATE
+        value: "0.1"

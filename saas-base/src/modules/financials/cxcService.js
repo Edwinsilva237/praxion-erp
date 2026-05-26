@@ -1,0 +1,563 @@
+'use strict'
+
+const { query, withTransaction } = require('../../db')
+const { audit }                  = require('../../utils/audit')
+const { stampPaymentComplement } = require('../invoicing/paymentComplementService')
+
+// Mapeo método de pago interno (modal CXC) → forma de pago SAT (CFDI tipo P)
+const METHOD_TO_SAT_FORM = {
+  cash:     '01',
+  check:    '02',
+  transfer: '03',
+}
+
+// ─── CXC — Estado de cuenta de cliente ───────────────────────────────────────
+
+/**
+ * Estado de cuenta de un cliente.
+ * Incluye documentos pendientes, pagos y resumen.
+ */
+async function getCustomerStatement({ tenantId, partnerId, from, to }) {
+  const params = [tenantId, partnerId]
+  const filters = []
+  if (from) { params.push(from); filters.push(`ar.issue_date >= $${params.length}`) }
+  if (to)   { params.push(to);   filters.push(`ar.issue_date <= $${params.length}`) }
+  const where = filters.length ? `AND ${filters.join(' AND ')}` : ''
+
+  const { rows: documents } = await query(
+    `SELECT ar.id, ar.document_type, ar.document_number,
+            ar.issue_date, ar.due_date, ar.status,
+            ar.amount_total, ar.amount_paid, ar.amount_pending,
+            CASE WHEN ar.due_date < CURRENT_DATE AND ar.status NOT IN ('paid','cancelled')
+              THEN true ELSE false END AS is_overdue,
+            -- Datos fiscales del documento origen (solo cuando es factura).
+            -- Sirven para que el modal de pago bloquee las PPD timbradas
+            -- (que deben cobrarse por el flujo de complemento de pago).
+            inv.payment_method AS invoice_payment_method,
+            inv.status         AS invoice_status,
+            inv.id             AS invoice_id
+     FROM accounts_receivable ar
+     LEFT JOIN invoices inv ON inv.id = ar.document_id AND ar.document_type = 'invoice'
+     WHERE ar.tenant_id = $1 AND ar.partner_id = $2 ${where}
+     ORDER BY ar.due_date ASC, ar.issue_date ASC`,
+    params
+  )
+
+  const { rows: totals } = await query(
+    `SELECT
+       COALESCE(SUM(amount_total),   0) AS total_invoiced,
+       COALESCE(SUM(amount_paid),    0) AS total_paid,
+       COALESCE(SUM(amount_pending), 0) AS total_pending,
+       COUNT(*) FILTER (WHERE status = 'pending')                                          AS docs_pending,
+       COUNT(*) FILTER (WHERE status = 'partial')                                          AS docs_partial,
+       COUNT(*) FILTER (WHERE due_date < CURRENT_DATE AND status NOT IN ('paid','cancelled')) AS docs_overdue
+     FROM accounts_receivable
+     WHERE tenant_id = $1 AND partner_id = $2`,
+    [tenantId, partnerId]
+  )
+
+  // Anticipos disponibles
+  const { rows: advances } = await query(
+    `SELECT id, amount, amount_applied, amount_available, receipt_date, payment_method, reference
+     FROM ar_advances
+     WHERE tenant_id = $1 AND partner_id = $2 AND amount_applied < amount
+     ORDER BY receipt_date ASC`,
+    [tenantId, partnerId]
+  )
+
+  return { documents, summary: totals[0], advances }
+}
+
+/**
+ * Lista CXC con filtros.
+ *
+ * `complement_status` se calcula por documento:
+ *   - 'not_applicable' → no es factura (remisión, NC, etc.)
+ *   - 'not_required'   → factura PUE (no necesita complemento)
+ *   - 'cancelled'      → factura cancelada
+ *   - 'draft'          → factura PPD sin timbrar todavía
+ *   - 'pending'        → factura PPD timbrada, aún sin complementos
+ *   - 'partial'        → suma de complementos < amount_paid
+ *   - 'complete'       → suma de complementos cubre amount_paid (con tolerancia 0.01)
+ */
+async function listCXC({ tenantId, status, partnerId, from, to, page = 1, limit = 50 }) {
+  const offset = (page - 1) * limit
+  const params = [tenantId]
+  const filters = []
+
+  if (status) {
+    params.push(status); filters.push(`ar.status = $${params.length}`)
+  } else {
+    // Sin filtro explícito, ocultar cancelados — quedan accesibles eligiendo
+    // "Cancelado" en el dropdown del listado.
+    filters.push(`ar.status <> 'cancelled'`)
+  }
+  if (partnerId) { params.push(partnerId); filters.push(`ar.partner_id = $${params.length}`) }
+  if (from)      { params.push(from);      filters.push(`ar.issue_date >= $${params.length}`) }
+  if (to)        { params.push(to);        filters.push(`ar.issue_date <= $${params.length}`) }
+
+  const where = filters.length ? `AND ${filters.join(' AND ')}` : ''
+  params.push(limit, offset)
+
+  const { rows } = await query(
+    `SELECT ar.id, ar.document_type, ar.document_number,
+            ar.issue_date, ar.due_date, ar.status,
+            ar.amount_total, ar.amount_paid, ar.amount_pending,
+            bp.name AS partner_name, bp.rfc AS partner_rfc,
+            inv.payment_method AS invoice_payment_method,
+            inv.status         AS invoice_status,
+            COALESCE(pc.complement_total, 0) AS complement_total,
+            CASE
+              WHEN ar.document_type <> 'invoice' THEN 'not_applicable'
+              WHEN inv.status = 'cancelled'      THEN 'cancelled'
+              WHEN inv.payment_method = 'PUE'    THEN 'not_required'
+              WHEN inv.status <> 'stamped'       THEN 'draft'
+              WHEN ar.amount_paid <= 0.01        THEN 'pending'
+              WHEN COALESCE(pc.complement_total, 0) >= ar.amount_paid - 0.01 THEN 'complete'
+              ELSE 'partial'
+            END AS complement_status,
+            CASE WHEN ar.due_date < CURRENT_DATE AND ar.status NOT IN ('paid','cancelled')
+              THEN true ELSE false END AS is_overdue
+     FROM accounts_receivable ar
+     JOIN business_partners bp ON bp.id = ar.partner_id
+     LEFT JOIN invoices inv ON inv.id = ar.document_id AND ar.document_type = 'invoice'
+     LEFT JOIN (
+       SELECT invoice_id, SUM(amount) AS complement_total
+         FROM payment_complements
+        WHERE tenant_id = $1 AND status <> 'cancelled'
+        GROUP BY invoice_id
+     ) pc ON pc.invoice_id = inv.id
+     WHERE ar.tenant_id = $1 ${where}
+     ORDER BY ar.due_date ASC, ar.issue_date ASC
+     LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  )
+
+  const { rows: countRows } = await query(
+    `SELECT COUNT(*) FROM accounts_receivable ar WHERE ar.tenant_id = $1 ${where}`,
+    params.slice(0, params.length - 2)
+  )
+
+  return { data: rows, total: parseInt(countRows[0].count, 10), page, limit }
+}
+
+// ─── Pagos de clientes ────────────────────────────────────────────────────────
+
+/**
+ * Registra un pago de cliente y lo aplica a documentos CXC.
+ *
+ * @param {object} params
+ * @param {string} params.partnerId
+ * @param {string} params.paymentDate
+ * @param {string} params.method        - 'cash' | 'transfer' | 'check' | 'advance_application'
+ * @param {string} params.reference     - Requerido para transfer y check
+ * @param {number} params.amount
+ * @param {string} params.currency
+ * @param {string} [params.bankAccountId] - Cuenta bancaria del tenant donde se recibió el dinero
+ * @param {Array}  params.applications  - [{ arId, amountApplied }]
+ * @param {string} params.notes
+ */
+async function registerPayment({
+  tenantId, partnerId, paymentDate, method, reference,
+  amount, currency = 'MXN', bankAccountId = null, applications = [], notes,
+  userId, ipAddress, userAgent,
+}) {
+  return withTransaction(async (client) => {
+    if (!amount || amount <= 0) throw createError(400, 'amount debe ser mayor a cero.')
+    if (!partnerId) throw createError(400, 'partnerId es requerido.')
+    if (method === 'check' && !reference) {
+      throw createError(400, 'El número de cheque es requerido.')
+    }
+
+    // Validar que la cuenta bancaria existe y pertenece al tenant (si se envía).
+    if (bankAccountId) {
+      const { rows: baRows } = await client.query(
+        `SELECT id FROM bank_accounts WHERE id = $1 AND tenant_id = $2 AND active = TRUE`,
+        [bankAccountId, tenantId]
+      )
+      if (!baRows.length) throw createError(400, 'La cuenta bancaria seleccionada no existe o está inactiva.')
+    }
+
+    let totalApplied = 0
+    const complementsIssued = []
+    const complementsSkipped = []
+
+    // Aplicar pago a documentos CXC
+    for (const app of applications) {
+      if (!app.arId || !app.amountApplied) continue
+
+      const { rows: arRows } = await client.query(
+        `SELECT ar.id, ar.document_type, ar.document_id, ar.document_number,
+                ar.currency,
+                ar.amount_total, ar.amount_paid, ar.amount_pending, ar.status,
+                inv.status              AS invoice_status,
+                inv.payment_method      AS invoice_payment_method,
+                inv.exchange_rate_value AS invoice_exchange_rate,
+                inv.notes               AS invoice_notes
+         FROM accounts_receivable ar
+         LEFT JOIN invoices inv ON inv.id = ar.document_id AND ar.document_type = 'invoice'
+         WHERE ar.id = $1 AND ar.tenant_id = $2 AND ar.partner_id = $3`,
+        [app.arId, tenantId, partnerId]
+      )
+      if (!arRows.length) continue
+      const ar = arRows[0]
+      if (ar.status === 'paid') continue
+
+      const toApply = Math.min(parseFloat(app.amountApplied), parseFloat(ar.amount_pending))
+      if (toApply <= 0) continue
+
+      // Insertar pago en ar_payments
+      await client.query(
+        `INSERT INTO ar_payments
+           (tenant_id, ar_id, amount, payment_method, reference, payment_date, notes, created_by, bank_account_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [tenantId, app.arId, toApply, method, reference || null,
+         paymentDate || new Date().toISOString().split('T')[0],
+         notes || null, userId, bankAccountId]
+      )
+
+      // Actualizar CXC
+      const newPaid   = parseFloat(ar.amount_paid) + toApply
+      const newStatus = newPaid >= parseFloat(ar.amount_total) ? 'paid' : 'partial'
+      await client.query(
+        `UPDATE accounts_receivable SET amount_paid = $1, status = $2 WHERE id = $3`,
+        [newPaid, newStatus, app.arId]
+      )
+
+      totalApplied += toApply
+
+      // Decisión de complemento — solo factura PPD timbrada genera CFDI tipo P.
+      // Si NO aplica (PUE, draft, remisión) lo dejamos asentado en
+      // `complementsSkipped` con la razón para que el frontend pueda explicar
+      // qué pasó por cada documento. Si APLICA pero algo está mal (sin
+      // facturapi_id), el timbrado lanza error y rollbackea TODO.
+      // Si NO aplica complemento, asentar la razón y continuar. Si SÍ aplica
+      // pero algo está mal (sin facturapi_id, Facturapi rechaza, etc.) el
+      // timbrado lanza y rollbackea TODA la transacción — el pago no se
+      // registra y el operador ve el error explícito.
+      const skipReasonByCase = (() => {
+        if (ar.document_type !== 'invoice')      return 'no es factura (no requiere complemento)'
+        if (ar.invoice_status === 'cancelled')   return 'factura cancelada'
+        if (ar.invoice_status !== 'stamped')     return 'factura en borrador (timbrarla primero)'
+        if (ar.invoice_payment_method !== 'PPD') return 'factura PUE (no requiere complemento)'
+        return null
+      })()
+
+      if (skipReasonByCase) {
+        complementsSkipped.push({
+          ar_id:           ar.id,
+          document_number: ar.document_number,
+          amount:          toApply,
+          reason:          skipReasonByCase,
+        })
+      } else {
+        const satForm = METHOD_TO_SAT_FORM[method] || '03'
+        const comp = await stampPaymentComplement(client, {
+          tenantId,
+          invoiceId:   ar.document_id,
+          paymentDate: paymentDate || new Date().toISOString().split('T')[0],
+          paymentForm: satForm,
+          amount:      toApply,
+          currency:    ar.currency || 'MXN',
+          reference,
+          exchangeRate: ar.currency === 'USD' ? parseFloat(ar.invoice_exchange_rate || 1) : undefined,
+          userId,
+        })
+        complementsIssued.push(comp)
+      }
+    }
+
+    // Si hay monto sin aplicar → generar anticipo
+    const sinAplicar = parseFloat(amount) - totalApplied
+    let advanceId = null
+    if (sinAplicar > 0.01) {
+      const { rows: advRows } = await client.query(
+        `INSERT INTO ar_advances
+           (tenant_id, partner_id, amount, payment_method, reference, receipt_date, notes, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING id`,
+        [tenantId, partnerId, sinAplicar, method, reference || null,
+         paymentDate || new Date().toISOString().split('T')[0],
+         notes || null, userId]
+      )
+      advanceId = advRows[0].id
+    }
+
+    await audit({
+      tenantId, userId, action: 'ar_payment.registered',
+      resource: 'accounts_receivable', resourceId: partnerId,
+      payload: {
+        amount, method, reference, totalApplied, advanceId, bankAccountId,
+        applications,
+        complementsIssued: complementsIssued.map(c => ({
+          invoice_number: c.invoice_number, uuid: c.uuid, amount: c.amount,
+        })),
+        complementsSkipped,
+      },
+      ipAddress, userAgent,
+    })
+
+    return {
+      amount,
+      totalApplied,
+      advanceGenerated: sinAplicar > 0.01 ? sinAplicar : 0,
+      advanceId,
+      complementsIssued,
+      complementsSkipped,
+    }
+  })
+}
+
+/**
+ * Aplica un anticipo existente a documentos CXC.
+ */
+async function applyAdvance({
+  tenantId, partnerId, advanceId, applications = [],
+  userId, ipAddress, userAgent,
+}) {
+  return withTransaction(async (client) => {
+    // Verificar anticipo
+    const { rows: advRows } = await client.query(
+      `SELECT id, amount, amount_applied, amount_available
+       FROM ar_advances WHERE id = $1 AND tenant_id = $2 AND partner_id = $3`,
+      [advanceId, tenantId, partnerId]
+    )
+    if (!advRows.length) throw createError(404, 'Anticipo no encontrado.')
+    const advance = advRows[0]
+    if (parseFloat(advance.amount_available) <= 0) throw createError(400, 'El anticipo no tiene saldo disponible.')
+
+    let totalApplied = 0
+
+    for (const app of applications) {
+      if (!app.arId || !app.amountApplied) continue
+
+      const { rows: arRows } = await client.query(
+        `SELECT id, amount_total, amount_paid, amount_pending, status
+         FROM accounts_receivable WHERE id = $1 AND tenant_id = $2`,
+        [app.arId, tenantId]
+      )
+      if (!arRows.length) continue
+      const ar = arRows[0]
+      if (ar.status === 'paid') continue
+
+      const available = parseFloat(advance.amount_available) - totalApplied
+      const toApply   = Math.min(parseFloat(app.amountApplied), parseFloat(ar.amount_pending), available)
+      if (toApply <= 0) continue
+
+      // Insertar pago tipo advance_application
+      await client.query(
+        `INSERT INTO ar_payments
+           (tenant_id, ar_id, amount, payment_method, advance_id, payment_date, notes, created_by)
+         VALUES ($1,$2,$3,'advance_application',$4,CURRENT_DATE,$5,$6)`,
+        [tenantId, app.arId, toApply, advanceId, `Aplicación de anticipo`, userId]
+      )
+
+      // Actualizar CXC
+      const newPaid   = parseFloat(ar.amount_paid) + toApply
+      const newStatus = newPaid >= parseFloat(ar.amount_total) ? 'paid' : 'partial'
+      await client.query(
+        `UPDATE accounts_receivable SET amount_paid = $1, status = $2 WHERE id = $3`,
+        [newPaid, newStatus, app.arId]
+      )
+
+      // Actualizar anticipo
+      await client.query(
+        `UPDATE ar_advances SET amount_applied = amount_applied + $1 WHERE id = $2`,
+        [toApply, advanceId]
+      )
+
+      totalApplied += toApply
+    }
+
+    await audit({
+      tenantId, userId, action: 'ar_advance.applied',
+      resource: 'ar_advances', resourceId: advanceId,
+      payload: { totalApplied, applications },
+      ipAddress, userAgent,
+    })
+
+    return { advanceId, totalApplied }
+  })
+}
+
+/**
+ * Detalle de un documento CXC con sus pagos aplicados y datos del documento origen.
+ */
+async function getCXC({ tenantId, arId }) {
+  const { rows } = await query(
+    `SELECT ar.*,
+            bp.name AS partner_name, bp.rfc AS partner_rfc,
+            bp.cfdi_use, bp.payment_method AS partner_payment_method,
+            bp.credit_type, bp.credit_days, bp.billing_notes,
+            CASE WHEN ar.due_date < CURRENT_DATE AND ar.status NOT IN ('paid','cancelled')
+              THEN true ELSE false END AS is_overdue
+       FROM accounts_receivable ar
+       JOIN business_partners bp ON bp.id = ar.partner_id
+      WHERE ar.id = $1 AND ar.tenant_id = $2`,
+    [arId, tenantId]
+  )
+  if (!rows.length) return null
+  const ar = rows[0]
+
+  // Pagos aplicados
+  const { rows: payments } = await query(
+    `SELECT arp.id, arp.amount, arp.payment_method, arp.reference,
+            arp.payment_date, arp.advance_id, arp.notes, arp.created_at,
+            arp.bank_account_id,
+            ba.bank_name      AS bank_name,
+            ba.alias          AS bank_alias,
+            ba.account_number AS bank_account_number,
+            u.full_name AS created_by_name
+       FROM ar_payments arp
+       LEFT JOIN users u ON u.id = arp.created_by
+       LEFT JOIN bank_accounts ba ON ba.id = arp.bank_account_id
+      WHERE arp.ar_id = $1
+      ORDER BY arp.payment_date ASC, arp.created_at ASC`,
+    [arId]
+  )
+
+  // Info del documento origen + total complementado (si es factura PPD)
+  let sourceDoc = null
+  let complementTotal = 0
+  let paymentComplements = []
+  if (ar.document_type === 'invoice') {
+    const { rows: inv } = await query(
+      `SELECT id, document_number, cfdi_uuid, payment_method, payment_form,
+              status, stamp_date, cancellation_date, delivery_note_id
+         FROM invoices WHERE id = $1 AND tenant_id = $2`,
+      [ar.document_id, tenantId]
+    )
+    sourceDoc = inv[0] || null
+    if (sourceDoc) {
+      const { rows: pcRows } = await query(
+        `SELECT id, facturapi_id, cfdi_uuid, payment_date, payment_form,
+                amount, currency, reference, status, created_at
+           FROM payment_complements
+          WHERE invoice_id = $1 AND tenant_id = $2
+          ORDER BY payment_date DESC, created_at DESC`,
+        [sourceDoc.id, tenantId]
+      )
+      paymentComplements = pcRows
+      complementTotal = pcRows
+        .filter(p => p.status !== 'cancelled')
+        .reduce((s, p) => s + parseFloat(p.amount || 0), 0)
+    }
+  } else if (ar.document_type === 'remission') {
+    const { rows: rem } = await query(
+      `SELECT dn.id, dn.document_number, dn.status, dn.delivered_at,
+              dn.receiver_name, dn.sales_order_id,
+              so.order_number AS sales_order_number
+         FROM delivery_notes dn
+         LEFT JOIN sales_orders so ON so.id = dn.sales_order_id
+        WHERE dn.id = $1 AND dn.tenant_id = $2`,
+      [ar.document_id, tenantId]
+    )
+    sourceDoc = rem[0] || null
+  }
+
+  return {
+    ...ar, payments, sourceDoc,
+    complement_total:   complementTotal,
+    paymentComplements,
+  }
+}
+
+function createError(status, message) {
+  const err = new Error(message)
+  err.status = status
+  return err
+}
+
+/**
+ * Timbra un complemento de pago para una factura PPD ya cobrada pero cuyo
+ * pago no generó el CFDI tipo P (por ejemplo, pagos registrados antes de
+ * que el auto-timbrado funcionara, o fallas previas en Facturapi).
+ *
+ * Calcula el monto faltante de complementos:
+ *   faltante = SUM(ar_payments.amount) - SUM(payment_complements activos)
+ * y timbra UN solo complemento por ese monto.
+ *
+ * Si el operador quiere fraccionar el complemento, puede mandar `amount`
+ * explícito menor al faltante. No se permite exceder el faltante.
+ */
+async function stampMissingComplement({
+  tenantId, arId,
+  paymentDate, paymentForm, amount, reference, exchangeRate,
+  userId, ipAddress, userAgent,
+}) {
+  return withTransaction(async (client) => {
+    const { rows: arRows } = await client.query(
+      `SELECT ar.id, ar.document_type, ar.document_id, ar.document_number,
+              ar.currency, ar.amount_paid,
+              inv.status              AS invoice_status,
+              inv.payment_method      AS invoice_payment_method,
+              inv.exchange_rate_value AS invoice_exchange_rate
+       FROM accounts_receivable ar
+       LEFT JOIN invoices inv ON inv.id = ar.document_id AND ar.document_type = 'invoice'
+       WHERE ar.id = $1 AND ar.tenant_id = $2`,
+      [arId, tenantId]
+    )
+    if (!arRows.length) throw createError(404, 'CXC no encontrado.')
+    const ar = arRows[0]
+
+    if (ar.document_type !== 'invoice') throw createError(400, 'Solo aplica a facturas.')
+    if (ar.invoice_status !== 'stamped') throw createError(400, 'La factura debe estar timbrada.')
+    if (ar.invoice_payment_method !== 'PPD') throw createError(400, 'Solo aplica a facturas PPD.')
+
+    const { rows: totals } = await client.query(
+      `SELECT
+         (SELECT COALESCE(SUM(amount),0) FROM ar_payments        WHERE ar_id = $1) AS total_paid,
+         (SELECT COALESCE(SUM(amount),0) FROM payment_complements
+            WHERE invoice_id = $2 AND status <> 'cancelled')                       AS total_complemented`,
+      [arId, ar.document_id]
+    )
+    const totalPaid          = parseFloat(totals[0].total_paid)
+    const totalComplemented  = parseFloat(totals[0].total_complemented)
+    const missing            = +(totalPaid - totalComplemented).toFixed(2)
+
+    if (missing <= 0.01) {
+      throw createError(400, 'No hay monto pendiente de complementar para esta factura.')
+    }
+
+    // Si el operador pidió un monto explícito, validar que no exceda el faltante.
+    const toStamp = amount ? Math.min(parseFloat(amount), missing) : missing
+    if (toStamp <= 0.01) throw createError(400, 'Monto inválido.')
+
+    const comp = await stampPaymentComplement(client, {
+      tenantId,
+      invoiceId:   ar.document_id,
+      paymentDate: paymentDate || new Date().toISOString().split('T')[0],
+      paymentForm: paymentForm || '03',
+      amount:      toStamp,
+      currency:    ar.currency || 'MXN',
+      reference,
+      exchangeRate: ar.currency === 'USD'
+        ? parseFloat(exchangeRate || ar.invoice_exchange_rate || 1)
+        : undefined,
+      userId,
+    })
+
+    await audit({
+      tenantId, userId, action: 'payment_complement.stamped_manual',
+      resource: 'invoices', resourceId: ar.document_id,
+      payload: {
+        ar_id: arId, uuid: comp.uuid, amount: toStamp,
+        missing_before: missing, payment_form: paymentForm || '03',
+      },
+      ipAddress, userAgent,
+    })
+
+    return {
+      uuid:           comp.uuid,
+      facturapi_id:   comp.facturapi_id,
+      amount:         toStamp,
+      missing_before: missing,
+      missing_after:  +(missing - toStamp).toFixed(2),
+    }
+  })
+}
+
+module.exports = {
+  listCXC, getCXC, getCustomerStatement,
+  registerPayment, applyAdvance, stampMissingComplement,
+}

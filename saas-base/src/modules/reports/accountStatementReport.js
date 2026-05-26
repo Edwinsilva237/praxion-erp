@@ -1,0 +1,357 @@
+'use strict'
+
+// Estado de cuenta — Cuentas por cobrar (direction='in') o por pagar ('out').
+// Es un SNAPSHOT al día de hoy: lista todos los documentos con saldo abierto
+// (pending/partial), clasifica cada uno según fecha de vencimiento, y agrega
+// saldos a favor en anticipos (y notas de crédito para CXC).
+//
+// No hay concepto de "periodo": el estado de cuenta refleja deudas vigentes,
+// no actividad histórica.
+
+const { query } = require('../../db')
+
+const DUE_SOON_DAYS = 7
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Configuración por dirección
+// ─────────────────────────────────────────────────────────────────────────────
+
+function getConfig(direction) {
+  if (direction === 'in') {
+    return {
+      docsTable:        'accounts_receivable',
+      advancesTable:    'ar_advances',
+      advancesDateCol:  'receipt_date',     // ar_advances usa receipt_date
+      hasCreditNotes:   true,
+      partnerNoun:      'cliente',
+      partnerNounPlural:'clientes',
+    }
+  }
+  if (direction === 'out') {
+    return {
+      docsTable:        'accounts_payable',
+      advancesTable:    'ap_advances',
+      advancesDateCol:  'payment_date',     // ap_advances usa payment_date
+      hasCreditNotes:   false,
+      partnerNoun:      'proveedor',
+      partnerNounPlural:'proveedores',
+    }
+  }
+  const err = new Error(`direction debe ser 'in' u 'out' (recibió '${direction}')`)
+  err.status = 400
+  throw err
+}
+
+// Cláusula SQL que clasifica un documento por estado de vencimiento.
+// Se usa idéntica en varias queries.
+const STATUS_CASE = `
+  CASE
+    WHEN d.due_date IS NULL                                 THEN 'no_due'
+    WHEN d.due_date <  CURRENT_DATE                         THEN 'overdue'
+    WHEN d.due_date <= CURRENT_DATE + INTERVAL '${DUE_SOON_DAYS} days' THEN 'due_soon'
+    ELSE 'current'
+  END
+`
+
+/**
+ * Snapshot completo del estado de cuenta (todos los partners).
+ *
+ * @param {object} params
+ * @param {string} params.tenantId
+ * @param {'in'|'out'} params.direction
+ * @param {object} [params.filters] — partnerId, statusFilter, search
+ */
+async function getAccountStatement({ tenantId, direction, filters = {} }) {
+  const cfg = getConfig(direction)
+
+  const [documents, byPartner, advances, creditNotes] = await Promise.all([
+    getOpenDocuments(tenantId, cfg, filters),
+    getByPartner(tenantId, cfg, filters),
+    getAvailableAdvances(tenantId, cfg, filters.partnerId),
+    cfg.hasCreditNotes ? getApplicableCreditNotes(tenantId, filters.partnerId) : Promise.resolve([]),
+  ])
+
+  const summary = buildSummary(documents, advances, creditNotes)
+
+  return {
+    direction,
+    snapshot_date: new Date().toISOString().slice(0, 10),
+    due_soon_days: DUE_SOON_DAYS,
+    summary,
+    by_partner: byPartner,
+    documents,
+    advances,
+    credit_notes: creditNotes,
+    generated_at:  new Date().toISOString(),
+  }
+}
+
+/**
+ * Estado de cuenta de UN partner — para PDF individual / envío por correo.
+ */
+async function getPartnerStatement({ tenantId, direction, partnerId }) {
+  const cfg = getConfig(direction)
+
+  const [partnerRows, documents, advances, creditNotes, contacts] = await Promise.all([
+    query(`
+      SELECT id, name, tax_name, rfc, type
+        FROM business_partners
+       WHERE id = $1 AND tenant_id = $2
+    `, [partnerId, tenantId]),
+    getOpenDocuments(tenantId, cfg, { partnerId }),
+    getAvailableAdvances(tenantId, cfg, partnerId),
+    cfg.hasCreditNotes ? getApplicableCreditNotes(tenantId, partnerId) : Promise.resolve([]),
+    query(`
+      SELECT id, name, position, email, phone, is_primary
+        FROM business_partner_contacts
+       WHERE business_partner_id = $1
+       ORDER BY is_primary DESC, name
+    `, [partnerId]),
+  ])
+
+  if (partnerRows.rows.length === 0) {
+    const err = new Error('Socio de negocio no encontrado.')
+    err.status = 404
+    throw err
+  }
+
+  const summary = buildSummary(documents, advances, creditNotes)
+
+  return {
+    direction,
+    snapshot_date: new Date().toISOString().slice(0, 10),
+    due_soon_days: DUE_SOON_DAYS,
+    partner:   partnerRows.rows[0],
+    contacts:  contacts.rows,
+    summary,
+    documents,
+    advances,
+    credit_notes: creditNotes,
+    generated_at: new Date().toISOString(),
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Queries
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function getOpenDocuments(tenantId, cfg, filters) {
+  const conditions = [
+    'd.tenant_id = $1',
+    `d.status IN ('pending','partial')`,
+  ]
+  const params = [tenantId]
+  let idx = 2
+
+  if (filters.partnerId) {
+    conditions.push(`d.partner_id = $${idx++}`)
+    params.push(filters.partnerId)
+  }
+  if (filters.search) {
+    conditions.push(`(d.document_number ILIKE $${idx} OR bp.name ILIKE $${idx} OR bp.rfc ILIKE $${idx})`)
+    params.push(`%${filters.search}%`)
+    idx++
+  }
+
+  const { rows } = await query(`
+    SELECT d.id, d.document_type, d.document_number,
+           d.partner_id, bp.name AS partner_name, bp.rfc AS partner_rfc,
+           d.issue_date, d.due_date,
+           d.amount_total, d.amount_paid, d.amount_pending,
+           d.status AS doc_status,
+           ${STATUS_CASE} AS aging_status,
+           (CASE
+             WHEN d.due_date IS NULL THEN NULL
+             ELSE (CURRENT_DATE - d.due_date)
+           END)::int AS days_overdue
+      FROM ${cfg.docsTable} d
+      JOIN business_partners bp ON bp.id = d.partner_id
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY
+       CASE ${STATUS_CASE}
+         WHEN 'overdue'  THEN 1
+         WHEN 'due_soon' THEN 2
+         WHEN 'current'  THEN 3
+         WHEN 'no_due'   THEN 4
+       END,
+       d.due_date ASC NULLS LAST,
+       d.issue_date ASC
+  `, params)
+
+  let documents = rows.map(r => ({
+    id:              r.id,
+    document_type:   r.document_type,
+    document_number: r.document_number,
+    partner_id:      r.partner_id,
+    partner_name:    r.partner_name,
+    partner_rfc:     r.partner_rfc,
+    issue_date:      r.issue_date,
+    due_date:        r.due_date,
+    amount_total:    parseFloat(r.amount_total)   || 0,
+    amount_paid:     parseFloat(r.amount_paid)    || 0,
+    amount_pending:  parseFloat(r.amount_pending) || 0,
+    doc_status:      r.doc_status,
+    aging_status:    r.aging_status,
+    days_overdue:    r.days_overdue,
+  }))
+
+  // Filtro adicional aging_status si se pidió.
+  if (filters.statusFilter) {
+    documents = documents.filter(d => d.aging_status === filters.statusFilter)
+  }
+
+  return documents
+}
+
+async function getByPartner(tenantId, cfg, filters) {
+  const conditions = [
+    'd.tenant_id = $1',
+    `d.status IN ('pending','partial')`,
+  ]
+  const params = [tenantId]
+  let idx = 2
+
+  if (filters.partnerId) {
+    conditions.push(`d.partner_id = $${idx++}`)
+    params.push(filters.partnerId)
+  }
+
+  const { rows } = await query(`
+    SELECT bp.id AS partner_id, bp.name AS partner_name,
+           bp.rfc AS partner_rfc, bp.tax_name AS partner_legal_name,
+           COUNT(*)::int                            AS docs_count,
+           COALESCE(SUM(d.amount_pending),0)::numeric AS pending_amount,
+           COUNT(*) FILTER (WHERE ${STATUS_CASE} = 'overdue')::int            AS overdue_count,
+           COALESCE(SUM(d.amount_pending) FILTER (WHERE ${STATUS_CASE} = 'overdue'),0)::numeric AS overdue_amount,
+           COUNT(*) FILTER (WHERE ${STATUS_CASE} = 'due_soon')::int           AS due_soon_count,
+           COALESCE(SUM(d.amount_pending) FILTER (WHERE ${STATUS_CASE} = 'due_soon'),0)::numeric AS due_soon_amount,
+           COUNT(*) FILTER (WHERE ${STATUS_CASE} = 'current')::int            AS current_count,
+           COALESCE(SUM(d.amount_pending) FILTER (WHERE ${STATUS_CASE} = 'current'),0)::numeric AS current_amount,
+           COUNT(*) FILTER (WHERE ${STATUS_CASE} = 'no_due')::int             AS no_due_count,
+           COALESCE(SUM(d.amount_pending) FILTER (WHERE ${STATUS_CASE} = 'no_due'),0)::numeric  AS no_due_amount,
+           MAX(CURRENT_DATE - d.due_date) FILTER (WHERE d.due_date IS NOT NULL AND d.due_date < CURRENT_DATE)::int AS max_days_overdue
+      FROM ${cfg.docsTable} d
+      JOIN business_partners bp ON bp.id = d.partner_id
+     WHERE ${conditions.join(' AND ')}
+     GROUP BY bp.id, bp.name, bp.rfc, bp.tax_name
+     ORDER BY overdue_amount DESC, pending_amount DESC
+  `, params)
+
+  return rows.map(r => ({
+    partner_id:         r.partner_id,
+    partner_name:       r.partner_name,
+    partner_rfc:        r.partner_rfc,
+    partner_legal_name: r.partner_legal_name,
+    docs_count:         r.docs_count,
+    pending_amount:     parseFloat(r.pending_amount) || 0,
+    overdue_count:      r.overdue_count,
+    overdue_amount:     parseFloat(r.overdue_amount) || 0,
+    due_soon_count:     r.due_soon_count,
+    due_soon_amount:    parseFloat(r.due_soon_amount) || 0,
+    current_count:      r.current_count,
+    current_amount:     parseFloat(r.current_amount) || 0,
+    no_due_count:       r.no_due_count,
+    no_due_amount:      parseFloat(r.no_due_amount) || 0,
+    max_days_overdue:   r.max_days_overdue,
+  }))
+}
+
+async function getAvailableAdvances(tenantId, cfg, partnerId) {
+  const conditions = [
+    'a.tenant_id = $1',
+    'a.amount_available > 0',
+  ]
+  const params = [tenantId]
+  if (partnerId) {
+    conditions.push('a.partner_id = $2')
+    params.push(partnerId)
+  }
+  // Aliasamos la fecha a `receipt_date` en la respuesta para mantener un solo
+  // shape público (la columna física se llama distinto en cada lado).
+  const { rows } = await query(`
+    SELECT a.id, a.partner_id, bp.name AS partner_name, bp.rfc AS partner_rfc,
+           a.amount, a.amount_applied, a.amount_available,
+           a.payment_method, a.reference,
+           a.${cfg.advancesDateCol} AS receipt_date,
+           a.notes
+      FROM ${cfg.advancesTable} a
+      JOIN business_partners bp ON bp.id = a.partner_id
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY a.${cfg.advancesDateCol} DESC
+  `, params)
+  return rows.map(r => ({
+    id:               r.id,
+    partner_id:       r.partner_id,
+    partner_name:     r.partner_name,
+    partner_rfc:      r.partner_rfc,
+    amount:           parseFloat(r.amount)           || 0,
+    amount_applied:   parseFloat(r.amount_applied)   || 0,
+    amount_available: parseFloat(r.amount_available) || 0,
+    payment_method:   r.payment_method,
+    reference:        r.reference,
+    receipt_date:     r.receipt_date,
+    notes:            r.notes,
+  }))
+}
+
+async function getApplicableCreditNotes(tenantId, partnerId) {
+  // NCs timbradas que aún tienen saldo aplicable. El modelo no tiene
+  // amount_applied/available — para simplificar las traemos todas las que
+  // estén con status='stamped' y se muestran como "saldo a favor".
+  const conditions = [
+    'cn.tenant_id = $1',
+    `cn.status = 'stamped'`,
+  ]
+  const params = [tenantId]
+  if (partnerId) {
+    conditions.push('cn.partner_id = $2')
+    params.push(partnerId)
+  }
+  const { rows } = await query(`
+    SELECT cn.id, cn.document_number, cn.partner_id, bp.name AS partner_name,
+           cn.amount, cn.total, cn.issue_date, cn.reason, cn.cfdi_uuid
+      FROM credit_notes cn
+      JOIN business_partners bp ON bp.id = cn.partner_id
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY cn.issue_date DESC
+  `, params)
+  return rows.map(r => ({
+    id:              r.id,
+    document_number: r.document_number,
+    partner_id:      r.partner_id,
+    partner_name:    r.partner_name,
+    amount:          parseFloat(r.amount) || 0,
+    total:           parseFloat(r.total)  || 0,
+    issue_date:      r.issue_date,
+    reason:          r.reason,
+    cfdi_uuid:       r.cfdi_uuid,
+  }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Resumen — sumas y saldo neto
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildSummary(documents, advances, creditNotes) {
+  const groups = { overdue: [], due_soon: [], current: [], no_due: [] }
+  for (const d of documents) groups[d.aging_status]?.push(d)
+
+  const sum = arr => arr.reduce((s, d) => s + d.amount_pending, 0)
+  const advancesAmount = advances.reduce((s, a) => s + a.amount_available, 0)
+  const creditNotesAmount = creditNotes.reduce((s, c) => s + c.total, 0)
+  const totalPending = sum(documents)
+
+  return {
+    total_pending_amount: totalPending,
+    total_pending_count:  documents.length,
+    overdue:  { amount: sum(groups.overdue),  count: groups.overdue.length },
+    due_soon: { amount: sum(groups.due_soon), count: groups.due_soon.length },
+    current:  { amount: sum(groups.current),  count: groups.current.length },
+    no_due:   { amount: sum(groups.no_due),   count: groups.no_due.length },
+    advances_available:     { amount: advancesAmount,    count: advances.length },
+    credit_notes_available: { amount: creditNotesAmount, count: creditNotes.length },
+    net_balance: totalPending - advancesAmount - creditNotesAmount,
+  }
+}
+
+module.exports = { getAccountStatement, getPartnerStatement, DUE_SOON_DAYS }
