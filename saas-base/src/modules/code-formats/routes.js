@@ -20,9 +20,12 @@ router.get('/', checkPermission('settings', 'read'), async (req, res, next) => {
 
 /**
  * GET /api/code-formats/preview-next/:entity
- * Lo usan los forms de captura. Requiere solo 'read' porque no muta nada.
+ * Lo usan los forms de captura de cualquier rol que pueda crear el catálogo
+ * (productos, materias primas, clientes, proveedores). No requiere permiso de
+ * settings porque solo devuelve el siguiente código sugerido — no expone
+ * configuración. Sigue protegido por authGuard + tenantResolver.
  */
-router.get('/preview-next/:entity', checkPermission('settings', 'read'), async (req, res, next) => {
+router.get('/preview-next/:entity', async (req, res, next) => {
   try {
     res.json(await svc.previewNext({
       tenantId: req.tenant.id,
