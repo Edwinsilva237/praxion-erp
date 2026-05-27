@@ -35,7 +35,7 @@ const OBJETO_IMP = [
   { code: '03', label: '03 — Sí objeto, no desglose' },
 ]
 
-const SALE_UNITS = ['pieza', 'paquete', 'caja', 'metro', 'kilogramo']
+const SALE_UNITS = ['pieza', 'paquete', 'millar', 'rollo', 'caja', 'metro', 'kilogramo']
 
 // Opciones de tipo de producto. El valor `corner_protector` es legacy del modelo
 // específico de plástico. En tenants nuevos, el catálogo `tenant_product_kinds`
@@ -147,9 +147,21 @@ function Section({ number, title, badge, children }) {
 }
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
-function ProductModal({ product, onClose }) {
+function ProductModal({ product: initialProduct, onClose }) {
   const queryClient  = useQueryClient()
-  const isEditing    = !!product
+  // Después de crear un producto nuevo, el modal NO se cierra: transiciona a
+  // modo edición para que el usuario configure presentaciones (rollo, millar,
+  // caja…) sin re-abrir el form. `savedProduct` arranca como `initialProduct`
+  // (edición de un producto existente) o null (creación). Al guardar por
+  // primera vez se popula con el row recién creado.
+  const [savedProduct, setSavedProduct] = useState(initialProduct)
+  const product = savedProduct
+  const isEditing = !!product
+  // `justCreated` distingue "se acaba de crear en este modal" de "abriste el
+  // modal directamente sobre un producto preexistente". Solo lo usamos para
+  // mostrar el banner informativo y para decidir si tras un segundo submit
+  // cerramos o seguimos.
+  const justCreated = !initialProduct && !!savedProduct
   const codeSug      = useCodeSuggestion('product', { enabled: !isEditing })
 
   const {
@@ -299,14 +311,22 @@ function ProductModal({ product, onClose }) {
       setUploadProgress(null)
       return productResult
     },
-    onSuccess: () => {
+    onSuccess: (productResult) => {
       queryClient.invalidateQueries({ queryKey: ['products'] })
       // base_price afecta la columna "Precio base" de Precios por cliente
       queryClient.invalidateQueries({ queryKey: ['customer-prices'] })
       queryClient.invalidateQueries({ queryKey: ['customer-prices-summary'] })
       queryClient.invalidateQueries({ queryKey: ['inv-levels'] })
       queryClient.invalidateQueries({ queryKey: ['inv-levels-summary'] })
-      onClose()
+      // Si era una creación nueva (no había producto previo), no cerramos:
+      // transicionamos a modo edición para que el usuario pueda configurar
+      // presentaciones de venta (rollo, millar, caja…). En cualquier guardado
+      // posterior cerramos como antes.
+      if (!savedProduct) {
+        setSavedProduct(productResult)
+      } else {
+        onClose()
+      }
     },
     onError: () => setUploadProgress(null),
   })
@@ -344,6 +364,18 @@ function ProductModal({ product, onClose }) {
 
         {/* Form */}
         <form onSubmit={handleSubmit((d) => mutation.mutate(d))} className="px-6 py-5 space-y-4">
+
+          {justCreated && (
+            <div className="px-4 py-3 rounded-xl border border-status-success/40 bg-status-success/10 text-sm text-status-success flex items-start gap-2.5">
+              <span className="text-base leading-none mt-0.5">✓</span>
+              <div className="flex-1">
+                <p className="font-semibold">Producto creado.</p>
+                <p className="text-[12px] text-status-success/90 leading-tight mt-0.5">
+                  Configura las <strong>Presentaciones de venta</strong> abajo (sección 2b) si el producto se vende en varias unidades distintas a su unidad base — por ejemplo: rollo, millar, caja. Cuando termines, cierra el modal.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* ── 1. Datos generales ── */}
           <Section number="1" title="Datos generales" badge="requerido">
@@ -602,7 +634,7 @@ function ProductModal({ product, onClose }) {
 
           <div className="flex justify-end gap-3 pt-2 border-t border-line-subtle">
             <button type="button" onClick={onClose} className="btn-secondary" disabled={isSubmitting}>
-              Cancelar
+              {justCreated ? 'Cerrar' : 'Cancelar'}
             </button>
             <button type="submit" disabled={isSubmitting} className="btn-primary">
               {isSubmitting && <Spinner className="w-4 h-4" />}
