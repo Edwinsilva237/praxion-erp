@@ -35,4 +35,9 @@ export const fiscalProfilesApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     }).then(r => r.data)
   },
+
+  // Re-vincula a una organization NUEVA en Facturapi (cuando el cliente
+  // borró su org en el dashboard y el emisor en BD quedó huérfano).
+  relinkFacturapi: (id) =>
+    api.post(`${B}/${id}/relink-facturapi`).then(r => r.data),
 }

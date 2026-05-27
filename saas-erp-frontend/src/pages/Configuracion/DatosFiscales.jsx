@@ -287,6 +287,20 @@ export default function DatosFiscales() {
     onError: (e) => setError(e.response?.data?.error || e.message || 'Error al guardar'),
   })
 
+  // Re-vincula el emisor a una organization NUEVA en Facturapi (cuando la
+  // original fue borrada en el dashboard y el orgId quedó huérfano).
+  const relinkMutation = useMutation({
+    mutationFn: () => fiscalProfilesApi.relinkFacturapi(profile.id),
+    onSuccess: (updated) => {
+      qc.invalidateQueries({ queryKey: ['fiscal-profile'] })
+      setMsg(
+        `Re-vinculado. Nueva organization en Facturapi: ${updated.facturapi_organization_id}. ` +
+        'Ahora sube de nuevo el CSD para reactivar el timbrado.'
+      )
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al re-vincular'),
+  })
+
   // ── Wizard inicial (no hay profile todavía) ────────────────────────────
   if (!isLoading && !profile) {
     return (
@@ -427,9 +441,23 @@ export default function DatosFiscales() {
 
         {profile.facturapi_organization_id && (
           <Can do="settings:update">
-            <div className="mt-4 flex gap-2">
+            <div className="mt-4 flex flex-wrap gap-2">
               <button onClick={() => setShowCert(true)} className="btn-primary btn-sm">
                 {profile.facturapi_certificate_status ? '🔐 Reemplazar CSD' : '🔐 Subir CSD'}
+              </button>
+              <button
+                onClick={() => {
+                  if (!window.confirm(
+                    '¿Re-vincular a una NUEVA organization en Facturapi?\n\n' +
+                    'Usar solo si la organization actual fue borrada en el dashboard de Facturapi ' +
+                    'y los timbrados están fallando con "organization no encontrada".\n\n' +
+                    'Después de re-vincular, tendrás que volver a subir el CSD.'
+                  )) return
+                  relinkMutation.mutate()
+                }}
+                disabled={relinkMutation.isPending}
+                className="btn-secondary btn-sm">
+                {relinkMutation.isPending ? <Spinner size="sm" /> : '↻ Re-vincular a Facturapi'}
               </button>
             </div>
           </Can>

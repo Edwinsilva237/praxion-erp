@@ -127,4 +127,21 @@ router.post('/:id/certificate',
   }
 )
 
+/**
+ * POST /api/fiscal-profiles/:id/relink-facturapi
+ * Re-vincula el emisor a una organization NUEVA en Facturapi. Útil si el
+ * admin borró su organization en el dashboard de Facturapi y el emisor en
+ * BD quedó huérfano (facturapi_organization_id apunta a algo inexistente).
+ * Reusa los datos legales del emisor actual (no requiere body).
+ */
+router.post('/:id/relink-facturapi', checkPermission('settings', 'update'), async (req, res, next) => {
+  try {
+    const result = await svc.relinkInFacturapi({
+      tenantId: req.tenant.id, profileId: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
 module.exports = router

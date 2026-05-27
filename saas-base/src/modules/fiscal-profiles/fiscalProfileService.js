@@ -65,6 +65,111 @@ async function getFacturapiForProfile({ tenantId, fiscalProfileId }) {
 }
 
 /**
+ * Crea una organization nueva en Facturapi y devuelve { orgId, keyTest,
+ * legalWarning }. Usado por createProfile (primer setup) y por
+ * relinkInFacturapi (cuando el cliente borró su org y necesita re-vincular).
+ *
+ * Facturapi v4 separa la creación en 2 llamadas:
+ *   1. organizations.create({ name })
+ *   2. organizations.updateLegal(id, {...})
+ *
+ * El RFC NO se manda en updateLegal — Facturapi lo asigna al subir el CSD
+ * leyéndolo del propio certificado.
+ */
+async function provisionFacturapiOrganization({ taxName, taxRegime, zipCode }) {
+  const fa = adminFacturapi()
+  let org
+  try {
+    org = await fa.organizations.create({ name: taxName })
+  } catch (e) {
+    const msg = e.message || ''
+    if (/invalid api key|llave inválida|llave invalida|api key/i.test(msg)) {
+      throw createError(500,
+        'La FACTURAPI_USER_KEY del servidor no es válida. ' +
+        'Verifica en .env que sea la "Llave Secreta de Usuario" (sk_user_...), ' +
+        'NO la llave de una organización (sk_test_/sk_live_). Reinicia el backend tras cambiarla.')
+    }
+    if (/organización|organization/i.test(msg) && /user/i.test(msg)) {
+      throw createError(500,
+        'FACTURAPI_USER_KEY apunta a una organization, no a un usuario. ' +
+        'Necesitas la "Llave Secreta de Usuario" (sk_user_...) — la obtienes en ' +
+        'Facturapi → Mi cuenta → API. Reinicia el backend tras corregirla.')
+    }
+    throw createError(400, `Facturapi rechazó la creación de la organization: ${msg}`)
+  }
+  const orgId = org.id
+
+  let legalWarning = null
+  try {
+    await fa.organizations.updateLegal(orgId, {
+      name:        taxName,
+      legal_name:  taxName,
+      tax_system:  taxRegime,
+      address: { zip: zipCode },
+    })
+  } catch (e) {
+    legalWarning = `Org creada pero datos legales no se aplicaron: ${e.message}`
+  }
+
+  let keyTest = null
+  try {
+    const test = await fa.organizations.getTestApiKey(orgId)
+    keyTest = typeof test === 'string' ? test : (test?.key || test?.api_key || null)
+  } catch (_e) { /* no bloqueante */ }
+
+  return { orgId, keyTest, legalWarning }
+}
+
+/**
+ * Re-vincula un emisor existente a una NUEVA organization en Facturapi.
+ * Útil cuando el admin borró la organization en el dashboard de Facturapi y
+ * el emisor en BD quedó huérfano (org_id apunta a algo que ya no existe).
+ *
+ * Reusa los datos legales del emisor actual (tax_name, tax_regime, zip_code).
+ * Reemplaza facturapi_organization_id + facturapi_api_key_test y limpia la
+ * live key + estado del certificado (porque el certificado anterior vivía
+ * en la org borrada; hay que volver a subirlo a la nueva).
+ */
+async function relinkInFacturapi({ tenantId, profileId, userId, ipAddress, userAgent }) {
+  const profile = await getProfile({ tenantId, profileId })
+  if (!profile) throw createError(404, 'Emisor fiscal no encontrado.')
+
+  const { orgId, keyTest, legalWarning } = await provisionFacturapiOrganization({
+    taxName:   profile.tax_name,
+    taxRegime: profile.tax_regime,
+    zipCode:   profile.zip_code,
+  })
+
+  const notes = legalWarning
+    ? (profile.notes || '') + (profile.notes ? '\n' : '') +
+      `[${new Date().toISOString().slice(0,10)}] ${legalWarning}`
+    : profile.notes
+
+  const { rows } = await query(
+    `UPDATE tenant_fiscal_profiles SET
+       facturapi_organization_id     = $1,
+       facturapi_api_key_test        = $2,
+       facturapi_api_key_live        = NULL,
+       facturapi_certificate_status  = 'pending',
+       facturapi_certificate_expires_at = NULL,
+       notes                         = $3
+     WHERE id = $4 AND tenant_id = $5
+     RETURNING *`,
+    [orgId, keyTest, notes, profileId, tenantId]
+  )
+
+  await audit({
+    tenantId, userId, action: 'fiscal_profile.relinked_facturapi',
+    resource: 'tenant_fiscal_profiles', resourceId: profileId,
+    payload: { newOrgId: orgId, hadWarning: !!legalWarning },
+    ipAddress, userAgent,
+  })
+
+  invalidateFacturapiCache(tenantId)
+  return rows[0]
+}
+
+/**
  * Devuelve un profile específico o el default del tenant si no se especifica.
  */
 async function getProfile({ tenantId, profileId }) {
@@ -130,67 +235,15 @@ async function createProfile({
   let keyTest = facturapiApiKeyTest || null
   let keyLive = facturapiApiKeyLive || null
 
-  // Crear organization en Facturapi automáticamente.
-  //
-  // Facturapi v4 separó la creación en 2 llamadas:
-  //   1. organizations.create({ name })      — crea la org con el nombre.
-  //   2. organizations.updateLegal(id, {...}) — setea RFC, régimen, CP, etc.
-  //
-  // Si todo va bien, también obtenemos la test key automáticamente.
+  // Crear organization en Facturapi automáticamente (extraído al helper
+  // `provisionFacturapiOrganization` para reuso desde `relinkInFacturapi`).
   if (createInFacturapi && !orgId) {
-    const fa = adminFacturapi()
-    let org
-    try {
-      org = await fa.organizations.create({ name: taxName })
-    } catch (e) {
-      const msg = e.message || ''
-      // Casos típicos:
-      //  - "llave inválida" / "Invalid API key" → key del .env mal
-      //  - "Estás intentando consumir... API Key de una organización" → pusieron sk_test_ en vez de sk_user_
-      if (/invalid api key|llave inválida|llave invalida|api key/i.test(msg)) {
-        throw createError(500,
-          'La FACTURAPI_USER_KEY del servidor no es válida. ' +
-          'Verifica en .env que sea la "Llave Secreta de Usuario" (sk_user_...), ' +
-          'NO la llave de una organización (sk_test_/sk_live_). Reinicia el backend tras cambiarla.')
-      }
-      if (/organización|organization/i.test(msg) && /user/i.test(msg)) {
-        throw createError(500,
-          'FACTURAPI_USER_KEY apunta a una organization, no a un usuario. ' +
-          'Necesitas la "Llave Secreta de Usuario" (sk_user_...) — la obtienes en ' +
-          'Facturapi → Mi cuenta → API. Reinicia el backend tras corregirla.')
-      }
-      throw createError(400, `Facturapi rechazó la creación de la organization: ${msg}`)
-    }
-    orgId = org.id
-
-    // Paso 2: setear datos legales (razón social, régimen, CP).
-    // El RFC (tax_id) NO se manda aquí — Facturapi lo asigna automáticamente
-    // cuando se sube el CSD (lo lee del propio certificado).
-    let legalWarning = null
-    try {
-      await fa.organizations.updateLegal(orgId, {
-        name:        taxName,
-        legal_name:  taxName,
-        tax_system:  taxRegime,
-        address: { zip: zipCode },
-      })
-    } catch (e) {
-      // No abortamos: la org existe, guardamos su id, el usuario puede
-      // corregir datos legales desde Facturapi o reeditar el profile.
-      legalWarning = `Org creada pero datos legales no se aplicaron: ${e.message}`
-    }
-
-    // Test key se obtiene automáticamente.
-    try {
-      const test = await fa.organizations.getTestApiKey(orgId)
-      keyTest = typeof test === 'string' ? test : (test?.key || test?.api_key || null)
-    } catch (e) {
-      // no bloqueante — el usuario podrá renovarla manualmente luego
-    }
-
-    if (legalWarning) {
-      // Anexa la advertencia a las notas para que quede registrada.
-      notes = (notes || '') + (notes ? '\n' : '') + `[${new Date().toISOString().slice(0,10)}] ${legalWarning}`
+    const provisioned = await provisionFacturapiOrganization({ taxName, taxRegime, zipCode })
+    orgId   = provisioned.orgId
+    keyTest = provisioned.keyTest
+    if (provisioned.legalWarning) {
+      notes = (notes || '') + (notes ? '\n' : '') +
+        `[${new Date().toISOString().slice(0,10)}] ${provisioned.legalWarning}`
     }
   }
 
@@ -364,4 +417,5 @@ module.exports = {
   updateProfile,
   deleteProfile,
   uploadCertificate,
+  relinkInFacturapi,
 }
