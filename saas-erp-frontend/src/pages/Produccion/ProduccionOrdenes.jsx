@@ -42,6 +42,9 @@ const schema = z.object({
   customItems: z.array(z.object({
     description: z.string().min(1, 'Describe la personalización'),
     cost:        z.coerce.number().min(0).default(0),
+    // 'per_unit' multiplica por la cantidad de paquetes del pedido.
+    // 'fixed' es un cargo único independiente de la cantidad.
+    costType:    z.enum(['fixed', 'per_unit']).optional().default('per_unit'),
   })).optional().default([]),
 })
 
@@ -65,11 +68,21 @@ function Field({ label, error, required, hint, children, className }) {
 }
 
 // ─── Sección de personalización — lista dinámica de items ─────────────────────
-function CustomItemsSection({ control, register, errors, watch }) {
+function CustomItemsSection({ control, register, errors, watch, setValue }) {
   const { fields, append, remove } = useFieldArray({ control, name: 'customItems' })
   const items    = watch('customItems') || []
-  const total    = items.reduce((s, i) => s + parseFloat(i.cost || 0), 0)
+  const qty      = parseInt(watch('quantityPackages')) || 0
+
+  // Costo efectivo por item: si es por unidad, multiplica por la cantidad de
+  // paquetes del pedido. Si es fijo, queda tal cual.
+  function lineTotal(it) {
+    const cost = parseFloat(it?.cost) || 0
+    return it?.costType === 'fixed' ? cost : cost * qty
+  }
+  const total    = items.reduce((s, i) => s + lineTotal(i), 0)
   const hasItems = fields.length > 0
+  // No permitir agregar fila si la última está vacía (evita basura).
+  const lastEmpty = hasItems && !(items[items.length - 1]?.description?.trim())
 
   return (
     <div className="border-t border-line-subtle pt-4">
@@ -77,79 +90,113 @@ function CustomItemsSection({ control, register, errors, watch }) {
         <span className="text-sm font-medium text-ink-secondary flex items-center gap-1.5">
           <IconStar /> Personalización del pedido
           {hasItems && (
-            <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-semibold">
+            <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-300 font-semibold">
               {fields.length}
             </span>
           )}
         </span>
         {total > 0 && (
-          <span className="text-xs font-semibold text-purple-700">
-            Total: ${total.toFixed(2)}
+          <span className="text-xs font-semibold text-purple-300">
+            Cargo total: ${total.toFixed(2)}
           </span>
         )}
       </div>
 
       {hasItems && (
-        <div className="mb-2 rounded-xl overflow-hidden border border-purple-100">
+        <div className="mb-2 rounded-xl overflow-hidden border border-line-subtle bg-surface-elevated">
           {/* Cabecera */}
-          <div className="grid grid-cols-[1fr_100px_32px] gap-2 px-3 py-1.5 bg-purple-50 border-b border-purple-100">
-            <span className="text-[11px] font-semibold text-purple-700 uppercase tracking-wide">Descripción</span>
-            <span className="text-[11px] font-semibold text-purple-700 uppercase tracking-wide text-right">Costo $</span>
+          <div className="grid grid-cols-[1fr_120px_120px_28px] gap-2 px-3 py-1.5 bg-surface-secondary/40 border-b border-line-subtle">
+            <span className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">Descripción</span>
+            <span className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">Tipo</span>
+            <span className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide text-right">Costo $</span>
             <span />
           </div>
 
           {/* Filas */}
-          <div className="divide-y divide-purple-50 bg-white">
-            {fields.map((field, idx) => (
-              <div key={field.id} className="grid grid-cols-[1fr_100px_32px] gap-2 items-center px-3 py-2">
-                <input
-                  {...register(`customItems.${idx}.description`)}
-                  type="text"
-                  placeholder="Ej: Texto feliz cumpleaños"
-                  className={clsx(
-                    'input input-sm text-sm',
-                    errors.customItems?.[idx]?.description && 'input-error'
-                  )}
-                />
-                <div className="relative">
-                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-ink-muted">$</span>
+          <div className="divide-y divide-line-subtle">
+            {fields.map((field, idx) => {
+              const it = items[idx] || {}
+              const isPerUnit = (it.costType || 'per_unit') === 'per_unit'
+              const cost = parseFloat(it.cost) || 0
+              const showBreakdown = isPerUnit && cost > 0 && qty > 0
+              return (
+                <div key={field.id} className="px-3 py-2 grid grid-cols-[1fr_120px_120px_28px] gap-2 items-center">
                   <input
-                    {...register(`customItems.${idx}.cost`)}
-                    type="number" step="0.01" min="0"
-                    placeholder="0.00"
-                    className="input input-sm text-sm pl-5 text-right"
+                    {...register(`customItems.${idx}.description`)}
+                    type="text"
+                    placeholder="Ej: Texto feliz cumpleaños"
+                    className={clsx(
+                      'input input-sm text-sm',
+                      errors.customItems?.[idx]?.description && 'input-error'
+                    )}
                   />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => remove(idx)}
-                  className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-status-danger"
-                >
-                  <IconX />
-                </button>
-              </div>
-            ))}
-          </div>
 
-          {/* Total */}
-          {total > 0 && (
-            <div className="flex justify-end px-3 py-2 bg-purple-50 border-t border-purple-100">
-              <span className="text-xs font-semibold text-purple-700">
-                Total cargo: ${total.toFixed(2)}
-              </span>
-            </div>
-          )}
+                  {/* Toggle Fijo / Por unidad */}
+                  <div className="flex bg-surface-secondary/40 rounded-md p-0.5 text-[11px] font-medium">
+                    <button type="button"
+                      onClick={() => setValue(`customItems.${idx}.costType`, 'per_unit', { shouldDirty: true })}
+                      className={clsx(
+                        'flex-1 py-1 rounded transition',
+                        isPerUnit ? 'bg-purple-500/20 text-purple-300' : 'text-ink-muted hover:text-ink-primary'
+                      )}
+                    >
+                      Por unidad
+                    </button>
+                    <button type="button"
+                      onClick={() => setValue(`customItems.${idx}.costType`, 'fixed', { shouldDirty: true })}
+                      className={clsx(
+                        'flex-1 py-1 rounded transition',
+                        !isPerUnit ? 'bg-purple-500/20 text-purple-300' : 'text-ink-muted hover:text-ink-primary'
+                      )}
+                    >
+                      Fijo
+                    </button>
+                  </div>
+
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-ink-muted">$</span>
+                    <input
+                      {...register(`customItems.${idx}.cost`)}
+                      type="number" step="0.01" min="0"
+                      placeholder="0.00"
+                      className="input input-sm text-sm pl-5 text-right"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => remove(idx)}
+                    className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-status-danger"
+                    title="Quitar"
+                  >
+                    <IconX />
+                  </button>
+
+                  {/* Breakdown del cálculo cuando es por unidad */}
+                  {showBreakdown && (
+                    <div className="col-span-4 text-[10px] text-ink-muted -mt-0.5 pl-1">
+                      {cost.toFixed(2)} × {qty} paq = <span className="text-purple-300 font-semibold">${lineTotal(it).toFixed(2)}</span>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
 
       <button
         type="button"
-        onClick={() => append({ description: '', cost: 0 })}
+        disabled={lastEmpty}
+        onClick={() => append({ description: '', cost: 0, costType: 'per_unit' })}
+        title={lastEmpty ? 'Completa la descripción anterior primero' : ''}
         className={clsx(
           'btn-sm w-full justify-center border border-dashed transition-colors',
-          hasItems
-            ? 'border-purple-200 text-purple-700 hover:bg-purple-50'
-            : 'border-line-subtle text-ink-muted hover:border-purple-200 hover:text-purple-700'
+          lastEmpty
+            ? 'border-line-subtle text-ink-muted opacity-50 cursor-not-allowed'
+            : hasItems
+              ? 'border-purple-500/40 text-purple-300 hover:bg-purple-500/10'
+              : 'border-line-subtle text-ink-muted hover:border-purple-500/40 hover:text-purple-300'
         )}
       >
         <IconPlus />
@@ -468,15 +515,20 @@ function OrderModal({ order, onClose }) {
       customItems: (() => {
         const ca = order?.custom_attributes
         if (!ca) return []
-        // Nuevo formato: { items: [{d, c}] }
-        if (Array.isArray(ca.items)) return ca.items.map(i => ({ description: i.d || i.description || '', cost: i.c ?? i.cost ?? 0 }))
-        // Formato legacy: {texto, color_betun, figuras} → migrar a items
+        // Nuevo formato: { items: [{d, c, t?}] } — t='fixed'|'per_unit' (default per_unit)
+        if (Array.isArray(ca.items)) return ca.items.map(i => ({
+          description: i.d || i.description || '',
+          cost:        i.c ?? i.cost ?? 0,
+          costType:    i.t || i.costType || 'per_unit',
+        }))
+        // Formato legacy: {texto, color_betun, figuras} → migrar a items.
+        // Asumimos 'fixed' para legacy porque no sabemos la intención original.
         const legacy = []
-        if (ca.texto)       legacy.push({ description: ca.texto, cost: 0 })
-        if (ca.color_betun) legacy.push({ description: `Color betún: ${ca.color_betun}`, cost: 0 })
-        if (ca.figuras)     legacy.push({ description: `Figuras: ${ca.figuras}`, cost: 0 })
+        if (ca.texto)       legacy.push({ description: ca.texto,                       cost: 0, costType: 'fixed' })
+        if (ca.color_betun) legacy.push({ description: `Color betún: ${ca.color_betun}`, cost: 0, costType: 'fixed' })
+        if (ca.figuras)     legacy.push({ description: `Figuras: ${ca.figuras}`,       cost: 0, costType: 'fixed' })
         if (order.additional_costs > 0 && order.additional_costs_notes)
-          legacy.push({ description: order.additional_costs_notes, cost: parseFloat(order.additional_costs) })
+          legacy.push({ description: order.additional_costs_notes, cost: parseFloat(order.additional_costs), costType: 'fixed' })
         return legacy
       })(),
     },
@@ -554,8 +606,19 @@ function OrderModal({ order, onClose }) {
     delete payload.lengthCm
     const items = (data.customItems || []).filter(i => i.description?.trim())
     if (items.length > 0) {
-      payload.customAttributes     = { items: items.map(i => ({ d: i.description.trim(), c: parseFloat(i.cost || 0) })) }
-      payload.additionalCosts      = items.reduce((s, i) => s + parseFloat(i.cost || 0), 0)
+      const qty = parseInt(data.quantityPackages) || 1
+      payload.customAttributes = { items: items.map(i => ({
+        d: i.description.trim(),
+        c: parseFloat(i.cost || 0),
+        t: i.costType || 'per_unit',
+      })) }
+      // Costo agregado al pedido: 'per_unit' multiplica por la cantidad de
+      // paquetes, 'fixed' se suma tal cual. Antes siempre se sumaba el costo
+      // crudo, lo que subestimaba el cargo cuando era por pieza.
+      payload.additionalCosts = items.reduce((s, i) => {
+        const cost = parseFloat(i.cost || 0)
+        return s + ((i.costType || 'per_unit') === 'per_unit' ? cost * qty : cost)
+      }, 0)
       payload.additionalCostsNotes = items.map(i => i.description.trim()).join(', ')
     } else {
       payload.customAttributes     = null
@@ -680,7 +743,7 @@ function OrderModal({ order, onClose }) {
           </Field>
 
           {/* Personalización del pedido — items dinámicos */}
-          <CustomItemsSection control={control} register={register} errors={errors} watch={watch} />
+          <CustomItemsSection control={control} register={register} errors={errors} watch={watch} setValue={setValue} />
 
           {mutation.error && (
             <div className="px-4 py-3 bg-status-danger/10 border border-status-danger/40 rounded-xl text-sm text-status-danger">
