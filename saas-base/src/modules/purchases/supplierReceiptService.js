@@ -6,8 +6,14 @@ const { audit }          = require('../../utils/audit')
 const storage            = require('../../utils/storage')
 const { recordMovement } = require('../inventory/inventoryService')
 const { generate: generateLotNumber } = require('../production/lotNumberGenerator')
+const documentSeriesService = require('../document-series/documentSeriesService')
 
-async function nextReceiptNumber(client, tenantId) {
+async function nextReceiptNumber(client, tenantId, opts = {}) {
+  const result = await documentSeriesService.generateDocumentNumber({
+    client, tenantId, entityType: 'supplier_receipt', opts,
+  })
+  if (result) return result.docNumber
+
   const ym = new Date().toISOString().slice(0, 7).replace('-', '')
   const prefix = `REC-${ym}-`
   const { rows } = await client.query(

@@ -2,6 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const createError = require('http-errors')
+const documentSeriesService = require('../document-series/documentSeriesService')
 
 // ─── Helpers internos ─────────────────────────────────────────────────────────
 
@@ -648,7 +649,12 @@ async function getMovements({ tenantId, itemType, itemId, warehouseId, movementT
 
 // ─── Documentos de ajuste ─────────────────────────────────────────────────────
 
-async function nextAdjustmentNumber(client, tenantId) {
+async function nextAdjustmentNumber(client, tenantId, opts = {}) {
+  const result = await documentSeriesService.generateDocumentNumber({
+    client, tenantId, entityType: 'inventory_adjustment', opts,
+  })
+  if (result) return result.docNumber
+
   const ym = new Date().toISOString().slice(0, 7).replace('-', '')
   const prefix = `AJ-${ym}-`
   const { rows } = await client.query(

@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { createPortal } from 'react-dom'
 import { partnersApi } from '@/api/partners'
+import { useCodeSuggestion } from '@/hooks/useCodeSuggestion'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import clsx from 'clsx'
@@ -352,6 +353,18 @@ function PartnerModal({ partner: partnerStub, onClose, onSaved }) {
     defaultValues: NEW_PARTNER_DEFAULTS,
   })
 
+  // Tipo del partner determina qué nomenclatura aplica (customer vs supplier).
+  // 'both' usa la de customer por default.
+  const partnerType = watch('type')
+  const codeEntity = partnerType === 'supplier' ? 'supplier' : 'customer'
+  const codeSug = useCodeSuggestion(codeEntity, { enabled: !partnerStub?.id })
+
+  useEffect(() => {
+    if (!partnerStub?.id && codeSug.isAuto && codeSug.code && !watch('internalCode')) {
+      setValue('internalCode', codeSug.code, { shouldDirty: false, shouldValidate: true })
+    }
+  }, [codeSug.isAuto, codeSug.code, partnerStub?.id])
+
   // Cuando llega el detalle completo del partner (en edición), repoblar el form.
   // Sin esto, los campos que no vienen en el listado (taxName, cfdi_use, billing_notes, contacts, etc.)
   // quedan vacíos aunque estén guardados en BD.
@@ -548,8 +561,26 @@ function PartnerModal({ partner: partnerStub, onClose, onSaved }) {
                 {errors.name && <p className="field-error">{errors.name.message}</p>}
               </div>
               <div>
-                <label className="label">Código interno</label>
-                <input className="input" placeholder="PROV-001" {...register('internalCode')} />
+                <label className="label">
+                  Código interno
+                  {codeSug.canSuggest && (
+                    <span className="text-[10px] text-ink-muted ml-1">· Sugerencia: {codeSug.code}</span>
+                  )}
+                </label>
+                <div className="flex gap-2">
+                  <input className="input flex-1"
+                    placeholder={codeSug.placeholder || 'PROV-001'}
+                    disabled={codeSug.isAuto}
+                    {...register('internalCode')} />
+                  {codeSug.canSuggest && !partnerStub?.id && (
+                    <button type="button"
+                      onClick={() => setValue('internalCode', codeSug.code, { shouldDirty: true, shouldValidate: true })}
+                      className="btn-secondary btn-sm shrink-0 whitespace-nowrap"
+                      title={`Sugerir ${codeSug.code}`}>
+                      ↻ Sugerir
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 

@@ -8,6 +8,7 @@ const { getRateForDate } = require('../exchange-rates/exchangeRateService')
 const { recalcOrderStatusFromDeliveries } = require('./orderService')
 const { recordMovement } = require('../inventory/inventoryService')
 const { enqueueEmail } = require('../../queues/emailQueue')
+const documentSeriesService = require('../document-series/documentSeriesService')
 const { remisionEmail } = require('../email/templates/sales')
 const { generateRemisionPDF } = require('./remisionPdfService')
 const logger = require('../../config/logger')
@@ -41,9 +42,18 @@ async function resolveWarehouseForLine(client, tenantId, warehouseId, productTyp
 
 /**
  * Genera número de remisión automáticamente.
- * Formato: REM-YYYYMM-XXXX
+ *
+ * Si el tenant tiene serie configurada para 'delivery_note' (venta) o
+ * 'sales_return' (devolución), la usa. Si no, cae al legacy
+ * `REM-YYYYMM-NNNN` / `REC-YYYYMM-NNNN`.
  */
-async function nextNoteNumber(client, tenantId, type) {
+async function nextNoteNumber(client, tenantId, type, opts = {}) {
+  const entityType = type === 'sale' ? 'delivery_note' : 'sales_return'
+  const result = await documentSeriesService.generateDocumentNumber({
+    client, tenantId, entityType, opts,
+  })
+  if (result) return result.docNumber
+
   const prefix = type === 'sale' ? 'REM' : 'REC'
   const ym = new Date().toISOString().slice(0, 7).replace('-', '')
   const pref = `${prefix}-${ym}-`

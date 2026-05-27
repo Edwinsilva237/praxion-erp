@@ -63,7 +63,7 @@ async function getRawMaterial({ tenantId, id }) {
 }
 
 async function createRawMaterial({
-  tenantId, name, resinType, materialType, itemKind, unit,
+  tenantId, name, code, resinType, materialType, itemKind, unit,
   maxRegrindPct, costPerKg, description, leadTimeDays,
   userId, ipAddress, userAgent,
 }) {
@@ -72,13 +72,14 @@ async function createRawMaterial({
   const kind = itemKind || 'raw_material'
   const { rows } = await query(
     `INSERT INTO raw_materials
-       (tenant_id, name, item_kind, resin_type, material_type, unit, max_regrind_pct,
+       (tenant_id, name, code, item_kind, resin_type, material_type, unit, max_regrind_pct,
         cost_per_kg, description, lead_time_days)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      RETURNING *`,
     [
       tenantId,
       name.trim(),
+      code ? code.trim() : null,
       kind,
       resinType || null,
       kind === 'raw_material' ? (materialType || 'virgin') : (materialType || null),
@@ -100,24 +101,26 @@ async function createRawMaterial({
 }
 
 async function updateRawMaterial({
-  tenantId, id, name, materialType, unit,
+  tenantId, id, name, code, materialType, unit,
   maxRegrindPct, costPerKg, description, isActive, leadTimeDays,
   userId, ipAddress, userAgent,
 }) {
   const { rows } = await query(
     `UPDATE raw_materials SET
        name            = COALESCE($1, name),
-       material_type   = COALESCE($2, material_type),
-       unit            = COALESCE($3, unit),
-       max_regrind_pct = COALESCE($4, max_regrind_pct),
-       cost_per_kg     = COALESCE($5, cost_per_kg),
-       description     = COALESCE($6, description),
-       is_active       = COALESCE($7, is_active),
-       lead_time_days  = COALESCE($8, lead_time_days)
-     WHERE id = $9 AND tenant_id = $10
+       code            = COALESCE($2, code),
+       material_type   = COALESCE($3, material_type),
+       unit            = COALESCE($4, unit),
+       max_regrind_pct = COALESCE($5, max_regrind_pct),
+       cost_per_kg     = COALESCE($6, cost_per_kg),
+       description     = COALESCE($7, description),
+       is_active       = COALESCE($8, is_active),
+       lead_time_days  = COALESCE($9, lead_time_days)
+     WHERE id = $10 AND tenant_id = $11
      RETURNING *`,
     [
       name        || null,
+      code !== undefined ? (code || null) : null,
       materialType || null,
       unit        || null,
       maxRegrindPct !== undefined ? maxRegrindPct : null,

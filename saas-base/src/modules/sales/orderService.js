@@ -3,12 +3,22 @@
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
 const { getRateForDate } = require('../exchange-rates/exchangeRateService')
+const documentSeriesService = require('../document-series/documentSeriesService')
 
 /**
- * Genera el siguiente número de orden automáticamente.
- * Formato: PV-YYYYMM-XXXX (ej: PV-202605-0001)
+ * Genera el siguiente número de pedido de venta.
+ *
+ * Si el tenant tiene serie configurada en `tenant_document_series` para
+ * entity_type='sales_order', usa esa (formato `{serie}-{folio_4}`).
+ * Si NO, cae al patrón legacy `PV-YYYYMM-NNNN` con reset mensual implícito.
  */
-async function nextOrderNumber(client, tenantId) {
+async function nextOrderNumber(client, tenantId, opts = {}) {
+  const result = await documentSeriesService.generateDocumentNumber({
+    client, tenantId, entityType: 'sales_order', opts,
+  })
+  if (result) return result.docNumber
+
+  // Legacy: PV-YYYYMM-NNNN con reset mensual
   const ym = new Date().toISOString().slice(0, 7).replace('-', '')
   const prefix = `PV-${ym}-`
   const { rows } = await client.query(
@@ -862,4 +872,5 @@ module.exports = {
   assignDriver,
   addOrderLine, updateOrderLine, deleteOrderLine,
   getOrderDeliveryBreakdown, recalcOrderStatusFromDeliveries,
+  nextOrderNumber,
 }

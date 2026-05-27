@@ -211,6 +211,19 @@ async function createProfile({
        notes || null, userId]
     )
 
+    // Crear automáticamente la serie default — sin ella el primer intento
+    // de emisión fallaría con "perfil sin series". Espejo del backfill de 147.
+    // Desde la 148 la tabla es tenant_document_series discriminada por entity_type.
+    const defaultSerie = serie?.trim() || 'A'
+    await client.query(
+      `INSERT INTO tenant_document_series
+         (tenant_id, entity_type, fiscal_profile_id, serie, folio_next,
+          is_default, is_active, notes, created_by)
+       VALUES ($1, 'invoice', $2, $3, 1, TRUE, TRUE, $4, $5)
+       ON CONFLICT DO NOTHING`,
+      [tenantId, rows[0].id, defaultSerie, 'Serie creada automáticamente al provisionar el perfil fiscal.', userId]
+    )
+
     await audit({
       tenantId, userId, action: 'fiscal_profile.created',
       resource: 'tenant_fiscal_profiles', resourceId: rows[0].id,

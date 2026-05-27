@@ -43,6 +43,8 @@ const ConfigAlmacenes         = lazy(() => import('@/pages/Configuracion/Almacen
 const ConfigUsuarios          = lazy(() => import('@/pages/Configuracion/Usuarios'))
 const ConfigRoles             = lazy(() => import('@/pages/Configuracion/Roles'))
 const ConfigDatosFiscales     = lazy(() => import('@/pages/Configuracion/DatosFiscales'))
+const ConfigSeriesFolios      = lazy(() => import('@/pages/Configuracion/SeriesFolios'))
+const ConfigNomenclatura      = lazy(() => import('@/pages/Configuracion/NomenclaturaCodigos'))
 const ConfigTareasFallidas    = lazy(() => import('@/pages/Configuracion/TareasFallidas'))
 const ConfigPlanes            = lazy(() => import('@/pages/Configuracion/Planes'))
 const ConfigSuscripcion       = lazy(() => import('@/pages/Configuracion/Suscripcion'))
@@ -194,6 +196,8 @@ const router = createBrowserRouter([
       { path: '/configuracion/usuarios',          element: <ConfigUsuarios /> },
       { path: '/configuracion/roles',             element: <ConfigRoles /> },
       { path: '/configuracion/datos-fiscales',    element: <ConfigDatosFiscales /> },
+      { path: '/configuracion/series-folios',     element: <ConfigSeriesFolios /> },
+      { path: '/configuracion/nomenclatura',      element: <ConfigNomenclatura /> },
       { path: '/configuracion/tareas-fallidas',   element: <ConfigTareasFallidas /> },
       { path: '/configuracion/planes',            element: <ConfigPlanes /> },
       { path: '/configuracion/suscripcion',       element: <ConfigSuscripcion /> },

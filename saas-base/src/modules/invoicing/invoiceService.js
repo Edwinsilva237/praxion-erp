@@ -3,6 +3,7 @@
 const { query, withTransaction } = require('../../db')
 const { audit }                  = require('../../utils/audit')
 const { getRateForDate }         = require('../exchange-rates/exchangeRateService')
+const invoiceSeriesService       = require('../invoice-series/invoiceSeriesService')
 
 /**
  * Carga sat_unit_code para un conjunto de pack_option_id.
@@ -93,21 +94,72 @@ async function revalueLines(client, tenantId, lines, targetCurrency, todayDate) 
 }
 
 /**
- * Genera el siguiente número de factura.
- * Formato: FAC-YYYYMM-XXXX (ej: FAC-202605-0001)
+ * Genera el siguiente número de factura usando el modelo de series multi-RFC
+ * (migración 147). El document_number se arma como `{serie}-{folio_padded_4}`.
+ *
+ * Si el tenant aún no tiene perfiles fiscales configurados (instalación legacy
+ * pre-091), cae al patrón viejo `FAC-YYYYMM-NNNN`. Esto permite que tenants
+ * que nunca migraron a multi-RFC sigan operando sin tocar nada.
+ *
+ * Devuelve `{ docNumber, series, folio, fiscalProfileId }`:
+ *   - docNumber → string completo para `invoices.document_number`
+ *   - series, folio, fiscalProfileId → se guardan en sus columnas dedicadas
+ *     (NULL los dos últimos si fue modo legacy).
+ *
+ * @param {object} opts
+ * @param {string} [opts.seriesId]   - Forzar una serie específica (UI selector).
+ * @param {string} [opts.seriesCode] - Forzar serie por código (string "A" desde body legacy).
+ * @param {string} [opts.cfdiType]   - 'I'/'E'/'P'/... — busca default por tipo.
+ * @param {string} [opts.fiscalProfileId] - Forzar perfil; default = el is_default del tenant.
  */
-async function nextInvoiceNumber(client, tenantId) {
-  const ym = new Date().toISOString().slice(0, 7).replace('-', '')
-  const prefix = `FAC-${ym}-`
-  const { rows } = await client.query(
-    `SELECT document_number FROM invoices
-     WHERE tenant_id = $1 AND document_number LIKE $2
-     ORDER BY document_number DESC LIMIT 1`,
-    [tenantId, `${prefix}%`]
-  )
-  const last = rows[0]?.document_number
-  const seq = last ? parseInt(last.split('-')[2], 10) + 1 : 1
-  return `${prefix}${String(seq).padStart(4, '0')}`
+async function nextInvoiceNumber(client, tenantId, opts = {}) {
+  let fiscalProfileId = opts.fiscalProfileId
+  if (!fiscalProfileId) {
+    const { rows } = await client.query(
+      `SELECT id FROM tenant_fiscal_profiles
+        WHERE tenant_id = $1 AND is_active = TRUE
+        ORDER BY is_default DESC, created_at ASC LIMIT 1`,
+      [tenantId]
+    )
+    fiscalProfileId = rows[0]?.id || null
+  }
+
+  // Modo legacy — tenant sin perfiles fiscales configurados aún
+  if (!fiscalProfileId) {
+    const ym = new Date().toISOString().slice(0, 7).replace('-', '')
+    const prefix = `FAC-${ym}-`
+    const { rows } = await client.query(
+      `SELECT document_number FROM invoices
+       WHERE tenant_id = $1 AND document_number LIKE $2
+       ORDER BY document_number DESC LIMIT 1`,
+      [tenantId, `${prefix}%`]
+    )
+    const last = rows[0]?.document_number
+    const seq = last ? parseInt(last.split('-')[2], 10) + 1 : 1
+    return {
+      docNumber: `${prefix}${String(seq).padStart(4, '0')}`,
+      series: null,
+      folio: null,
+      fiscalProfileId: null,
+    }
+  }
+
+  // Modo nuevo — resolver serie + consumir folio atómicamente
+  const series = await invoiceSeriesService.resolveSeriesForEmission({
+    client, tenantId, fiscalProfileId,
+    seriesId:   opts.seriesId,
+    seriesCode: opts.seriesCode,
+    cfdiType:   opts.cfdiType,
+  })
+  const { folio, serie } = await invoiceSeriesService.consumeNextFolio({
+    client, seriesId: series.id,
+  })
+  return {
+    docNumber: `${serie}-${String(folio).padStart(4, '0')}`,
+    series:    serie,
+    folio:     String(folio),
+    fiscalProfileId,
+  }
 }
 
 /**
@@ -365,7 +417,8 @@ async function createFromRemission({
       }
     }
 
-    const docNumber = await nextInvoiceNumber(client, tenantId)
+    const { docNumber, series: resolvedSeries, folio: resolvedFolio, fiscalProfileId } =
+      await nextInvoiceNumber(client, tenantId, { seriesCode: series, cfdiType: 'I' })
     const issueDate = today
 
     // Obtener datos fiscales del emisor
@@ -389,7 +442,7 @@ async function createFromRemission({
     // Crear factura
     const { rows: invRows } = await client.query(
       `INSERT INTO invoices
-         (tenant_id, type, cfdi_type, series, document_number,
+         (tenant_id, type, cfdi_type, series, folio, document_number, fiscal_profile_id,
           partner_id, delivery_note_id,
           currency, exchange_rate_id, exchange_rate_value,
           subtotal, tax_transferred, total, total_mxn,
@@ -398,9 +451,9 @@ async function createFromRemission({
           receptor_tax_regime, receptor_zip_code,
           po_number,
           status, issue_date, notes, created_by)
-       VALUES ($1,'issued','I',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'01',$16,$17,$18,$19,'draft',$20,$21,$22)
+       VALUES ($1,'issued','I',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'01',$18,$19,$20,$21,'draft',$22,$23,$24)
        RETURNING *`,
-      [tenantId, series || fiscal.serie_default || null, docNumber,
+      [tenantId, resolvedSeries || series || fiscal.serie_default || null, resolvedFolio, docNumber, fiscalProfileId,
        note.partner_id, deliveryNoteId,
        note.currency, exchangeRateId, exchangeRateValue,
        subtotal, tax, total, totalMxn,
@@ -666,7 +719,8 @@ async function createFromRemissions({
       totalMxn = parseFloat((total * exchangeRateValue).toFixed(2))
     }
 
-    const docNumber = await nextInvoiceNumber(client, tenantId)
+    const { docNumber, series: resolvedSeries, folio: resolvedFolio, fiscalProfileId } =
+      await nextInvoiceNumber(client, tenantId, { seriesCode: series, cfdiType: 'I' })
     const issueDate = today
 
     // Datos fiscales del emisor
@@ -695,7 +749,7 @@ async function createFromRemissions({
     // tabla invoice_remissions (creada más abajo en la misma transacción).
     const { rows: invRows } = await client.query(
       `INSERT INTO invoices
-         (tenant_id, type, cfdi_type, series, document_number,
+         (tenant_id, type, cfdi_type, series, folio, document_number, fiscal_profile_id,
           partner_id, delivery_note_id,
           currency, exchange_rate_id, exchange_rate_value,
           subtotal, tax_transferred, total, total_mxn,
@@ -704,9 +758,9 @@ async function createFromRemissions({
           receptor_tax_regime, receptor_zip_code,
           po_number,
           status, issue_date, notes, created_by)
-       VALUES ($1,'issued','I',$2,$3,$4,NULL,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'01',$15,$16,$17,$18,'draft',$19,$20,$21)
+       VALUES ($1,'issued','I',$2,$3,$4,$5,$6,NULL,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'01',$17,$18,$19,$20,'draft',$21,$22,$23)
        RETURNING *`,
-      [tenantId, series || fiscal.serie_default || null, docNumber,
+      [tenantId, resolvedSeries || series || fiscal.serie_default || null, resolvedFolio, docNumber, fiscalProfileId,
        partnerId,
        note0.currency, exchangeRateId, exchangeRateValue,
        subtotal, tax, total, totalMxn,
@@ -870,7 +924,8 @@ async function createDirect({
       totalMxn = parseFloat((total * exchangeRateValue).toFixed(2))
     }
 
-    const docNumber = await nextInvoiceNumber(client, tenantId)
+    const { docNumber, series: resolvedSeries, folio: resolvedFolio, fiscalProfileId } =
+      await nextInvoiceNumber(client, tenantId, { seriesCode: series, cfdiType: 'I' })
     const issueDate = today
 
     // Obtener datos fiscales del emisor
@@ -906,7 +961,7 @@ async function createDirect({
     //   - 'draft'          → status (antes del timbrado)
     const { rows: invRows } = await client.query(
       `INSERT INTO invoices
-         (tenant_id, type, cfdi_type, series, document_number,
+         (tenant_id, type, cfdi_type, series, folio, document_number, fiscal_profile_id,
           partner_id,
           currency, exchange_rate_id, exchange_rate_value,
           subtotal, tax_transferred, total, total_mxn,
@@ -915,9 +970,9 @@ async function createDirect({
           receptor_tax_regime, receptor_zip_code,
           po_number,
           status, issue_date, notes, created_by)
-       VALUES ($1,'issued','I',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'01',$15,$16,$17,$18,'draft',$19,$20,$21)
+       VALUES ($1,'issued','I',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'01',$17,$18,$19,$20,'draft',$21,$22,$23)
        RETURNING *`,
-      [tenantId, series || fiscal2.serie_default || null, docNumber,
+      [tenantId, resolvedSeries || series || fiscal2.serie_default || null, resolvedFolio, docNumber, fiscalProfileId,
        order.partner_id,
        order.currency, exchangeRateId, exchangeRateValue,
        subtotal, tax, total, totalMxn,

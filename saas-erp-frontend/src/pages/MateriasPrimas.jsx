@@ -6,6 +6,8 @@ import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { rawMaterialsApi } from '@/api/rawMaterials'
 import { processConfigApi } from '@/api/processConfig'
+import { useCodeSuggestion } from '@/hooks/useCodeSuggestion'
+import { useEffect } from 'react'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import InventoryLevelsPanel from '@/components/inventario/InventoryLevelsPanel'
@@ -38,6 +40,7 @@ const KIND_VARIANT = { raw_material: 'amber', packaging: 'teal', additive: 'purp
 // Para packaging/additive se aceptan vacíos.
 const schema = z.object({
   name:          z.string().min(2, 'Mínimo 2 caracteres').max(150),
+  code:          z.string().max(50).optional().or(z.literal('')),
   itemKind:      z.enum(['raw_material', 'packaging', 'additive']).default('raw_material'),
   resinType:     z.union([z.enum(['PP', 'PE']), z.literal(''), z.null()]).optional(),
   materialType:  z.union([z.enum(['virgin', 'regrind']), z.literal(''), z.null()]).optional(),
@@ -114,6 +117,7 @@ function RawMaterialModal({ item, onClose }) {
     resolver: zodResolver(schema),
     defaultValues: {
       name:          item?.name          || '',
+      code:          item?.code          || '',
       itemKind:      item?.item_kind     || 'raw_material',
       resinType:     item?.resin_type    || '',
       materialType:  item?.material_type || '',
@@ -125,6 +129,13 @@ function RawMaterialModal({ item, onClose }) {
       leadTimeDays:  item?.lead_time_days ?? 7,
     },
   })
+
+  const codeSug = useCodeSuggestion('raw_material', { enabled: !isEditing })
+  useEffect(() => {
+    if (!isEditing && codeSug.isAuto && codeSug.code && !watch('code')) {
+      setValue('code', codeSug.code, { shouldDirty: false, shouldValidate: true })
+    }
+  }, [codeSug.isAuto, codeSug.code, isEditing])
 
   const selectedKind    = watch('itemKind')
   const selectedResin   = watch('resinType')
@@ -207,13 +218,32 @@ function RawMaterialModal({ item, onClose }) {
               {isEditing && <p className="text-xs text-ink-muted mt-1">El tipo no se puede cambiar después de crear.</p>}
             </div>
 
-            <Field label="Nombre" required error={errors.name?.message}>
-              <input {...register('name')}
-                placeholder={selectedKind === 'packaging' ? 'Bolsa transparente 30×40 cm'
-                  : selectedKind === 'additive' ? 'Colorante rojo carmín'
-                  : 'PP Virgen 50 MFI'}
-                className={clsx('input', errors.name && 'input-error')} />
-            </Field>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <Field label="Código" error={errors.code?.message}
+                hint={codeSug.canSuggest && !isEditing ? `Sugerencia: ${codeSug.code}` : undefined}>
+                <div className="flex gap-2">
+                  <input {...register('code')}
+                    disabled={codeSug.isAuto}
+                    placeholder={codeSug.placeholder || 'MP-001'}
+                    className={clsx('input flex-1 font-mono',
+                      codeSug.isAuto && 'bg-surface-elevated/40 cursor-not-allowed',
+                      errors.code && 'input-error')} />
+                  {codeSug.canSuggest && !isEditing && (
+                    <button type="button"
+                      onClick={() => setValue('code', codeSug.code, { shouldDirty: true, shouldValidate: true })}
+                      className="btn-secondary btn-sm shrink-0 whitespace-nowrap"
+                      title={`Sugerir ${codeSug.code}`}>↻</button>
+                  )}
+                </div>
+              </Field>
+              <Field label="Nombre" required error={errors.name?.message} className="sm:col-span-2">
+                <input {...register('name')}
+                  placeholder={selectedKind === 'packaging' ? 'Bolsa transparente 30×40 cm'
+                    : selectedKind === 'additive' ? 'Colorante rojo carmín'
+                    : 'PP Virgen 50 MFI'}
+                  className={clsx('input', errors.name && 'input-error')} />
+              </Field>
+            </div>
 
             {/* Atributos plástico: solo si MP + flag uses_resin_types ON */}
             {showResinField && (

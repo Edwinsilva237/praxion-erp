@@ -104,6 +104,8 @@ export const NAV_SECTIONS = [
       { label: 'Cajas chicas',            to: '/configuracion/caja-chica',            iconKey: 'money',    permission: 'petty_cash:manage', module: 'petty_cash' },
       { label: '└ Categorías',            to: '/configuracion/caja-chica/categorias', iconKey: 'money',    permission: 'petty_cash:manage', module: 'petty_cash' },
       { label: 'Datos fiscales',          to: '/configuracion/datos-fiscales',        iconKey: 'invoice',  permission: 'settings:read',     module: 'invoicing' },
+      { label: '└ Series y folios',        to: '/configuracion/series-folios',         iconKey: 'invoice',  permission: 'settings:read',     module: 'invoicing' },
+      { label: 'Nomenclatura de códigos', to: '/configuracion/nomenclatura',          iconKey: 'gear',     permission: 'settings:read' },
       { label: 'Procesos (SaaS v2)',        to: '/configuracion/procesos',              iconKey: 'gear',     permission: 'settings:update',   module: 'production' },
       { label: '└ Flags de proceso',       to: '/configuracion/procesos/flags',        iconKey: 'gear',     permission: 'settings:update',   module: 'production' },
       { label: '└ Tipos de merma',         to: '/configuracion/procesos/tipos-merma',  iconKey: 'gear',     permission: 'settings:update',   module: 'production' },

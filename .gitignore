@@ -72,3 +72,4 @@ files/
 
 # ── Config local de Claude Code ─────────────────────────────────────────
 .claude/
+.tmp-docx/

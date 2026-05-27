@@ -10,6 +10,7 @@ import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import InventoryLevelsPanel from '@/components/inventario/InventoryLevelsPanel'
 import { ProductImageUploader } from '@/components/productos/ProductImageUploader'
+import { useCodeSuggestion } from '@/hooks/useCodeSuggestion'
 import { TechSheetsList } from '@/components/productos/TechSheetsList'
 import { ProductThumbnail } from '@/components/productos/ProductThumbnail'
 import { PendingImagePicker } from '@/components/productos/PendingImagePicker'
@@ -149,6 +150,7 @@ function Section({ number, title, badge, children }) {
 function ProductModal({ product, onClose }) {
   const queryClient  = useQueryClient()
   const isEditing    = !!product
+  const codeSug      = useCodeSuggestion('product', { enabled: !isEditing })
 
   const {
     register,
@@ -197,6 +199,13 @@ function ProductModal({ product, onClose }) {
     || !!product?.qualitySpec?.grams_per_linear_meter
   const [linealMode, setLinealMode] = useState(hasExistingLinearData)
   const [specsExpanded, setSpecsExpanded] = useState(hasExistingLinearData)
+
+  // Modo 'auto' de la nomenclatura: pre-llenar el SKU al abrir el form en creación.
+  useEffect(() => {
+    if (!isEditing && codeSug.isAuto && codeSug.code && !watch('sku')) {
+      setValue('sku', codeSug.code, { shouldDirty: false, shouldValidate: true })
+    }
+  }, [codeSug.isAuto, codeSug.code, isEditing])
 
   // Cargar catálogo de product_kinds del tenant para filtrar el selector de tipo.
   // Si el tenant no tiene un kind con código "corner_protector" o "esquinero",
@@ -391,13 +400,26 @@ function ProductModal({ product, onClose }) {
 
             <div className="grid grid-cols-3 gap-3">
               <Field label="SKU" required error={errors.sku?.message}
-                hint={!isEditing ? 'No se puede cambiar después' : undefined}>
-                <input
-                  {...register('sku')}
-                  disabled={isEditing}
-                  placeholder="REV-001"
-                  className={clsx('input', isEditing && 'bg-surface-elevated/40 cursor-not-allowed', errors.sku && 'input-error')}
-                />
+                hint={!isEditing
+                  ? (codeSug.canSuggest ? `Sugerencia: ${codeSug.code}` : 'No se puede cambiar después')
+                  : undefined}>
+                <div className="flex gap-2">
+                  <input
+                    {...register('sku')}
+                    disabled={isEditing || codeSug.isAuto}
+                    placeholder={codeSug.placeholder || 'REV-001'}
+                    className={clsx('input flex-1',
+                      (isEditing || codeSug.isAuto) && 'bg-surface-elevated/40 cursor-not-allowed',
+                      errors.sku && 'input-error')}
+                  />
+                  {!isEditing && codeSug.canSuggest && (
+                    <button type="button" onClick={() => setValue('sku', codeSug.code, { shouldDirty: true, shouldValidate: true })}
+                      className="btn-secondary btn-sm shrink-0 whitespace-nowrap"
+                      title={`Sugerir ${codeSug.code}`}>
+                      ↻ Sugerir
+                    </button>
+                  )}
+                </div>
               </Field>
               <Field label="Nombre" required error={errors.name?.message} className="col-span-2">
                 <input

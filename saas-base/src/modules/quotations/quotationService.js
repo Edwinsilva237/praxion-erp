@@ -6,6 +6,8 @@ const { enqueueEmail: sendMail } = require('../../queues/emailQueue')
 const { quotationEmail } = require('../email/templates/sales')
 const { generateQuotationPDF } = require('./quotationPdfService')
 const logger = require('../../config/logger')
+const documentSeriesService = require('../document-series/documentSeriesService')
+const { nextOrderNumber } = require('../sales/orderService')
 
 /**
  * Servicio de cotizaciones.
@@ -17,8 +19,13 @@ const logger = require('../../config/logger')
  * al facturar el pedido derivado.
  */
 
-// ── Numeración: COT-YYYYMM-XXXX ─────────────────────────────────────────────
-async function nextQuotationNumber(client, tenantId) {
+// ── Numeración: serie configurable o legacy COT-YYYYMM-XXXX ─────────────────
+async function nextQuotationNumber(client, tenantId, opts = {}) {
+  const result = await documentSeriesService.generateDocumentNumber({
+    client, tenantId, entityType: 'quotation', opts,
+  })
+  if (result) return result.docNumber
+
   const ym = new Date().toISOString().slice(0, 7).replace('-', '')
   const prefix = `COT-${ym}-`
   const { rows } = await client.query(
@@ -470,17 +477,11 @@ async function convertToOrder({ tenantId, quotationId, userId, ipAddress, userAg
     }
     if (q.converted_order_id) throw createError(409, 'Esta cotización ya fue convertida a pedido.')
 
-    // Generar número de pedido — misma convención que orderService
-    const ym = new Date().toISOString().slice(0, 7).replace('-', '')
-    const prefix = `PV-${ym}-`
-    const { rows: lastRows } = await client.query(
-      `SELECT order_number FROM sales_orders
-        WHERE tenant_id = $1 AND order_number LIKE $2
-        ORDER BY order_number DESC LIMIT 1`,
-      [tenantId, `${prefix}%`]
-    )
-    const lastSeq = lastRows[0]?.order_number ? parseInt(lastRows[0].order_number.split('-')[2], 10) : 0
-    const orderNumber = `${prefix}${String(lastSeq + 1).padStart(4, '0')}`
+    // Generar número de pedido usando el mismo generador centralizado que el
+    // módulo de pedidos. Antes esta función duplicaba el patrón legacy y se
+    // saltaba la serie configurada en tenant_document_series, por eso los
+    // pedidos creados desde cotización ignoraban la nomenclatura del tenant.
+    const orderNumber = await nextOrderNumber(client, tenantId)
 
     // Crear pedido (sin IVA, igual que orderService.createOrder)
     const { rows: orderRows } = await client.query(

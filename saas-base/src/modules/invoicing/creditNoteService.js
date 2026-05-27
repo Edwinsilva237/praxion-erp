@@ -3,6 +3,7 @@
 const { query, withTransaction } = require('../../db')
 const { audit }     = require('../../utils/audit')
 const { getFacturapiForTenant } = require('./facturapiClient')
+const documentSeriesService = require('../document-series/documentSeriesService')
 
 /**
  * Genera una nota de crédito (CFDI tipo E) vinculada a una factura timbrada.
@@ -141,28 +142,65 @@ async function createCreditNote({
       throw createError(422, `Error al timbrar nota de crédito: ${err.message}`)
     }
 
-    // Guardar nota de crédito en BD. Sufijo secuencial por factura para
-    // soportar varias NCs sobre la misma factura sin chocar con el UNIQUE
-    // (tenant_id, document_number).
-    const { rows: existingNcs } = await client.query(
-      `SELECT COUNT(*)::int AS n FROM invoices
-        WHERE tenant_id = $1 AND cfdi_type = 'E'
-          AND document_number LIKE $2`,
-      [tenantId, `NC-${inv.document_number}%`]
-    )
-    const ncSeq = (existingNcs[0]?.n || 0) + 1
-    const docNumber = `NC-${inv.document_number}-${String(ncSeq).padStart(2, '0')}`
+    // Numeración de NC:
+    //   1) Si el tenant tiene una serie configurada con cfdi_type='E' para el
+    //      perfil fiscal de la factura original, se usa esa (consume folio
+    //      atómico). Esto respeta la nomenclatura del tenant ("A-0042" → "E-0001").
+    //   2) Si no hay serie 'E' configurada, fallback al patrón legacy
+    //      `NC-{factura_original}-NN` con sufijo secuencial por factura.
+    let docNumber
+    let resolvedSeries = null
+    let resolvedFolio  = null
+
+    // Resolver perfil fiscal: el de la factura original, o el default del tenant
+    // si la factura es legacy (fiscal_profile_id NULL).
+    let fiscalProfileId = inv.fiscal_profile_id
+    if (!fiscalProfileId) {
+      const { rows: fpRows } = await client.query(
+        `SELECT id FROM tenant_fiscal_profiles
+          WHERE tenant_id = $1 AND is_active = TRUE
+          ORDER BY is_default DESC, created_at ASC LIMIT 1`,
+        [tenantId]
+      )
+      fiscalProfileId = fpRows[0]?.id || null
+    }
+
+    const seriesResult = fiscalProfileId
+      ? await documentSeriesService.generateDocumentNumber({
+          client, tenantId, entityType: 'invoice',
+          opts: { fiscalProfileId, cfdiType: 'E' },
+        })
+      : null
+
+    if (seriesResult) {
+      docNumber = seriesResult.docNumber
+      resolvedSeries = seriesResult.serie
+      resolvedFolio  = seriesResult.folio
+    } else {
+      // Legacy: sufijo secuencial por factura para soportar varias NCs sobre
+      // la misma factura sin chocar con UNIQUE (tenant_id, document_number).
+      const { rows: existingNcs } = await client.query(
+        `SELECT COUNT(*)::int AS n FROM invoices
+          WHERE tenant_id = $1 AND cfdi_type = 'E'
+            AND document_number LIKE $2`,
+        [tenantId, `NC-${inv.document_number}%`]
+      )
+      const ncSeq = (existingNcs[0]?.n || 0) + 1
+      docNumber = `NC-${inv.document_number}-${String(ncSeq).padStart(2, '0')}`
+    }
+
     const { rows: cnRows } = await client.query(
       `INSERT INTO invoices
-         (tenant_id, type, cfdi_type, document_number,
+         (tenant_id, type, cfdi_type, series, folio, document_number, fiscal_profile_id,
           partner_id, currency, subtotal, tax_transferred, total, total_mxn,
           payment_form, use_cfdi, exportacion, lugar_expedicion,
           receptor_tax_regime, receptor_zip_code,
           status, cfdi_uuid, stamp_date, issue_date,
           notes, created_by)
-       VALUES ($1,'issued','E',$2,$3,$4,$5,$6,$7,$7,$8,$9,'01',$10,$11,$12,'stamped',$13,NOW(),CURRENT_DATE,$14,$15)
+       VALUES ($1,'issued','E',$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$11,$12,'01',$13,$14,$15,'stamped',$16,NOW(),CURRENT_DATE,$17,$18)
        RETURNING id, document_number, cfdi_uuid`,
-      [tenantId, docNumber, inv.partner_id,
+      [tenantId, resolvedSeries, resolvedFolio, docNumber, fiscalProfileId,
+       inv.partner_id,
        inv.currency,
        computedAmount,
        parseFloat((computedAmount * 0.16).toFixed(2)),

@@ -3,12 +3,18 @@
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
 const { getRateForDate } = require('../exchange-rates/exchangeRateService')
+const documentSeriesService = require('../document-series/documentSeriesService')
 
 /**
- * Genera el siguiente número de OC automáticamente.
- * Formato: OC-YYYYMM-XXXX (ej: OC-202605-0001)
+ * Genera el siguiente número de OC. Usa serie configurada si existe,
+ * fallback al legacy `OC-YYYYMM-NNNN`.
  */
-async function nextOrderNumber(client, tenantId) {
+async function nextOrderNumber(client, tenantId, opts = {}) {
+  const result = await documentSeriesService.generateDocumentNumber({
+    client, tenantId, entityType: 'purchase_order', opts,
+  })
+  if (result) return result.docNumber
+
   const ym = new Date().toISOString().slice(0, 7).replace('-', '')
   const prefix = `OC-${ym}-`
   const { rows } = await client.query(
