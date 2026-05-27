@@ -173,13 +173,17 @@ async function createQuotation({
       if (!l.productId)  throw createError(400, `Línea ${i + 1}: producto requerido.`)
       if (!l.quantity)   throw createError(400, `Línea ${i + 1}: cantidad requerida.`)
       if (!l.unitPrice)  throw createError(400, `Línea ${i + 1}: precio requerido.`)
+      const packFactor = l.packFactor != null ? parseFloat(l.packFactor) : 1
+      const quantityBase = parseFloat(l.quantity) * packFactor
       await client.query(
         `INSERT INTO quotation_lines
            (quotation_id, product_id, quantity, unit, unit_price, currency,
-            discount_pct, notes, line_number)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            discount_pct, notes, line_number,
+            pack_option_id, pack_factor, quantity_base)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         [quotation.id, l.productId, l.quantity, l.unit || 'paquete',
-         l.unitPrice, currency, l.discountPct || 0, l.notes || null, i + 1]
+         l.unitPrice, currency, l.discountPct || 0, l.notes || null, i + 1,
+         l.packOptionId || null, packFactor, quantityBase]
       )
     }
 
@@ -225,7 +229,7 @@ async function _assertDraft(client, tenantId, quotationId) {
 }
 
 async function addLine({ tenantId, quotationId, productId, quantity, unit,
-  unitPrice, discountPct, notes, userId }) {
+  unitPrice, discountPct, notes, packOptionId, packFactor, userId }) {
   return withTransaction(async (client) => {
     await _assertDraft(client, tenantId, quotationId)
     const { rows: last } = await client.query(
@@ -234,13 +238,17 @@ async function addLine({ tenantId, quotationId, productId, quantity, unit,
     )
     const lineNumber = last[0].n + 1
     const { rows: q } = await client.query(`SELECT currency FROM quotations WHERE id = $1`, [quotationId])
+    const factor = packFactor != null ? parseFloat(packFactor) : 1
+    const quantityBase = parseFloat(quantity) * factor
     await client.query(
       `INSERT INTO quotation_lines
          (quotation_id, product_id, quantity, unit, unit_price, currency,
-          discount_pct, notes, line_number)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          discount_pct, notes, line_number,
+          pack_option_id, pack_factor, quantity_base)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [quotationId, productId, quantity, unit || 'paquete',
-       unitPrice, q[0].currency, discountPct || 0, notes || null, lineNumber]
+       unitPrice, q[0].currency, discountPct || 0, notes || null, lineNumber,
+       packOptionId || null, factor, quantityBase]
     )
     await recalcQuotationTotals(client, quotationId)
     return await getQuotation({ tenantId, quotationId, client })
@@ -248,19 +256,27 @@ async function addLine({ tenantId, quotationId, productId, quantity, unit,
 }
 
 async function updateLine({ tenantId, quotationId, lineId,
-  quantity, unit, unitPrice, discountPct, notes, userId }) {
+  quantity, unit, unitPrice, discountPct, notes,
+  packOptionId, packFactor, userId }) {
   return withTransaction(async (client) => {
     await _assertDraft(client, tenantId, quotationId)
+    // Recalcular quantity_base si alguno de sus dos factores cambia. Si no
+    // viene quantity ni packFactor en el body, mantenemos el valor previo
+    // dejando que COALESCE no lo toque (subquery a la fila original).
     const { rows } = await client.query(
       `UPDATE quotation_lines
-          SET quantity     = COALESCE($1, quantity),
-              unit         = COALESCE($2, unit),
-              unit_price   = COALESCE($3, unit_price),
-              discount_pct = COALESCE($4, discount_pct),
-              notes        = COALESCE($5, notes)
-        WHERE id = $6 AND quotation_id = $7
+          SET quantity        = COALESCE($1, quantity),
+              unit            = COALESCE($2, unit),
+              unit_price      = COALESCE($3, unit_price),
+              discount_pct    = COALESCE($4, discount_pct),
+              notes           = COALESCE($5, notes),
+              pack_option_id  = COALESCE($6, pack_option_id),
+              pack_factor     = COALESCE($7, pack_factor),
+              quantity_base   = COALESCE($1, quantity) * COALESCE($7, pack_factor)
+        WHERE id = $8 AND quotation_id = $9
         RETURNING id`,
-      [quantity, unit, unitPrice, discountPct, notes, lineId, quotationId]
+      [quantity, unit, unitPrice, discountPct, notes,
+       packOptionId, packFactor, lineId, quotationId]
     )
     if (!rows[0]) throw createError(404, 'Línea no encontrada.')
     await recalcQuotationTotals(client, quotationId)
@@ -507,10 +523,12 @@ async function convertToOrder({ tenantId, quotationId, userId, ipAddress, userAg
       await client.query(
         `INSERT INTO sales_order_lines
            (sales_order_id, product_id, quantity, unit, unit_price, currency,
-            discount_pct, notes, line_number)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            discount_pct, notes, line_number,
+            pack_option_id, pack_factor, quantity_base)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         [order.id, l.product_id, l.quantity, l.unit, l.unit_price, l.currency,
-         l.discount_pct, l.notes, l.line_number]
+         l.discount_pct, l.notes, l.line_number,
+         l.pack_option_id, l.pack_factor, l.quantity_base]
       )
     }
 

@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { quotationsApi } from '@/api/quotations'
 import { partnersApi } from '@/api/partners'
 import { productsApi } from '@/api/products'
+import { salesApi } from '@/api/sales'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
 import { ProductImageThumb } from '@/components/productos/ProductImageThumb'
@@ -11,16 +12,22 @@ import { fmtMXN } from '@/utils/fmt'
 import clsx from 'clsx'
 
 const EMPTY_LINE = () => ({
-  product: null,   // { id, label, sku, image_attachment_id }
+  product: null,
   quantity: '',
   unit: 'paquete',
   unit_price: '',
   discount_pct: '',
   notes: '',
+  // Presentaciones (pack_options) por línea — paridad con CotizacionLineaModal
+  pack_options: [],         // catálogo cargado al elegir producto
+  pack_option_id: null,     // presentación elegida
+  pack_factor: 1,           // snapshot del base_per_pack
+  base_unit: '',            // unidad base del producto (para el banner)
+  base_price_ref: null,     // precio "puro" por unidad base — para recalcular al cambiar presentación
+  price_source: null,       // 'negotiated' | 'catalog' | 'manual' | null
 })
 
 function defaultValidUntil() {
-  // Vigencia por defecto: 30 días.
   const d = new Date()
   d.setDate(d.getDate() + 30)
   return d.toISOString().slice(0, 10)
@@ -57,15 +64,90 @@ export function CotizacionFormModal({ onClose, onCreated }) {
     setLines(prev => prev.map((l, i) => i === idx ? { ...l, ...patch } : l))
   }
 
-  function selectProductForLine(idx, product) {
+  // Al seleccionar producto: carga pack_options del producto y precio sugerido
+  // del partner (si ya está seleccionado). Aplica la presentación default y
+  // recalcula el unit_price con el factor.
+  async function selectProductForLine(idx, product) {
+    if (!product) {
+      updateLine(idx, EMPTY_LINE())
+      return
+    }
+    // Reset al cambiar de producto (preserva descuento y notas)
     updateLine(idx, {
       product,
-      unit: product?.unit || 'paquete',
-      // Si trae precio de catálogo y la línea está vacía, lo prellena.
-      unit_price: product?.catalog_price && !lines[idx].unit_price
-        ? String(product.catalog_price)
-        : lines[idx].unit_price,
+      unit: product.unit || 'paquete',
+      unit_price: '',
+      pack_options: [],
+      pack_option_id: null,
+      pack_factor: 1,
+      base_unit: '',
+      base_price_ref: null,
+      price_source: null,
     })
+
+    // Cargar pack_options + detalle del producto (para base_unit)
+    let opts = []
+    let baseUnit = ''
+    try {
+      const [packOpts, prod] = await Promise.all([
+        productsApi.listPackOptions(product.id),
+        productsApi.get(product.id),
+      ])
+      opts = packOpts || []
+      baseUnit = prod?.base_unit || ''
+    } catch { /* silencio */ }
+
+    // Precio sugerido (solo si hay partner seleccionado)
+    let basePriceRef = null
+    let priceSource = null
+    if (partner?.id) {
+      try {
+        const res = await salesApi.suggestedPrice(partner.id, product.id, 'MXN')
+        if (res?.unit_price) {
+          basePriceRef = parseFloat(res.unit_price)
+          priceSource = res.source || 'negotiated'
+        }
+      } catch { /* ignore */ }
+    }
+    // Fallback a precio de catálogo
+    if (basePriceRef == null && product.catalog_price) {
+      basePriceRef = parseFloat(product.catalog_price)
+      priceSource = 'catalog'
+    }
+
+    // Aplicar presentación default
+    const def = opts.find(o => o.is_default) || opts[0]
+    const factor = def ? parseFloat(def.base_per_pack) : 1
+    const finalUnitPrice = basePriceRef != null ? (basePriceRef * factor).toFixed(4) : ''
+
+    updateLine(idx, {
+      pack_options:   opts,
+      pack_option_id: def?.id || null,
+      pack_factor:    factor,
+      unit:           def?.pack_unit || product.unit || 'paquete',
+      base_unit:      baseUnit,
+      base_price_ref: basePriceRef,
+      price_source:   priceSource,
+      unit_price:     finalUnitPrice,
+    })
+  }
+
+  function onPackChange(idx, packId) {
+    const line = lines[idx]
+    const opt = line.pack_options.find(o => o.id === packId)
+    if (!opt) return
+    const newFactor = parseFloat(opt.base_per_pack)
+    const patch = {
+      pack_option_id: opt.id,
+      pack_factor:    newFactor,
+      unit:           opt.pack_unit,
+    }
+    // Si tenemos el precio base de referencia, recalcular el unit_price.
+    // Si el usuario lo había editado a mano (base_price_ref=null), respetar.
+    if (line.base_price_ref != null) {
+      patch.unit_price = (line.base_price_ref * newFactor).toFixed(4)
+    }
+    updateLine(idx, patch)
   }
 
   function addLine() {
@@ -90,12 +172,14 @@ export function CotizacionFormModal({ onClose, onCreated }) {
       validUntil: validUntil || null,
       notes:      notes || null,
       lines: lines.map(l => ({
-        productId:   l.product.id,
-        quantity:    parseFloat(l.quantity),
-        unit:        l.unit || 'paquete',
-        unitPrice:   parseFloat(l.unit_price),
-        discountPct: parseFloat(l.discount_pct || 0),
-        notes:       l.notes || null,
+        productId:    l.product.id,
+        quantity:     parseFloat(l.quantity),
+        unit:         l.unit || 'paquete',
+        unitPrice:    parseFloat(l.unit_price),
+        discountPct:  parseFloat(l.discount_pct || 0),
+        notes:        l.notes || null,
+        packOptionId: l.pack_option_id ?? null,
+        packFactor:   l.pack_factor   ?? 1,
       })),
     }),
     onSuccess: (q) => {
@@ -182,6 +266,7 @@ export function CotizacionFormModal({ onClose, onCreated }) {
               const price = parseFloat(l.unit_price || 0)
               const disc = parseFloat(l.discount_pct || 0)
               const lineSubtotal = qty * price * (1 - disc / 100)
+              const hasPackChoice = l.pack_options.length > 0
               return (
                 <div key={idx} className="bg-surface-elevated/60 border border-line-subtle rounded-xl p-4 flex flex-col gap-3">
                   <div className="flex items-center justify-between">
@@ -210,9 +295,20 @@ export function CotizacionFormModal({ onClose, onCreated }) {
                       onChange={(p) => selectProductForLine(idx, p)}
                       onSearch={searchProducts}
                       placeholder="Buscar producto..." />
+                    {l.price_source && l.price_source !== 'manual' && (
+                      <p className="text-[11px] mt-1.5">
+                        <span className={clsx(
+                          'inline-block px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide text-[10px]',
+                          l.price_source === 'negotiated' ? 'bg-status-success/15 text-status-success' : 'bg-status-info/15 text-status-info'
+                        )}>
+                          {l.price_source === 'negotiated' ? 'Precio negociado' : 'Precio de catálogo'}
+                        </span>
+                        <span className="text-ink-muted ml-1.5">aplicado automáticamente</span>
+                      </p>
+                    )}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div>
                       <label className="label">Cantidad <span className="text-status-danger">*</span></label>
                       <input type="number" step="0.001" min="0" inputMode="decimal"
@@ -221,10 +317,32 @@ export function CotizacionFormModal({ onClose, onCreated }) {
                         className="input" placeholder="0" />
                     </div>
                     <div>
+                      <label className="label">Presentación</label>
+                      {hasPackChoice ? (
+                        <select className="select"
+                          value={l.pack_option_id || ''}
+                          onChange={e => onPackChange(idx, e.target.value)}>
+                          {l.pack_options.map(opt => (
+                            <option key={opt.id} value={opt.id}>
+                              {opt.pack_unit}{Number(opt.base_per_pack) !== 1 ? ` (×${opt.base_per_pack})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input className="input" value={l.unit}
+                          onChange={e => updateLine(idx, { unit: e.target.value })} />
+                      )}
+                    </div>
+                    <div>
                       <label className="label">P. Unit. <span className="text-status-danger">*</span></label>
                       <input type="number" step="0.0001" min="0" inputMode="decimal"
                         value={l.unit_price}
-                        onChange={e => updateLine(idx, { unit_price: e.target.value })}
+                        onChange={e => updateLine(idx, {
+                          unit_price: e.target.value,
+                          // Editar a mano invalida la referencia al precio base.
+                          base_price_ref: null,
+                          price_source: 'manual',
+                        })}
                         className="input" placeholder="0.0000" />
                     </div>
                     <div>
@@ -235,6 +353,17 @@ export function CotizacionFormModal({ onClose, onCreated }) {
                         className="input" placeholder="0" />
                     </div>
                   </div>
+
+                  {l.pack_factor > 1 && l.base_unit && (
+                    <div className="bg-status-warning/10 border border-status-warning/40 rounded-lg px-3 py-1.5 text-[11px] text-status-warning">
+                      <span className="font-medium">Inventario al convertir a pedido:</span>{' '}
+                      {qty.toLocaleString('es-MX')} {l.unit}
+                      {' × '}{l.pack_factor}{' = '}
+                      <span className="font-mono font-semibold">
+                        {(qty * l.pack_factor).toLocaleString('es-MX')} {l.base_unit}
+                      </span>
+                    </div>
+                  )}
 
                   <div>
                     <label className="label">Notas de la línea</label>

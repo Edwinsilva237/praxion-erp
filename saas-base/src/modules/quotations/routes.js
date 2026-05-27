@@ -72,11 +72,13 @@ router.patch('/:id', checkPermission('sales', 'update'), async (req, res, next) 
 // ── Líneas (draft) ───────────────────────────────────────────────────────────
 router.post('/:id/lines', checkPermission('sales', 'update'), async (req, res, next) => {
   try {
-    const { productId, quantity, unit, unitPrice, discountPct, notes } = req.body
+    const { productId, quantity, unit, unitPrice, discountPct, notes,
+            packOptionId, packFactor } = req.body
     const q = await quotationService.addLine({
       tenantId: req.tenant.id, quotationId: req.params.id,
       userId: req.auth.userId,
       productId, quantity, unit, unitPrice, discountPct, notes,
+      packOptionId, packFactor,
     })
     res.status(201).json(q)
   } catch (err) { next(err) }
@@ -84,11 +86,13 @@ router.post('/:id/lines', checkPermission('sales', 'update'), async (req, res, n
 
 router.patch('/:id/lines/:lineId', checkPermission('sales', 'update'), async (req, res, next) => {
   try {
-    const { quantity, unit, unitPrice, discountPct, notes } = req.body
+    const { quantity, unit, unitPrice, discountPct, notes,
+            packOptionId, packFactor } = req.body
     const q = await quotationService.updateLine({
       tenantId: req.tenant.id, quotationId: req.params.id, lineId: req.params.lineId,
       userId: req.auth.userId,
       quantity, unit, unitPrice, discountPct, notes,
+      packOptionId, packFactor,
     })
     res.json(q)
   } catch (err) { next(err) }
