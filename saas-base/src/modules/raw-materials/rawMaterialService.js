@@ -2,6 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
+const codeFormatService = require('../code-formats/codeFormatService')
 
 async function listRawMaterials({ tenantId, resinType, materialType, itemKind, isActive, search, withStock = false, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
@@ -70,34 +71,44 @@ async function createRawMaterial({
   // item_kind por defecto 'raw_material' (compat con clientes legacy).
   // Para packaging/additive, resinType/materialType pueden venir NULL.
   const kind = itemKind || 'raw_material'
-  const { rows } = await query(
-    `INSERT INTO raw_materials
-       (tenant_id, name, code, item_kind, resin_type, material_type, unit, max_regrind_pct,
-        cost_per_kg, description, lead_time_days)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-     RETURNING *`,
-    [
-      tenantId,
-      name.trim(),
-      code ? code.trim() : null,
-      kind,
-      resinType || null,
-      kind === 'raw_material' ? (materialType || 'virgin') : (materialType || null),
-      unit || 'kg',
-      maxRegrindPct ?? 30,
-      costPerKg ?? 0,
-      description || null,
-      leadTimeDays != null ? parseInt(leadTimeDays) : 7,
-    ]
-  )
 
-  await audit({
-    tenantId, userId, action: 'raw_material.created', resource: 'raw_materials',
-    resourceId: rows[0].id, payload: { name, resinType, materialType },
-    ipAddress, userAgent,
+  // Envolvemos en transacción para que la resolución del código (que puede
+  // incrementar next_seq en tenant_code_formats) y el INSERT sean atómicos:
+  // si el INSERT falla por UNIQUE u otra restricción, el seq no avanza.
+  return withTransaction(async (client) => {
+    const resolvedCode = await codeFormatService.applyCodeFormat({
+      client, tenantId, entityType: kind, providedCode: code,
+    })
+
+    const { rows } = await client.query(
+      `INSERT INTO raw_materials
+         (tenant_id, name, code, item_kind, resin_type, material_type, unit, max_regrind_pct,
+          cost_per_kg, description, lead_time_days)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       RETURNING *`,
+      [
+        tenantId,
+        name.trim(),
+        resolvedCode ? resolvedCode.trim() : null,
+        kind,
+        resinType || null,
+        kind === 'raw_material' ? (materialType || 'virgin') : (materialType || null),
+        unit || 'kg',
+        maxRegrindPct ?? 30,
+        costPerKg ?? 0,
+        description || null,
+        leadTimeDays != null ? parseInt(leadTimeDays) : 7,
+      ]
+    )
+
+    await audit({
+      tenantId, userId, action: 'raw_material.created', resource: 'raw_materials',
+      resourceId: rows[0].id, payload: { name, resinType, materialType },
+      ipAddress, userAgent,
+    })
+
+    return rows[0]
   })
-
-  return rows[0]
 }
 
 async function updateRawMaterial({

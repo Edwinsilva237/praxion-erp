@@ -2,6 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
+const codeFormatService = require('../code-formats/codeFormatService')
 
 // ─── Listado y detalle ───────────────────────────────────────────────────────
 
@@ -84,6 +85,13 @@ async function createPartner({
   const resolvedPersonType = personType || (rfc ? (rfc.length === 13 ? 'fisica' : 'moral') : null)
 
   return withTransaction(async (client) => {
+    // Resolver código según nomenclatura configurada del tenant. El tipo
+    // 'both' usa la nomenclatura de 'customer' (igual que el form).
+    const codeEntity = type === 'supplier' ? 'supplier' : 'customer'
+    const resolvedCode = await codeFormatService.applyCodeFormat({
+      client, tenantId, entityType: codeEntity, providedCode: internalCode,
+    })
+
     const { rows } = await client.query(
       `INSERT INTO business_partners
          (tenant_id, type, person_type, name, rfc, tax_name, tax_regime, tax_regime_code,
@@ -105,7 +113,7 @@ async function createPartner({
        rfc?.toUpperCase().trim() || null,
        taxName?.trim() || null, taxRegime?.trim() || null, taxRegimeCode?.trim() || null,
        creditType || 'cash', creditDays || 0, creditLimit || 0,
-       internalCode?.trim() || null,
+       resolvedCode?.trim() || null,
        address || null, neighborhood?.trim() || null, city?.trim() || null, state?.trim() || null,
        zipCode?.trim() || null, notes || null,
        cfdiUse || 'G01', paymentMethod || 'PUE', paymentForm || '99',

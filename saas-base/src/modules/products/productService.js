@@ -2,6 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
+const codeFormatService = require('../code-formats/codeFormatService')
 
 /**
  * Lista productos del tenant con filtros opcionales.
@@ -287,6 +288,12 @@ async function createProduct({
       ? !!isProduced
       : (type === 'corner_protector')
 
+    // Resolver SKU según nomenclatura configurada (mode=auto sobrescribe,
+    // mode=suggested consume si coincide con el preview).
+    const resolvedSku = await codeFormatService.applyCodeFormat({
+      client, tenantId, entityType: 'product', providedCode: sku,
+    })
+
     const { rows } = await client.query(
       `INSERT INTO products
          (tenant_id, sku, name, type, is_produced, product_kind_id, resin_type,
@@ -297,7 +304,7 @@ async function createProduct({
        RETURNING *`,
       [
         tenantId,
-        sku.toUpperCase().trim(),
+        (resolvedSku || '').toUpperCase().trim(),
         name.trim(),
         type || (resolvedIsProduced ? 'corner_protector' : 'resale'),
         resolvedIsProduced,

@@ -219,6 +219,50 @@ async function consumeNext({ client, tenantId, entityType }) {
   }
 }
 
+/**
+ * Resuelve el código que debe quedar guardado para un catálogo según el modo
+ * configurado. Lo llaman los services de create (products, business-partners,
+ * raw-materials). Reglas:
+ *
+ *   - manual / sin formato / inactivo → devuelve providedCode sin tocar nada.
+ *   - auto                            → consume seq y sobrescribe providedCode.
+ *   - suggested + code === preview    → consume seq (el user aceptó la sugerencia).
+ *   - suggested + code custom o vacío → devuelve providedCode sin consumir.
+ *
+ * Debe correr DENTRO de la misma transacción que el INSERT del catálogo: si
+ * el INSERT falla, el seq no debe quedar incrementado. Por eso recibe el
+ * client de la transacción (opcional — si no se pasa, usa query global).
+ */
+async function applyCodeFormat({ client, tenantId, entityType, providedCode }) {
+  if (!entityType || !VALID_ENTITIES.includes(entityType)) {
+    return providedCode
+  }
+
+  const fmt = await getFormatByEntity({ tenantId, entityType })
+  if (!fmt || !fmt.is_active || fmt.mode === 'manual') {
+    return providedCode
+  }
+
+  if (fmt.mode === 'auto') {
+    const consumed = await consumeNext({ client, tenantId, entityType })
+    return consumed?.code || providedCode
+  }
+
+  if (fmt.mode === 'suggested' && providedCode) {
+    const preview = resolvePattern({
+      pattern: fmt.pattern,
+      seq: fmt.next_seq,
+      padding: fmt.padding,
+    })
+    if (String(providedCode).trim() === preview) {
+      const consumed = await consumeNext({ client, tenantId, entityType })
+      return consumed?.code || providedCode
+    }
+  }
+
+  return providedCode
+}
+
 module.exports = {
   listFormats,
   getFormatByEntity,
@@ -227,6 +271,7 @@ module.exports = {
   deleteFormat,
   previewNext,
   consumeNext,
+  applyCodeFormat,
   resolvePattern,
   VALID_ENTITIES,
   VALID_MODES,
