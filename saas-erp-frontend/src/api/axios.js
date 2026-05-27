@@ -1,7 +1,44 @@
 import axios from 'axios'
 
-// ── Slug por defecto al arrancar ───────────────────────────────────────────
-if (!localStorage.getItem('erp_tenant_slug')) {
+// ── Detección de tenant slug por subdomain ────────────────────────────────
+// SOLO activa en hosts terminados en `.praxionops.com` (dominio oficial del
+// SaaS). Esto evita activar la lógica en `praxion-web.onrender.com` — donde
+// el host no es un tenant válido y rompería todas las llamadas API.
+//
+// Hosts soportados:
+//   acme.praxionops.com               → slug = 'acme' (tenant)
+//   gh-insumos-prod.praxionops.com    → slug = 'gh-insumos-prod' (tenant)
+//   praxionops.com / www.praxionops.com / app.praxionops.com → null (genérico)
+//   praxion-web.onrender.com          → null (URL legacy, no toca localStorage)
+//   localhost, 127.0.0.1, IP LAN      → null (dev local, usa localStorage)
+//
+// Subdomains reservados que NO son tenants aunque sean parte de praxionops.com.
+const RESERVED_SUBDOMAINS = ['www', 'app', 'api', 'admin', 'mail', 'smtp']
+const TENANT_DOMAIN_SUFFIX = '.praxionops.com'
+
+function detectTenantSlugFromHost() {
+  const host = (window.location.hostname || '').toLowerCase()
+  // Solo procesamos hosts del dominio oficial del SaaS. Cualquier otro
+  // (onrender.com, localhost, IP, dominio custom de cliente) cae al
+  // comportamiento legacy basado en localStorage.
+  if (!host.endsWith(TENANT_DOMAIN_SUFFIX)) return null
+  // Caso apex: praxionops.com sin subdomain → null
+  if (host === 'praxionops.com') return null
+  const sub = host.slice(0, -TENANT_DOMAIN_SUFFIX.length)
+  // Subdominios con punto (ej. foo.bar.praxionops.com) — no son tenants.
+  if (sub.includes('.')) return null
+  if (RESERVED_SUBDOMAINS.includes(sub)) return null
+  return sub
+}
+
+const subdomainSlug = detectTenantSlugFromHost()
+if (subdomainSlug) {
+  // URL siempre gana: si el host trae tenant, sobrescribimos el localStorage.
+  localStorage.setItem('erp_tenant_slug', subdomainSlug)
+} else if (!localStorage.getItem('erp_tenant_slug')) {
+  // Fallback default solo para entornos sin nada cacheado (primera visita
+  // en dev local o en app.praxionops.com). loginDiscover sobrescribirá esto
+  // después del primer login.
   localStorage.setItem('erp_tenant_slug', 'demo')
 }
 
