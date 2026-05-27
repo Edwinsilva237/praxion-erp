@@ -130,14 +130,17 @@ function RawMaterialModal({ item, onClose }) {
     },
   })
 
-  const codeSug = useCodeSuggestion('raw_material', { enabled: !isEditing })
+  // El item_kind discrimina entre tres catálogos lógicos con su propia
+  // nomenclatura: 'raw_material' (MP), 'packaging' (embalajes), 'additive'
+  // (aditivos). Watch del kind ANTES del hook para que cambie de entity al
+  // alternar el toggle del form.
+  const selectedKind    = watch('itemKind')
+  const codeSug = useCodeSuggestion(selectedKind, { enabled: !isEditing })
   useEffect(() => {
-    if (!isEditing && codeSug.isAuto && codeSug.code && !watch('code')) {
+    if (!isEditing && codeSug.isAuto && codeSug.code) {
       setValue('code', codeSug.code, { shouldDirty: false, shouldValidate: true })
     }
-  }, [codeSug.isAuto, codeSug.code, isEditing])
-
-  const selectedKind    = watch('itemKind')
+  }, [codeSug.isAuto, codeSug.code, selectedKind, isEditing])
   const selectedResin   = watch('resinType')
   const selectedMType   = watch('materialType')
   const watchLeadTime   = watch('leadTimeDays')

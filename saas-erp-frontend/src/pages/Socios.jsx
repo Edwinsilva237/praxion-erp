@@ -359,11 +359,14 @@ function PartnerModal({ partner: partnerStub, onClose, onSaved }) {
   const codeEntity = partnerType === 'supplier' ? 'supplier' : 'customer'
   const codeSug = useCodeSuggestion(codeEntity, { enabled: !partnerStub?.id })
 
+  // En modo auto el campo es readonly: re-sincronizar SIEMPRE que cambie el
+  // entity (customer ⇄ supplier) o llegue un código nuevo. Sin `codeEntity`
+  // en deps quedaba pegado con el primer valor renderizado.
   useEffect(() => {
-    if (!partnerStub?.id && codeSug.isAuto && codeSug.code && !watch('internalCode')) {
+    if (!partnerStub?.id && codeSug.isAuto && codeSug.code) {
       setValue('internalCode', codeSug.code, { shouldDirty: false, shouldValidate: true })
     }
-  }, [codeSug.isAuto, codeSug.code, partnerStub?.id])
+  }, [codeSug.isAuto, codeSug.code, codeEntity, partnerStub?.id])
 
   // Cuando llega el detalle completo del partner (en edición), repoblar el form.
   // Sin esto, los campos que no vienen en el listado (taxName, cfdi_use, billing_notes, contacts, etc.)

@@ -15,6 +15,8 @@ export const codeFormatsApi = {
 export const ENTITY_TYPES = [
   { value: 'product',      label: 'Productos terminados' },
   { value: 'raw_material', label: 'Materias primas' },
+  { value: 'packaging',    label: 'Embalajes' },
+  { value: 'additive',     label: 'Aditivos' },
   { value: 'customer',     label: 'Clientes' },
   { value: 'supplier',     label: 'Proveedores' },
 ]

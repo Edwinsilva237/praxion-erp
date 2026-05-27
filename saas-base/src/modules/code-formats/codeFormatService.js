@@ -8,10 +8,14 @@ const { query, withTransaction } = require('../../db')
  * Tabla `tenant_code_formats`: 1 row por (tenant, entity_type). Sin row →
  * modo manual implícito (el form deja capturar libre sin pista).
  *
- * Entities soportadas hoy: 'product', 'raw_material', 'customer', 'supplier'.
- * 'customer' y 'supplier' mapean al mismo catálogo (business_partners) pero
- * pueden tener nomenclaturas distintas — el caller decide qué entity_type
- * pasa según `business_partners.type`.
+ * Entities soportadas: 'product', 'raw_material', 'packaging', 'additive',
+ * 'customer', 'supplier'.
+ * - 'customer' y 'supplier' mapean al mismo catálogo (business_partners)
+ *   pero pueden tener nomenclaturas distintas — el caller decide qué
+ *   entity_type pasa según `business_partners.type`.
+ * - 'raw_material', 'packaging', 'additive' mapean al mismo catálogo
+ *   (raw_materials) discriminado por `item_kind` — el form decide qué
+ *   entity_type usar según la selección del capturista.
  *
  * Patrón: string con `{seq}` como placeholder de número secuencial. El
  * parser actual solo conoce {seq} — si en el futuro agregamos `{año}`,
@@ -31,7 +35,7 @@ function createError(status, message) {
   return err
 }
 
-const VALID_ENTITIES = ['product', 'raw_material', 'customer', 'supplier']
+const VALID_ENTITIES = ['product', 'raw_material', 'packaging', 'additive', 'customer', 'supplier']
 const VALID_MODES    = ['manual', 'suggested', 'auto']
 
 /**
