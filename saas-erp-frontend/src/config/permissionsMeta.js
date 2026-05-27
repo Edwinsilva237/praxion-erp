@@ -12,7 +12,7 @@
 
 // ── Etiquetas humanas por recurso ────────────────────────────────────────────
 export const RESOURCE_LABELS = {
-  sales:             'Pedidos y remisiones de venta',
+  sales:             'Pedidos, remisiones y cotizaciones',
   invoicing:         'Facturación CFDI',
   financials:        'Pagos recibidos y emitidos',
   business_partners: 'Clientes y proveedores',
