@@ -413,9 +413,16 @@ function PartnerModal({ partner: partnerStub, onClose, onSaved }) {
       if (extracted.neighborhood) setValue('neighborhood', extracted.neighborhood)
       if (extracted.taxRegime) {
         setValue('taxRegime', extracted.taxRegime)
-        // Intentar mapear el texto al código SAT para que el select quede sincronizado.
-        const code = findRegimeCode(extracted.taxRegime)
-        if (code) setValue('taxRegimeCode', code)
+      }
+      // Preferir el código SAT que ya viene resuelto del backend (más
+      // confiable que el matching por string en frontend). Si no viene,
+      // intentar mapear el texto como fallback.
+      const code = extracted.taxRegimeCode || findRegimeCode(extracted.taxRegime || '')
+      if (code) {
+        setValue('taxRegimeCode', code)
+        // Sincronizar también el label del select si lo conocemos.
+        const found = REGIMENES.find(r => r.code === code)
+        if (found) setValue('taxRegime', found.label)
       }
       if (extracted.personType) setValue('personType', extracted.personType)
       if (warning) setCsfWarning(warning)

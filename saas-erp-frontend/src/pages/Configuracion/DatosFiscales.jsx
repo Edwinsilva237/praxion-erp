@@ -105,7 +105,6 @@ function FormDatos({ initial, onSave, onCancel, saving, error, isFirstSetup }) {
   const [taxName, setTaxName]     = useState(initial?.tax_name || '')
   const [taxRegime, setTaxRegime] = useState(initial?.tax_regime || '601')
   const [zipCode, setZipCode]     = useState(initial?.zip_code || '')
-  const [serie, setSerie]         = useState(initial?.serie || '')
   const [createInFacturapi, setCreate] = useState(isFirstSetup)
   const [csfLoading, setCsfLoading] = useState(false)
   const [csfMsg, setCsfMsg] = useState(null)
@@ -121,12 +120,21 @@ function FormDatos({ initial, onSave, onCancel, saving, error, isFirstSetup }) {
       // Aplicar lo que el parser haya podido extraer
       if (x.rfc)        setRfc(x.rfc)
       if (x.name)       setTaxName(x.name)
-      if (x.taxRegime)  setTaxRegime(x.taxRegime)
       if (x.zipCode)    setZipCode(x.zipCode)
+      // El select de régimen espera el CÓDIGO SAT (601, 612, ...), no el
+      // texto descriptivo. Preferimos `taxRegimeCode` que ya viene resuelto
+      // del backend; si no llega y `taxRegime` es un código válido (3 dígitos),
+      // lo usamos. Si llega solo el texto, NO lo asignamos para no romper el select.
+      const validCode = (x.taxRegimeCode && TAX_REGIMES.some(([c]) => c === x.taxRegimeCode))
+        ? x.taxRegimeCode
+        : (/^\d{3}$/.test(x.taxRegime) && TAX_REGIMES.some(([c]) => c === x.taxRegime))
+          ? x.taxRegime
+          : null
+      if (validCode) setTaxRegime(validCode)
       const detected = [
         x.rfc       && 'RFC',
         x.name      && 'razón social',
-        x.taxRegime && 'régimen',
+        validCode   && 'régimen',
         x.zipCode   && 'CP',
       ].filter(Boolean)
       setCsfMsg({
@@ -153,7 +161,8 @@ function FormDatos({ initial, onSave, onCancel, saving, error, isFirstSetup }) {
       taxName: taxName.trim(),
       taxRegime: taxRegime.trim(),
       zipCode: zipCode.trim(),
-      serie: serie.trim() || null,
+      // serie ya no se captura aquí: vive en Configuración → Series y folios.
+      // El backend auto-crea una serie default 'A' al provisionar el perfil.
       createInFacturapi: isFirstSetup ? createInFacturapi : undefined,
     })
   }
@@ -212,23 +221,12 @@ function FormDatos({ initial, onSave, onCancel, saving, error, isFirstSetup }) {
           placeholder="Como aparece en tu Constancia de Situación Fiscal" required />
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div>
-          <label className="label">Régimen fiscal <span className="text-status-danger">*</span></label>
-          <select className="select" value={taxRegime}
-            onChange={e => setTaxRegime(e.target.value)} required>
-            {TAX_REGIMES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="label">
-            Serie de folios <span className="text-ink-muted text-xs">(opcional)</span>
-          </label>
-          <input className="input" value={serie}
-            onChange={e => setSerie(e.target.value)}
-            maxLength={10} placeholder="A, B, FAC..." />
-          <p className="text-[10px] text-ink-muted mt-0.5">Prefijo de los folios de tus CFDIs.</p>
-        </div>
+      <div>
+        <label className="label">Régimen fiscal <span className="text-status-danger">*</span></label>
+        <select className="select" value={taxRegime}
+          onChange={e => setTaxRegime(e.target.value)} required>
+          {TAX_REGIMES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
       </div>
 
       {isFirstSetup && (
@@ -362,32 +360,29 @@ export default function DatosFiscales() {
             onSave={(body) => { setError(null); saveMutation.mutate(body) }}
           />
         ) : (
-          <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-            <div>
-              <p className="text-[10px] text-ink-muted uppercase tracking-wide">Razón social</p>
-              <p className="font-medium text-ink-primary">{profile.tax_name}</p>
+          <>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+              <div>
+                <p className="text-[10px] text-ink-muted uppercase tracking-wide">Razón social</p>
+                <p className="font-medium text-ink-primary">{profile.tax_name}</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-ink-muted uppercase tracking-wide">RFC</p>
+                <p className="font-mono font-medium text-ink-primary">{profile.rfc}</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-ink-muted uppercase tracking-wide">Régimen fiscal</p>
+                <p className="font-medium text-ink-primary">{profile.tax_regime}</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-ink-muted uppercase tracking-wide">Código postal</p>
+                <p className="font-mono font-medium text-ink-primary">{profile.zip_code}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-[10px] text-ink-muted uppercase tracking-wide">RFC</p>
-              <p className="font-mono font-medium text-ink-primary">{profile.rfc}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-ink-muted uppercase tracking-wide">Régimen fiscal</p>
-              <p className="font-medium text-ink-primary">{profile.tax_regime}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-ink-muted uppercase tracking-wide">Código postal</p>
-              <p className="font-mono font-medium text-ink-primary">{profile.zip_code}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-ink-muted uppercase tracking-wide">Serie</p>
-              <p className="font-mono font-medium text-ink-primary">{profile.serie || <span className="text-ink-muted">(sin serie)</span>}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-ink-muted uppercase tracking-wide">Próximo folio</p>
-              <p className="font-mono font-medium text-ink-primary">{profile.folio_next}</p>
-            </div>
-          </div>
+            <p className="text-[11px] text-ink-muted mt-3">
+              💡 Las series de folios se administran en <span className="text-brand-300">Configuración → Series y folios</span>.
+            </p>
+          </>
         )}
       </div>
 

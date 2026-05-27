@@ -75,16 +75,18 @@ function parseCSFText(text) {
   const personType = rfc?.length === 13 ? 'fisica'
                    : rfc?.length === 12 ? 'moral'
                    : null
+  const regime = extractTaxRegime(text)
   return {
     rfc,
-    name:         extractName(text, personType),
-    taxRegime:    extractTaxRegime(text),
-    zipCode:      extractZipCode(text),
-    address:      extractAddress(text),
-    city:         extractCity(text),
-    state:        extractState(text),
-    neighborhood: extractNeighborhood(text),
-    issuedAt:     extractIssuedAt(text),
+    name:           extractName(text, personType),
+    taxRegime:      regime.text,
+    taxRegimeCode:  regime.code,
+    zipCode:        extractZipCode(text),
+    address:        extractAddress(text),
+    city:           extractCity(text),
+    state:          extractState(text),
+    neighborhood:   extractNeighborhood(text),
+    issuedAt:       extractIssuedAt(text),
   }
 }
 
@@ -189,58 +191,148 @@ function nombrePersonaFisica(text) {
  * "Régimen General de Ley Personas Morales" matchee con "Régimen General"
  * de algún otro régimen genérico.
  */
+// Mapeo de patrones de régimen a código SAT. Orden importa: los más
+// específicos primero para evitar matches parciales (ej. "Incorporación
+// Fiscal" tiene que evaluarse antes que "Régimen de Sueldos").
 const REGIME_PATTERNS = [
-  /R[eé]gimen General de Ley Personas Morales/i,
-  /Personas Morales con Fines no Lucrativos/i,
-  /Sueldos y Salarios e Ingresos Asimilados/i,
-  /R[eé]gimen de Arrendamiento/i,
-  /R[eé]gimen de los ingresos por intereses/i,
-  /R[eé]gimen de los ingresos por dividendos/i,
-  /R[eé]gimen de las Actividades Empresariales con ingresos por Plataformas Tecnol[oó]gicas/i,
-  /R[eé]gimen de Incorporaci[oó]n Fiscal/i,
-  /Incorporaci[oó]n Fiscal/i,
-  /R[eé]gimen Simplificado de Confianza/i,
-  /R[eé]gimen de las? Personas? F[ií]sicas? con Actividades Empresariales y Profesionales/i,
-  /R[eé]gimen de Sueldos y Salarios/i,
-  /Sociedades Cooperativas de Producci[oó]n/i,
-  /Actividades Agr[ií]colas, Ganaderas, Silv[ií]colas/i,
-  /Opcional para Grupos de Sociedades/i,
-  /Sin obligaciones fiscales/i,
-  /Residentes en el Extranjero/i,
-  /Coordinados/i,
-  /Consolidaci[oó]n/i,
-  /Dem[aá]s ingresos/i,
+  { code: '601', pattern: /R[eé]gimen General de Ley Personas Morales/i },
+  { code: '603', pattern: /Personas Morales con Fines no Lucrativos/i },
+  { code: '605', pattern: /Sueldos y Salarios e Ingresos Asimilados/i },
+  { code: '605', pattern: /R[eé]gimen de Sueldos y Salarios/i },
+  { code: '606', pattern: /R[eé]gimen de Arrendamiento/i },
+  { code: '606', pattern: /^\s*Arrendamiento\s*$/im },
+  { code: '607', pattern: /Enajenaci[oó]n o Adquisici[oó]n de Bienes/i },
+  { code: '608', pattern: /Dem[aá]s ingresos/i },
+  { code: '609', pattern: /Consolidaci[oó]n/i },
+  { code: '610', pattern: /Residentes en el Extranjero/i },
+  { code: '611', pattern: /R[eé]gimen de los ingresos por dividendos/i },
+  { code: '611', pattern: /Ingresos por Dividendos/i },
+  { code: '612', pattern: /R[eé]gimen de las? Personas? F[ií]sicas? con Actividades Empresariales y Profesionales/i },
+  { code: '612', pattern: /Personas F[ií]sicas con Actividades Empresariales/i },
+  { code: '614', pattern: /R[eé]gimen de los ingresos por intereses/i },
+  { code: '614', pattern: /Ingresos por intereses/i },
+  { code: '615', pattern: /Ingresos por obtenci[oó]n de premios/i },
+  { code: '616', pattern: /Sin obligaciones fiscales/i },
+  { code: '620', pattern: /Sociedades Cooperativas de Producci[oó]n/i },
+  { code: '621', pattern: /R[eé]gimen de Incorporaci[oó]n Fiscal/i },
+  { code: '621', pattern: /Incorporaci[oó]n Fiscal/i },
+  { code: '622', pattern: /Actividades Agr[ií]colas,? Ganaderas,? Silv[ií]colas/i },
+  { code: '623', pattern: /Opcional para Grupos de Sociedades/i },
+  { code: '624', pattern: /Coordinados/i },
+  { code: '625', pattern: /R[eé]gimen de las Actividades Empresariales con ingresos por Plataformas Tecnol[oó]gicas/i },
+  { code: '625', pattern: /Plataformas Tecnol[oó]gicas/i },
+  { code: '626', pattern: /R[eé]gimen Simplificado de Confianza/i },
+  { code: '626', pattern: /\bRESICO\b/i },
 ]
 
-function extractTaxRegime(text) {
-  // 1) Buscar cualquier patrón SAT conocido directamente.
-  for (const pat of REGIME_PATTERNS) {
-    const m = text.match(pat)
-    if (m) return m[0].trim()
-  }
-
-  // 2) Fallback: línea bajo "Regímenes:" que NO sea un header de columnas.
-  //    El layout más común en CSF de persona moral tiene:
-  //      Regímenes:
-  //      Régimen           Fecha Inicio   Fecha Fin
-  //      Régimen General de Ley Personas Morales   2020-01-01
-  //    pdf-parse a veces colapsa las columnas en líneas separadas.
+/**
+ * Aísla la sección "Regímenes" de la CSF para buscar SOLO ahí.
+ *
+ * Las CSF traen el texto "Régimen General de Ley Personas Morales" y similares
+ * en disclaimers, instrucciones o boilerplate del SAT que NO son el régimen
+ * del contribuyente. Si escaneamos todo el texto, esos falsos positivos
+ * ganan al verdadero régimen del contribuyente (que está en la sección
+ * "Regímenes Registrados").
+ *
+ * La sección típica:
+ *   Regímenes [Registrados]
+ *   Régimen        Fecha Inicio    Fecha Fin
+ *   <régimen 1>    DD/MM/YYYY      DD/MM/YYYY      ← histórico (con fin)
+ *   <régimen 2>    DD/MM/YYYY                      ← vigente (sin fin)
+ *
+ *   [Obligaciones | siguiente sección]
+ */
+function extractRegimesSection(text) {
   const lines = text.split('\n').map(l => l.trim())
-  const headerIdx = lines.findIndex(l => /^Reg[ií]menes?:$/i.test(l))
-  if (headerIdx >= 0) {
-    for (let i = headerIdx + 1; i < Math.min(headerIdx + 12, lines.length); i++) {
-      const l = lines[i]
-      if (!l) continue
-      // Saltar headers de columna ("Régimen", "Fecha Inicio", "Fecha Fin")
-      if (/^R[eé]gimen$/i.test(l)) continue
-      if (/^Fecha (Inicio|Fin|de)\b/i.test(l)) continue
-      if (/^\d{2}[\/\-]\d{2}[\/\-]\d{4}$/.test(l)) continue
-      if (/^\d{4}[\/\-]\d{2}[\/\-]\d{2}$/.test(l)) continue
-      // El primer renglón con texto significativo es el régimen.
-      if (l.length >= 8 && /[a-z]/i.test(l)) return l
+  const startIdx = lines.findIndex(l => /^Reg[ií]menes(\s+Registrados)?:?\s*$/i.test(l))
+  if (startIdx < 0) return null
+  // Buscar dónde termina la sección. Heurística: siguiente header conocido,
+  // o un bloque de 3 líneas vacías, o 30 líneas como tope duro.
+  const endHeaders = /^(Obligaciones|Datos de Identificaci[oó]n|Domicilio|Caracter[ií]sticas Fiscales)/i
+  let endIdx = lines.length
+  let blankRun = 0
+  for (let i = startIdx + 1; i < Math.min(startIdx + 30, lines.length); i++) {
+    if (endHeaders.test(lines[i])) { endIdx = i; break }
+    if (lines[i] === '') { blankRun++; if (blankRun >= 3) { endIdx = i; break } }
+    else { blankRun = 0 }
+  }
+  return lines.slice(startIdx + 1, endIdx)
+}
+
+/**
+ * Aplica los REGIME_PATTERNS a un conjunto de líneas. Si hay varios matches,
+ * prefiere el que esté en una línea "vigente" (la siguiente línea o la misma
+ * no tiene fecha de fin completa). Si no se puede determinar, devuelve el
+ * último match (la CSF suele listar primero los regímenes históricos y al
+ * final los actuales).
+ */
+function matchRegimeInLines(lines) {
+  const matches = []
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]
+    if (!l) continue
+    if (/^R[eé]gimen$/i.test(l)) continue
+    if (/^Fecha (Inicio|Fin|de)\b/i.test(l)) continue
+    if (/^\d{2}[\/\-]\d{2}[\/\-]\d{4}$/.test(l)) continue
+    if (/^\d{4}[\/\-]\d{2}[\/\-]\d{2}$/.test(l)) continue
+
+    // Código SAT al inicio de la línea (formato moderno)
+    const codeMatch = l.match(/^(\d{3})\b/)
+    if (codeMatch && REGIME_PATTERNS.some(r => r.code === codeMatch[1])) {
+      matches.push({ text: l, code: codeMatch[1], lineIdx: i, raw: l })
+      continue
+    }
+    for (const { code, pattern } of REGIME_PATTERNS) {
+      if (pattern.test(l)) {
+        matches.push({ text: l, code, lineIdx: i, raw: l })
+        break
+      }
     }
   }
-  return null
+  if (matches.length === 0) return null
+  if (matches.length === 1) return matches[0]
+
+  // Heurística "vigente": una línea con DOS fechas completas (DD/MM/YYYY o
+  // YYYY-MM-DD) probablemente es un régimen histórico (tiene fecha de fin).
+  // Una línea con UNA sola fecha (o ninguna) es probablemente vigente.
+  const dateRe = /(\d{2}[\/\-]\d{2}[\/\-]\d{4}|\d{4}[\/\-]\d{2}[\/\-]\d{2})/g
+  const scored = matches.map(m => {
+    const lineDates = (m.raw.match(dateRe) || []).length
+    const nextLineDates = (lines[m.lineIdx + 1]?.match(dateRe) || []).length
+    const totalDates = lineDates + nextLineDates
+    // Más fechas = más probable que sea histórico (penaliza)
+    return { ...m, score: -totalDates }
+  })
+  // El último match con score más alto gana (último por convención SAT
+  // pone al final el régimen vigente).
+  scored.sort((a, b) => (b.score - a.score) || (b.lineIdx - a.lineIdx))
+  return scored[0]
+}
+
+/**
+ * Devuelve { text, code } del régimen detectado en la CSF, o { text:null, code:null }.
+ *
+ * Estrategia (en orden de preferencia):
+ *  1) Buscar SOLO en la sección "Regímenes" del PDF. Esto evita falsos
+ *     positivos de boilerplate SAT en otras secciones (ej. instrucciones
+ *     que mencionan "Régimen General de Ley Personas Morales" como ejemplo).
+ *  2) Si hay varios regímenes en esa sección, preferir el vigente (sin
+ *     fecha de fin) y/o el último (convención SAT: histórico arriba, actual abajo).
+ *  3) Solo si NO hay sección "Regímenes" identificable, escanear el texto
+ *     completo como último recurso (CSFs antiguas o con layout corrupto).
+ */
+function extractTaxRegime(text) {
+  const sectionLines = extractRegimesSection(text)
+  if (sectionLines && sectionLines.length > 0) {
+    const match = matchRegimeInLines(sectionLines)
+    if (match) return { text: match.text, code: match.code }
+  }
+  // Fallback global: solo si no encontramos la sección.
+  for (const { code, pattern } of REGIME_PATTERNS) {
+    const m = text.match(pattern)
+    if (m) return { text: m[0].trim(), code }
+  }
+  return { text: null, code: null }
 }
 
 function extractZipCode(text) {
@@ -415,4 +507,4 @@ function createError(status, message) {
   return err
 }
 
-module.exports = { extractCSF, validateCSFVigency, inferPersonType }
+module.exports = { extractCSF, validateCSFVigency, inferPersonType, extractTaxRegime }
