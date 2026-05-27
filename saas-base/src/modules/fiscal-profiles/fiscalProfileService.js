@@ -90,6 +90,11 @@ async function getProfile({ tenantId, profileId }) {
  * pensada para 1 solo.
  */
 async function listProfiles({ tenantId }) {
+  // Solo profiles activos. Los inactivos se quedan en BD para que las facturas
+  // históricas que los referencian sigan resolviendo el RFC y datos legales,
+  // pero no se exponen al frontend — si el usuario desactiva un emisor y
+  // crea otro nuevo, la pantalla ve "vacío" y arranca el wizard de primer
+  // setup con la opción "Crear en Facturapi".
   const { rows } = await query(
     `SELECT id, rfc, tax_name, tax_regime, zip_code, serie, folio_next,
             facturapi_organization_id,
@@ -98,8 +103,8 @@ async function listProfiles({ tenantId }) {
             facturapi_certificate_status, facturapi_certificate_expires_at,
             is_active, notes, created_at, updated_at
        FROM tenant_fiscal_profiles
-      WHERE tenant_id = $1
-      ORDER BY is_active DESC, created_at ASC`,
+      WHERE tenant_id = $1 AND is_active = TRUE
+      ORDER BY created_at ASC`,
     [tenantId]
   )
   return rows
@@ -190,13 +195,18 @@ async function createProfile({
   }
 
   return withTransaction(async (client) => {
-    // Validar que el tenant aún no tenga profile (constraint también lo cubre).
+    // Validar que el tenant no tenga profile ACTIVO. Los desactivados quedan
+    // en BD como histórico (facturas viejas los referencian) pero no impiden
+    // crear uno nuevo — esto cubre el caso "el cliente borró su organization
+    // en Facturapi y necesita recrear el emisor con datos limpios".
     const { rows: existing } = await client.query(
-      `SELECT id FROM tenant_fiscal_profiles WHERE tenant_id = $1`, [tenantId]
+      `SELECT id FROM tenant_fiscal_profiles
+        WHERE tenant_id = $1 AND is_active = TRUE`,
+      [tenantId]
     )
     if (existing.length > 0) {
       throw createError(409,
-        'Este tenant ya tiene un emisor fiscal configurado. Edítalo en lugar de crear uno nuevo.')
+        'Este tenant ya tiene un emisor fiscal activo. Desactívalo desde Configuración → Datos Fiscales antes de crear uno nuevo.')
     }
 
     const { rows } = await client.query(
