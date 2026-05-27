@@ -64,14 +64,26 @@ async function generateQuotationPDF({ tenantId, quotationId }) {
     const grisText = '#666666'
 
     // ─── ENCABEZADO ────────────────────────────────────────────────
-    doc.rect(40, 40, W, 70).fill(azul)
-    doc.fillColor('white').fontSize(18).font('Helvetica-Bold')
-       .text(quot.emisor_nombre || quot.tenant_name || 'EMISOR', 55, 52, { width: W * 0.6 })
+    // Header dinámico: si el nombre del emisor se desborda (razón social
+    // larga), crecemos el rect azul y desplazamos los subsiguientes Y.
+    // Sin esto, el wrap a 2+ líneas se encimaba con RFC/Régimen.
+    const emisorName = quot.emisor_nombre || quot.tenant_name || 'EMISOR'
+    const emisorNameWidth = W * 0.6
+    doc.fontSize(18).font('Helvetica-Bold')
+    const emisorNameHeight = doc.heightOfString(emisorName, { width: emisorNameWidth })
+    const headerExtra = Math.max(0, emisorNameHeight - 22)   // 22 = altura típica 1 línea fontSize 18
+    const headerH = 70 + headerExtra
 
+    doc.rect(40, 40, W, headerH).fill(azul)
+    doc.fillColor('white').fontSize(18).font('Helvetica-Bold')
+       .text(emisorName, 55, 52, { width: emisorNameWidth })
+
+    const rfcY     = 52 + emisorNameHeight + 4
+    const regimeY  = rfcY + 12
     doc.fontSize(9).font('Helvetica')
     if (quot.emisor_rfc) {
-      doc.text(`RFC: ${quot.emisor_rfc}`, 55, 74)
-         .text(`Régimen: ${quot.emisor_regime || '-'}  |  CP: ${quot.emisor_zip || '-'}`, 55, 86)
+      doc.text(`RFC: ${quot.emisor_rfc}`, 55, rfcY)
+         .text(`Régimen: ${quot.emisor_regime || '-'}  |  CP: ${quot.emisor_zip || '-'}`, 55, regimeY)
     }
 
     doc.fontSize(20).font('Helvetica-Bold')
@@ -82,7 +94,7 @@ async function generateQuotationPDF({ tenantId, quotationId }) {
        .text('Documento no fiscal', 55 + W * 0.6, 92, { width: W * 0.4 - 15, align: 'right' })
 
     // ─── DATOS GENERALES ───────────────────────────────────────────
-    let y = 125
+    let y = 40 + headerH + 15
     doc.fillColor(negro).fontSize(9).font('Helvetica-Bold')
        .text('DATOS DE LA COTIZACIÓN', 40, y)
 
@@ -109,22 +121,42 @@ async function generateQuotationPDF({ tenantId, quotationId }) {
     doc.text(quot.currency, col4, y + 17)
 
     // ─── CLIENTE ───────────────────────────────────────────────────
+    // Box dinámico: el nombre de la razón social del cliente (tax_name) puede
+    // ser largo y antes encimaba el RFC/dirección que iban en posición fija.
     y += 50
     doc.rect(40, y, W, 14).fill(azul)
     doc.fillColor('white').fontSize(8).font('Helvetica-Bold')
        .text('CLIENTE', 45, y + 3)
 
-    doc.rect(40, y + 14, W, 52).fill(gris)
+    const partnerName = quot.partner_tax_name || quot.partner_name || ''
+    const partnerAddress = `${quot.partner_address || ''}`.trim() || '-'
+    const partnerCityLine = `${quot.partner_city || ''}${quot.partner_state ? `, ${quot.partner_state}` : ''} ${quot.partner_zip || ''}`.trim()
+    const innerWidth = W - 10
+
+    doc.fontSize(8).font('Helvetica-Bold')
+    const nameH    = doc.heightOfString(partnerName,    { width: innerWidth })
+    doc.fontSize(8).font('Helvetica')
+    const addressH = doc.heightOfString(partnerAddress, { width: innerWidth })
+    const cityH    = partnerCityLine ? doc.heightOfString(partnerCityLine, { width: innerWidth }) : 0
+    // Padding interno: 4 arriba + gaps de 3 entre cada bloque + 4 abajo
+    const clientBodyH = Math.max(52, 4 + nameH + 3 + 11 + 3 + addressH + 3 + cityH + 4)
+
+    doc.rect(40, y + 14, W, clientBodyH).fill(gris)
+    let cy = y + 18
     doc.fillColor(negro).fontSize(8).font('Helvetica-Bold')
-       .text(quot.partner_tax_name || quot.partner_name || '', 45, y + 18, { width: W - 10 })
+       .text(partnerName, 45, cy, { width: innerWidth })
+    cy += nameH + 3
     doc.font('Helvetica').fillColor(grisText)
-       .text(`RFC: ${quot.partner_rfc || '-'}`, 45, y + 30)
-       .text(`${quot.partner_address || ''}`.trim() || '-', 45, y + 41, { width: W - 10 })
-       .text(`${quot.partner_city || ''}${quot.partner_state ? `, ${quot.partner_state}` : ''} ${quot.partner_zip || ''}`.trim() || '',
-             45, y + 52, { width: W - 10 })
+       .text(`RFC: ${quot.partner_rfc || '-'}`, 45, cy)
+    cy += 11 + 3
+    doc.text(partnerAddress, 45, cy, { width: innerWidth })
+    cy += addressH + 3
+    if (partnerCityLine) {
+      doc.text(partnerCityLine, 45, cy, { width: innerWidth })
+    }
 
     // ─── CONCEPTOS ─────────────────────────────────────────────────
-    y += 82
+    y += 14 + clientBodyH + 16
     doc.fillColor(negro).fontSize(9).font('Helvetica-Bold')
        .text('CONCEPTOS', 40, y)
 
