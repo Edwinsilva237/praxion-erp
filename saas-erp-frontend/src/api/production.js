@@ -75,6 +75,11 @@ export const productionApi = {
   updateScheduledShift: (id, body) => api.patch(`${BASE}/scheduled-shifts/${id}`, body).then(r => r.data),
   confirmPresence:      (id)     => api.post(`${BASE}/scheduled-shifts/${id}/confirm`).then(r => r.data),
 
+  // Runtime: miembros del turno activo y reasignación del responsable del handover
+  listShiftMembers:     (shiftId) => api.get(`${BASE}/shifts/${shiftId}/members`).then(r => r.data),
+  setHandoverResponsible: (shiftId, memberId) =>
+    api.post(`${BASE}/shifts/${shiftId}/set-handover-responsible`, { memberId }).then(r => r.data),
+
   // Configuración de turnos
   getShiftConfig:    ()      => api.get(`${BASE}/shift-config`).then(r => r.data),
   updateShiftConfig: (body)  => api.put(`${BASE}/shift-config`, body).then(r => r.data),

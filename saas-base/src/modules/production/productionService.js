@@ -13,6 +13,7 @@ const { resolveScrapType, legacyScrapTypeFor, legacyDestinationFor,
         DESTINATION_LEGACY_MAP } = require('./scrapTypeResolver')  // §6b
 const { evaluateAbnormal } = require('./abnormalScrapEvaluator')  // §6b
 const { resolveQualityGrade } = require('./qualityGradeResolver')  // §6f
+const { userCanActOnShift, listShiftMembers, getHandoverResponsibleUserId } = require('./shiftAuthService')
 
 // ─── Cola de órdenes ──────────────────────────────────────────────────────────
 
@@ -1655,7 +1656,7 @@ async function resolveEditMode(client, { tenantId, shiftId, userId }) {
   if (!rows[0]) throw createError(404, 'Turno no encontrado.')
   const shift = rows[0]
 
-  if (shift.status === 'active' && shift.operator_id === userId) {
+  if (shift.status === 'active' && await userCanActOnShift({ shiftId, userId, capability: 'capture', client })) {
     return { mode: 'operator', shift }
   }
   if (shift.status === 'pending_handover') {
@@ -1664,7 +1665,7 @@ async function resolveEditMode(client, { tenantId, shiftId, userId }) {
   }
   // Active pero el caller no es operador → no permitido
   if (shift.status === 'active') {
-    throw createError(403, 'Solo el operador del turno puede editar sus registros mientras está activo.')
+    throw createError(403, 'Solo los miembros del turno con permiso de captura pueden editar sus registros mientras está activo.')
   }
   throw createError(400, `No se pueden editar registros en este estado del turno: ${shift.status}.`)
 }
@@ -3323,8 +3324,15 @@ async function acceptHandover({
       [incomingShiftId, tenantId]
     )
     if (!inc[0]) throw createError(404, 'Turno entrante no encontrado.')
-    if (inc[0].operator_id !== userId) {
-      throw createError(403, 'Solo el operador del turno entrante puede recibir.')
+    // Si el turno entrante tiene un responsable designado, solo ese puede
+    // recibir. Sin designado → fallback a cualquier miembro con can_handover.
+    const designated = await getHandoverResponsibleUserId({ shiftId: incomingShiftId, client })
+    if (designated) {
+      if (designated !== userId) {
+        throw createError(403, 'Este turno entrante tiene un responsable designado de la recepción. Solo esa persona puede recibirlo.')
+      }
+    } else if (!(await userCanActOnShift({ shiftId: incomingShiftId, userId, capability: 'handover', client }))) {
+      throw createError(403, 'Solo los miembros del turno entrante con permiso de handover pueden recibirlo.')
     }
     if (inc[0].status !== 'pending_handover') {
       throw createError(409, 'Este turno ya no está en estado de recepción.')
@@ -3554,8 +3562,16 @@ async function closeShift({ tenantId, shiftId, userId, ipAddress, userAgent }) {
     [shiftId, tenantId]
   )
   if (!check[0]) throw createError(400, 'El turno no está activo.')
-  if (check[0].operator_id !== userId && check[0].supervisor_id !== userId) {
-    throw createError(403, 'Solo el operador asignado o el supervisor pueden cerrar este turno.')
+  // Si el turno tiene un responsable de handover designado, solo ese puede
+  // cerrar (firmar la entrega). Sin designado → fallback a cualquier miembro
+  // con can_validate (comportamiento previo).
+  const designatedHandover = await getHandoverResponsibleUserId({ shiftId })
+  if (designatedHandover) {
+    if (designatedHandover !== userId) {
+      throw createError(403, 'Este turno tiene un responsable designado de la entrega. Solo esa persona puede cerrarlo.')
+    }
+  } else if (!(await userCanActOnShift({ shiftId, userId, capability: 'validate' }))) {
+    throw createError(403, 'Solo los miembros del turno con permiso de validación pueden cerrarlo.')
   }
 
   return withTransaction(async (client) => {
@@ -4236,9 +4252,10 @@ async function reopenShift({ tenantId, shiftId, userId, ipAddress, userAgent }) 
   )
   if (!shift[0]) throw createError(400, 'El turno no está pendiente de validación.')
 
-  // Solo el operador asignado puede reabrirlo, y solo dentro de 30 minutos
-  if (shift[0].operator_id !== userId) {
-    throw createError(403, 'Solo el operador asignado puede reabrir el turno.')
+  // Solo miembros con capacidad de captura (típicamente el capturista del
+  // turno) pueden reabrirlo, y solo dentro de 30 minutos.
+  if (!(await userCanActOnShift({ shiftId, userId, capability: 'capture' }))) {
+    throw createError(403, 'Solo los miembros del turno con permiso de captura pueden reabrirlo.')
   }
   const minutesSinceClosed = (Date.now() - new Date(shift[0].closed_at).getTime()) / 60000
   if (minutesSinceClosed > 30) {
@@ -4295,8 +4312,8 @@ async function setShiftActiveOrder({ tenantId, shiftId, orderId, userId }) {
       [userId]
     )
     const isAdmin = roleRows.length > 0
-    if (!isAdmin && shift.operator_id !== userId && shift.supervisor_id !== userId) {
-      throw createError(403, 'Solo el operador o supervisor del turno pueden cambiar la orden activa.')
+    if (!isAdmin && !(await userCanActOnShift({ shiftId, userId, capability: 'validate', client }))) {
+      throw createError(403, 'Solo los miembros del turno con permiso de validación pueden cambiar la orden activa.')
     }
 
     // 3. Validar orden

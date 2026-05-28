@@ -3,10 +3,144 @@
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
 
+// ─── Helper: validar members[] contra catálogo y derivar legacy fields ───────
+//
+// SaaS v2 (sesión 2026-05-29):
+//  La programación de turnos acepta dos shapes en el body:
+//
+//   A) Legacy: { operatorId, supervisorId } — dos campos rígidos.
+//   B) Dinámico: { members: [{ userId, shiftRoleId }, ...] } — N miembros por
+//      rol del catálogo `tenant_shift_roles`.
+//
+//  Este helper acepta cualquiera de los dos, valida is_required y
+//  is_unique_per_shift contra el catálogo, y devuelve la lista normalizada
+//  más operator_id / supervisor_id derivados para mantener las columnas legacy
+//  `scheduled_shifts.operator_id|supervisor_id` siempre pobladas.
+//
+//  Reglas para derivar legacy fields:
+//   - operator_id   = primer miembro cuyo rol tiene can_capture=true
+//                     (típicamente el capturista). Fallback: primer miembro.
+//   - supervisor_id = primer miembro cuyo rol tiene can_validate=true
+//                     (típicamente el supervisor). Fallback: operator_id.
+//
+async function normalizeMembers(client, tenantId, {
+  members, operatorIdLegacy, supervisorIdLegacy,
+}) {
+  // 1) Catálogo activo del tenant
+  const { rows: catalog } = await client.query(
+    `SELECT id, code, name, is_required, is_unique_per_shift,
+            can_capture, can_validate, can_handover
+     FROM tenant_shift_roles
+     WHERE tenant_id = $1 AND is_active = true`,
+    [tenantId]
+  )
+  const roleById   = Object.fromEntries(catalog.map(r => [r.id,   r]))
+  const roleByCode = Object.fromEntries(catalog.map(r => [r.code, r]))
+
+  // 2) Si no llegan members, sintetizamos desde el shape legacy. Esto preserva
+  //    el flujo del frontend antiguo y los tests existentes que arman el body
+  //    con operator+supervisor directos.
+  if (!Array.isArray(members) || members.length === 0) {
+    if (!operatorIdLegacy) {
+      throw createError(400, 'Asigna al menos un miembro al turno.')
+    }
+    const synthesized = []
+    if (roleByCode.capturista) {
+      synthesized.push({ userId: operatorIdLegacy, shiftRoleId: roleByCode.capturista.id })
+    }
+    if (supervisorIdLegacy
+        && supervisorIdLegacy !== operatorIdLegacy
+        && roleByCode.supervisor) {
+      synthesized.push({ userId: supervisorIdLegacy, shiftRoleId: roleByCode.supervisor.id })
+    }
+    members = synthesized
+  }
+
+  if (members.length === 0) {
+    throw createError(400, 'Asigna al menos un miembro al turno.')
+  }
+
+  // 3) Cada role_id debe existir en el catálogo del tenant.
+  for (const m of members) {
+    if (!m.shiftRoleId || !m.userId) {
+      throw createError(400, 'Cada miembro requiere userId y shiftRoleId.')
+    }
+    if (!roleById[m.shiftRoleId]) {
+      throw createError(400, `Rol ${m.shiftRoleId} no existe en el catálogo del tenant o está inactivo.`)
+    }
+  }
+
+  // 3b) Máximo 1 miembro designado como responsable del handover por turno.
+  //     La designación es independiente de can_handover del catálogo — cualquier
+  //     miembro puede ser designado (lo decide quien programa el turno).
+  const handoverCount = members.filter(m => m.isHandoverResponsible).length
+  if (handoverCount > 1) {
+    throw createError(400, 'Solo un miembro puede ser responsable del handover por turno.')
+  }
+
+  // 4) is_required: cada rol marcado como requerido debe tener al menos 1 miembro.
+  const countByRole = {}
+  for (const m of members) {
+    countByRole[m.shiftRoleId] = (countByRole[m.shiftRoleId] || 0) + 1
+  }
+  for (const r of catalog) {
+    if (r.is_required && !countByRole[r.id]) {
+      throw createError(400, `Falta asignar el rol "${r.name}" (requerido).`)
+    }
+  }
+
+  // 5) is_unique_per_shift: si está marcado, solo puede haber un miembro con ese rol.
+  for (const r of catalog) {
+    if (r.is_unique_per_shift && (countByRole[r.id] || 0) > 1) {
+      throw createError(400, `Solo puede haber un miembro con el rol "${r.name}" por turno.`)
+    }
+  }
+
+  // 6) Derivar operator_id (can_capture) y supervisor_id (can_validate) para
+  //    mantener compat con los flujos que siguen usando estos campos en el
+  //    runtime mientras se completa el refactor (la mig 124 los mantiene NOT NULL).
+  const captureMember = members.find(m => roleById[m.shiftRoleId].can_capture)
+  const validateMember = members.find(m => roleById[m.shiftRoleId].can_validate)
+  const derivedOperatorId   = captureMember?.userId   || members[0].userId
+  const derivedSupervisorId = validateMember?.userId  || derivedOperatorId
+
+  return {
+    members,
+    derivedOperatorId,
+    derivedSupervisorId,
+    catalog,
+    roleById,
+  }
+}
+
+// ─── Helper: lee members de un turno (programado o de runtime) ───────────────
+//
+// Devuelve los miembros del turno con info del rol embebida.
+//   table: 'scheduled_shift_members' | 'production_shift_members'
+//   fkColumn: 'scheduled_shift_id'   | 'shift_id'
+async function readMembers(client, { table, fkColumn, shiftId }) {
+  const { rows } = await client.query(
+    `SELECT m.id, m.user_id, m.role_id, m.is_handover_responsible,
+            u.full_name AS user_name, u.email AS user_email,
+            r.code AS role_code, r.name AS role_name,
+            r.is_required, r.is_unique_per_shift,
+            r.can_capture, r.can_validate, r.can_handover,
+            r.sort_order
+       FROM ${table} m
+       JOIN users u                ON u.id = m.user_id
+       JOIN tenant_shift_roles r   ON r.id = m.role_id
+      WHERE m.${fkColumn} = $1
+      ORDER BY r.sort_order, u.full_name`,
+    [shiftId]
+  )
+  return rows
+}
+
 // ─── Crear turno programado ───────────────────────────────────────────────────
 async function scheduleShift({
   tenantId, productionOrderId, shiftNumber, scheduledDate,
   scheduledStart, operatorId, supervisorId, lineId, notes,
+  members,
   isOvertimeAcknowledged, overtimeContext,
   userId, ipAddress, userAgent,
 }) {
@@ -38,38 +172,66 @@ async function scheduleShift({
     }
   }
 
-  const { rows } = await query(
-    `INSERT INTO scheduled_shifts
-       (tenant_id, production_order_id, shift_number, scheduled_date,
-        scheduled_start, operator_id, supervisor_id, line_id, notes, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-     RETURNING *`,
-    [tenantId, productionOrderId || null, shiftNumber, scheduledDate,
-     scheduledStart, operatorId, supervisorId, lineId || 1, notes || null, userId]
-  )
+  return withTransaction(async (client) => {
+    const normalized = await normalizeMembers(client, tenantId, {
+      members, operatorIdLegacy: operatorId, supervisorIdLegacy: supervisorId,
+    })
 
-  await audit({
-    tenantId, userId, action: 'scheduled_shift.created', resource: 'scheduled_shifts',
-    resourceId: rows[0].id,
-    payload: { scheduledDate, shiftNumber, scheduledStart, hasOrder: !!productionOrderId },
-    ipAddress, userAgent,
-  })
+    const { rows } = await client.query(
+      `INSERT INTO scheduled_shifts
+         (tenant_id, production_order_id, shift_number, scheduled_date,
+          scheduled_start, operator_id, supervisor_id, line_id, notes, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       RETURNING *`,
+      [tenantId, productionOrderId || null, shiftNumber, scheduledDate,
+       scheduledStart,
+       normalized.derivedOperatorId, normalized.derivedSupervisorId,
+       lineId || 1, notes || null, userId]
+    )
+    const created = rows[0]
 
-  // Registro de tiempo extra: el supervisor confirmó "Sí, programar aunque
-  // exceda el límite". overtimeContext trae los detalles que la UI mostró.
-  if (isOvertimeAcknowledged) {
+    for (const m of normalized.members) {
+      await client.query(
+        `INSERT INTO scheduled_shift_members
+           (scheduled_shift_id, user_id, role_id, is_handover_responsible, notes)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [created.id, m.userId, m.shiftRoleId, !!m.isHandoverResponsible, m.notes || null]
+      )
+    }
+
     await audit({
-      tenantId, userId, action: 'scheduled_shift.overtime_acknowledged',
-      resource: 'scheduled_shifts', resourceId: rows[0].id,
+      tenantId, userId, action: 'scheduled_shift.created', resource: 'scheduled_shifts',
+      resourceId: created.id,
       payload: {
-        scheduledDate, shiftNumber, operatorId,
-        ...(overtimeContext && typeof overtimeContext === 'object' ? overtimeContext : {}),
+        scheduledDate, shiftNumber, scheduledStart,
+        hasOrder: !!productionOrderId,
+        memberCount: normalized.members.length,
       },
       ipAddress, userAgent,
     })
-  }
 
-  return rows[0]
+    // Registro de tiempo extra: el supervisor confirmó "Sí, programar aunque
+    // exceda el límite". overtimeContext trae los detalles que la UI mostró.
+    if (isOvertimeAcknowledged) {
+      await audit({
+        tenantId, userId, action: 'scheduled_shift.overtime_acknowledged',
+        resource: 'scheduled_shifts', resourceId: created.id,
+        payload: {
+          scheduledDate, shiftNumber, operatorId: normalized.derivedOperatorId,
+          ...(overtimeContext && typeof overtimeContext === 'object' ? overtimeContext : {}),
+        },
+        ipAddress, userAgent,
+      })
+    }
+
+    const memberRows = await readMembers(client, {
+      table: 'scheduled_shift_members',
+      fkColumn: 'scheduled_shift_id',
+      shiftId: created.id,
+    })
+
+    return { ...created, members: memberRows }
+  })
 }
 
 // ─── Horas programadas del operador (día y semana) ───────────────────────────
@@ -88,30 +250,35 @@ async function getOperatorHoursForDate({ tenantId, operatorId, date }) {
   const dayMax  = cfgRows[0]?.max_hours_per_day  ?? 9
   const weekMax = cfgRows[0]?.max_hours_per_week ?? 48
 
-  // Día solicitado: suma de duration_hours de los turnos no-cancelados.
-  const { rows: dayRows } = await query(
-    `SELECT COALESCE(SUM(COALESCE(sc.duration_hours, 8)), 0)::INT AS hours
-     FROM scheduled_shifts ss
-     LEFT JOIN tenant_shift_config sc
-       ON sc.tenant_id = ss.tenant_id
-       AND sc.shift_number::TEXT = ss.shift_number::TEXT
+  // Sumamos turnos donde el usuario aparezca como miembro O como operator_id
+  // legacy. El join contra scheduled_shift_members captura todos los roles del
+  // catálogo dinámico; el OR a operator_id mantiene compat con turnos viejos
+  // que se programaron antes del refactor.
+  const baseSelect = `
+    SELECT COALESCE(SUM(COALESCE(sc.duration_hours, 8)), 0)::INT AS hours
+      FROM scheduled_shifts ss
+      LEFT JOIN tenant_shift_config sc
+        ON sc.tenant_id = ss.tenant_id
+        AND sc.shift_number::TEXT = ss.shift_number::TEXT
      WHERE ss.tenant_id = $1
-       AND ss.operator_id = $2
-       AND ss.scheduled_date = $3
-       AND ss.status <> 'cancelled'`,
+       AND ss.status <> 'cancelled'
+       AND (
+         ss.operator_id = $2
+         OR EXISTS (
+           SELECT 1 FROM scheduled_shift_members ssm
+            WHERE ssm.scheduled_shift_id = ss.id AND ssm.user_id = $2
+         )
+       )
+  `
+
+  const { rows: dayRows } = await query(
+    `${baseSelect} AND ss.scheduled_date = $3`,
     [tenantId, operatorId, date]
   )
 
   // Semana: lunes-domingo que contiene `date` (PostgreSQL ISO: lunes=1).
   const { rows: weekRows } = await query(
-    `SELECT COALESCE(SUM(COALESCE(sc.duration_hours, 8)), 0)::INT AS hours
-     FROM scheduled_shifts ss
-     LEFT JOIN tenant_shift_config sc
-       ON sc.tenant_id = ss.tenant_id
-       AND sc.shift_number::TEXT = ss.shift_number::TEXT
-     WHERE ss.tenant_id = $1
-       AND ss.operator_id = $2
-       AND ss.status <> 'cancelled'
+    `${baseSelect}
        AND ss.scheduled_date >= date_trunc('week', $3::date)::date
        AND ss.scheduled_date <  date_trunc('week', $3::date)::date + INTERVAL '7 days'`,
     [tenantId, operatorId, date]
@@ -130,7 +297,18 @@ async function listScheduledShifts({ tenantId, operatorId, dateFrom, dateTo, sta
   const params = [tenantId]
   const filters = []
 
-  if (operatorId) { params.push(operatorId); filters.push(`ss.operator_id = $${params.length}`) }
+  // Filtrar por user_id: aparece como operator legacy O como miembro del turno
+  // bajo cualquier rol del catálogo. Esto cubre las dos shapes mientras coexisten.
+  if (operatorId) {
+    params.push(operatorId)
+    filters.push(`(
+      ss.operator_id = $${params.length}
+      OR EXISTS (
+        SELECT 1 FROM scheduled_shift_members ssm
+         WHERE ssm.scheduled_shift_id = ss.id AND ssm.user_id = $${params.length}
+      )
+    )`)
+  }
   if (status)     { params.push(status);     filters.push(`ss.status = $${params.length}`) }
   if (dateFrom)   { params.push(dateFrom);   filters.push(`ss.scheduled_date >= $${params.length}`) }
   if (dateTo)     { params.push(dateTo);     filters.push(`ss.scheduled_date <= $${params.length}`) }
@@ -154,7 +332,32 @@ async function listScheduledShifts({ tenantId, operatorId, dateFrom, dateTo, sta
      ORDER BY ss.scheduled_date, ss.scheduled_start`,
     params
   )
-  return rows
+
+  if (rows.length === 0) return rows
+
+  // Adjuntar miembros con una sola query batch — agrupado por scheduled_shift_id.
+  const ids = rows.map(r => r.id)
+  const { rows: memberRows } = await query(
+    `SELECT ssm.scheduled_shift_id, ssm.id, ssm.user_id, ssm.role_id,
+            ssm.is_handover_responsible,
+            u.full_name AS user_name, u.email AS user_email,
+            r.code AS role_code, r.name AS role_name,
+            r.is_required, r.is_unique_per_shift,
+            r.can_capture, r.can_validate, r.can_handover,
+            r.sort_order
+       FROM scheduled_shift_members ssm
+       JOIN users u              ON u.id = ssm.user_id
+       JOIN tenant_shift_roles r ON r.id = ssm.role_id
+      WHERE ssm.scheduled_shift_id = ANY($1::uuid[])
+      ORDER BY r.sort_order, u.full_name`,
+    [ids]
+  )
+  const membersByShift = {}
+  for (const m of memberRows) {
+    if (!membersByShift[m.scheduled_shift_id]) membersByShift[m.scheduled_shift_id] = []
+    membersByShift[m.scheduled_shift_id].push(m)
+  }
+  return rows.map(r => ({ ...r, members: membersByShift[r.id] || [] }))
 }
 
 // ─── Turno del operador para hoy ─────────────────────────────────────────────
@@ -178,32 +381,68 @@ async function updateScheduledShift({
   tenantId, id, scheduledDate, scheduledStart,
   operatorId, notes, status,
   isOvertime, absenceRegistered, replacementOperatorId,
+  members,
   userId, ipAddress, userAgent,
 }) {
-  const { rows } = await query(
-    `UPDATE scheduled_shifts SET
-       scheduled_date        = COALESCE($1, scheduled_date),
-       scheduled_start       = COALESCE($2, scheduled_start),
-       operator_id           = COALESCE($3, operator_id),
-       notes                 = COALESCE($4, notes),
-       status                = COALESCE($5, status),
-       is_overtime           = COALESCE($6, is_overtime),
-       absence_registered    = COALESCE($7, absence_registered),
-       replacement_operator_id = COALESCE($8, replacement_operator_id)
-     WHERE id = $9 AND tenant_id = $10 AND status = 'scheduled'
-     RETURNING *`,
-    [scheduledDate || null, scheduledStart || null, operatorId || null,
-     notes ?? null, status || null,
-     isOvertime ?? null, absenceRegistered ?? null, replacementOperatorId || null,
-     id, tenantId]
-  )
-  if (!rows[0]) throw createError(400, 'El turno no existe o ya no se puede modificar.')
+  return withTransaction(async (client) => {
+    // Si llega members[], re-validamos y re-derivamos operator/supervisor.
+    let derivedOperatorId   = operatorId || null
+    let derivedSupervisorId = null
+    if (Array.isArray(members)) {
+      const normalized = await normalizeMembers(client, tenantId, {
+        members, operatorIdLegacy: operatorId, supervisorIdLegacy: null,
+      })
+      derivedOperatorId   = normalized.derivedOperatorId
+      derivedSupervisorId = normalized.derivedSupervisorId
 
-  await audit({
-    tenantId, userId, action: 'scheduled_shift.updated', resource: 'scheduled_shifts',
-    resourceId: id, payload: { status }, ipAddress, userAgent,
+      // Reemplazar miembros existentes (estrategia simple: delete + insert).
+      await client.query(
+        `DELETE FROM scheduled_shift_members WHERE scheduled_shift_id = $1`,
+        [id]
+      )
+      for (const m of normalized.members) {
+        await client.query(
+          `INSERT INTO scheduled_shift_members
+             (scheduled_shift_id, user_id, role_id, is_handover_responsible, notes)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [id, m.userId, m.shiftRoleId, !!m.isHandoverResponsible, m.notes || null]
+        )
+      }
+    }
+
+    const { rows } = await client.query(
+      `UPDATE scheduled_shifts SET
+         scheduled_date        = COALESCE($1, scheduled_date),
+         scheduled_start       = COALESCE($2, scheduled_start),
+         operator_id           = COALESCE($3, operator_id),
+         supervisor_id         = COALESCE($4, supervisor_id),
+         notes                 = COALESCE($5, notes),
+         status                = COALESCE($6, status),
+         is_overtime           = COALESCE($7, is_overtime),
+         absence_registered    = COALESCE($8, absence_registered),
+         replacement_operator_id = COALESCE($9, replacement_operator_id)
+       WHERE id = $10 AND tenant_id = $11 AND status = 'scheduled'
+       RETURNING *`,
+      [scheduledDate || null, scheduledStart || null,
+       derivedOperatorId, derivedSupervisorId,
+       notes ?? null, status || null,
+       isOvertime ?? null, absenceRegistered ?? null, replacementOperatorId || null,
+       id, tenantId]
+    )
+    if (!rows[0]) throw createError(400, 'El turno no existe o ya no se puede modificar.')
+
+    await audit({
+      tenantId, userId, action: 'scheduled_shift.updated', resource: 'scheduled_shifts',
+      resourceId: id, payload: { status }, ipAddress, userAgent,
+    })
+
+    const memberRows = await readMembers(client, {
+      table: 'scheduled_shift_members',
+      fkColumn: 'scheduled_shift_id',
+      shiftId: id,
+    })
+    return { ...rows[0], members: memberRows }
   })
-  return rows[0]
 }
 
 // ─── Operador confirma presencia ──────────────────────────────────────────────
@@ -236,7 +475,6 @@ async function confirmPresence({ tenantId, id, userId, ipAddress, userAgent }) {
 
     // Determinar el status del nuevo turno
     const newStatus = prevActiveShift ? 'pending_handover' : 'active'
-    const startedAt = prevActiveShift ? null : 'NOW()'
 
     // Crear el turno real en production_shifts
     const { rows: newShift } = await client.query(
@@ -248,6 +486,17 @@ async function confirmPresence({ tenantId, id, userId, ipAddress, userAgent }) {
       [tenantId, shift.production_order_id, shift.shift_number,
        shift.scheduled_date, shift.operator_id, shift.supervisor_id, newStatus]
     )
+
+    // Copiar los miembros del turno programado al turno de runtime.
+    // Si por algún motivo el scheduled no tenía members (turno legacy creado
+    // antes del refactor), sintetizamos uno a partir del operator_id + el rol
+    // 'capturista' del catálogo, para que el runtime no quede sin members.
+    await copyMembersToRuntime(client, tenantId, {
+      scheduledShiftId: shift.id,
+      productionShiftId: newShift[0].id,
+      fallbackOperatorId: shift.operator_id,
+      fallbackSupervisorId: shift.supervisor_id,
+    })
 
     // Marcar orden como en proceso
     await client.query(
@@ -310,6 +559,58 @@ async function confirmPresence({ tenantId, id, userId, ipAddress, userAgent }) {
   })
 }
 
+// ─── Helper: copia members programados al turno de runtime ──────────────────
+//
+// SaaS v2 (sesión 2026-05-29):
+//  Cuando un turno programado se activa (scheduled → production), los miembros
+//  asignados durante la planificación se copian a `production_shift_members`
+//  para que el runtime (captura, validación, handover) opere sobre el catálogo
+//  dinámico de roles en vez de los campos rígidos operator_id/supervisor_id.
+//
+//  Si el scheduled no tenía miembros explícitos (turno legacy programado
+//  antes del refactor o creado por un test), sintetizamos uno mínimo desde
+//  operator_id usando el rol 'capturista' del catálogo del tenant. Sin esa
+//  síntesis los turnos legacy quedarían sin members y el runtime caería al
+//  fallback de operator_id, lo que ya está cubierto pero perdería trazabilidad.
+async function copyMembersToRuntime(client, tenantId, {
+  scheduledShiftId, productionShiftId,
+  fallbackOperatorId, fallbackSupervisorId,
+}) {
+  const { rows: existing } = await client.query(
+    `SELECT user_id, role_id, is_handover_responsible, notes
+       FROM scheduled_shift_members
+      WHERE scheduled_shift_id = $1`,
+    [scheduledShiftId]
+  )
+
+  let toCopy = existing
+  if (existing.length === 0) {
+    const { rows: roles } = await client.query(
+      `SELECT id, code FROM tenant_shift_roles
+        WHERE tenant_id = $1 AND code IN ('capturista','supervisor') AND is_active = true`,
+      [tenantId]
+    )
+    const capturista = roles.find(r => r.code === 'capturista')
+    const supervisor = roles.find(r => r.code === 'supervisor')
+    toCopy = []
+    if (capturista && fallbackOperatorId) {
+      toCopy.push({ user_id: fallbackOperatorId, role_id: capturista.id, is_handover_responsible: false, notes: null })
+    }
+    if (supervisor && fallbackSupervisorId && fallbackSupervisorId !== fallbackOperatorId) {
+      toCopy.push({ user_id: fallbackSupervisorId, role_id: supervisor.id, is_handover_responsible: false, notes: null })
+    }
+  }
+
+  for (const m of toCopy) {
+    await client.query(
+      `INSERT INTO production_shift_members
+         (shift_id, user_id, role_id, is_handover_responsible, notes)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [productionShiftId, m.user_id, m.role_id, !!m.is_handover_responsible, m.notes || null]
+    )
+  }
+}
+
 // ─── Job: auto-activar turnos cuya hora ya pasó ──────────────────────────────
 // Se llama cada minuto desde un setInterval en app.js
 async function autoActivatePendingShifts() {
@@ -347,6 +648,13 @@ async function autoActivatePendingShifts() {
         )
 
         if (newShift[0]) {
+          await copyMembersToRuntime(client, shift.tenant_id, {
+            scheduledShiftId:    shift.id,
+            productionShiftId:   newShift[0].id,
+            fallbackOperatorId:  shift.operator_id,
+            fallbackSupervisorId: shift.supervisor_id,
+          })
+
           await client.query(
             `UPDATE production_orders SET status = 'in_progress'
              WHERE id = $1 AND status = 'released'`,
@@ -384,4 +692,8 @@ module.exports = {
   confirmPresence,
   autoActivatePendingShifts,
   getOperatorHoursForDate,
+  // Exportado para que productionService lo reuse al validar quién puede
+  // capturar/validar dentro de un production_shift activo.
+  readMembers,
+  copyMembersToRuntime,
 }

@@ -9,6 +9,8 @@ const requireModule       = require('../../middleware/requireModule')
 const svc                 = require('./productionService')
 const svcSched            = require('./scheduledShiftService')
 const svcShiftCfg         = require('./shiftConfigService')
+const { redactOrder, redactOrderList } = require('./recipeRedactor')
+const { getUserPermissions } = require('../roles/permissionService')
 
 const router = express.Router()
 router.use(tenantResolver)
@@ -33,14 +35,17 @@ router.get('/queue', checkPermission('production','read'), async (req,res,next) 
 router.get('/orders', checkPermission('production','read'), async (req,res,next) => {
   try {
     const { status,lineId,page,limit } = req.query
-    res.json(await svc.listOrders({ tenantId:tid(req), status, lineId, page:parseInt(page||1), limit:parseInt(limit||50) }))
+    const result = await svc.listOrders({ tenantId:tid(req), status, lineId, page:parseInt(page||1), limit:parseInt(limit||50) })
+    const perms  = await getUserPermissions(req.auth.userId)
+    res.json({ ...result, data: redactOrderList(result.data, perms) })
   } catch(err){next(err)}
 })
 router.get('/orders/:id', checkPermission('production','read'), async (req,res,next) => {
   try {
     const o = await svc.getOrder({ tenantId:tid(req), orderId:req.params.id })
     if (!o) return res.status(404).json({ error:'Orden no encontrada.' })
-    res.json(o)
+    const perms = await getUserPermissions(req.auth.userId)
+    res.json(redactOrder(o, perms))
   } catch(err){next(err)}
 })
 router.post('/orders', checkPermission('production','manage'), async (req,res,next) => {
@@ -51,7 +56,7 @@ router.post('/orders', checkPermission('production','manage'), async (req,res,ne
             additionalCosts, additional_costs,
             additionalCostsNotes, additional_costs_notes } = req.body
     if (!productId||!quantityPackages) return res.status(400).json({ error:'Faltan campos requeridos.' })
-    res.status(201).json(await svc.createOrder({
+    const created = await svc.createOrder({
       tenantId:tid(req), productId,rawMaterialId,lengthMm,
       quantityPackages,lineId,priority,deliveryDate,notes,mpFormula,
       recipeId: recipeId ?? recipe_id ?? null,
@@ -59,7 +64,9 @@ router.post('/orders', checkPermission('production','manage'), async (req,res,ne
       additionalCosts:  additionalCosts  ?? additional_costs  ?? undefined,
       additionalCostsNotes: additionalCostsNotes ?? additional_costs_notes ?? undefined,
       userId:uid(req),ipAddress:ip(req),userAgent:ua(req)
-    }))
+    })
+    const perms = await getUserPermissions(req.auth.userId)
+    res.status(201).json(redactOrder(created, perms))
   } catch(err){
     if (err.status) return res.status(err.status).json({ error: err.message })
     next(err)
@@ -143,7 +150,7 @@ router.patch('/orders/:id', checkPermission('production','update'), async (req,r
       has('recipeId') ? recipeId : has('recipe_id') ? recipe_id : undefined
     const resolvedCa =
       has('customAttributes') ? customAttributes : has('custom_attributes') ? custom_attributes : undefined
-    res.json(await svc.updateOrder({
+    const updated = await svc.updateOrder({
       tenantId:tid(req), orderId:req.params.id,
       notes, priority, deliveryDate, mpFormula,
       recipeId: resolvedRecipeId,
@@ -151,7 +158,9 @@ router.patch('/orders/:id', checkPermission('production','update'), async (req,r
       additionalCosts:  has('additionalCosts') ? additionalCosts : has('additional_costs') ? additional_costs : undefined,
       additionalCostsNotes: has('additionalCostsNotes') ? additionalCostsNotes : has('additional_costs_notes') ? additional_costs_notes : undefined,
       userId:uid(req), ipAddress:ip(req), userAgent:ua(req)
-    }))
+    })
+    const perms = await getUserPermissions(req.auth.userId)
+    res.json(redactOrder(updated, perms))
   } catch(err){
     if (err.status) return res.status(err.status).json({ error: err.message })
     next(err)
@@ -188,7 +197,7 @@ router.post('/orders/:id/change-formula', checkPermission('production','change_f
     }))
   } catch(err){next(err)}
 })
-router.get('/orders/:id/formula-history', checkPermission('production','read'), async (req,res,next) => {
+router.get('/orders/:id/formula-history', checkPermission('production','read_recipe'), async (req,res,next) => {
   try {
     res.json(await svc.getOrderFormulaHistory({ tenantId:tid(req), orderId:req.params.id }))
   } catch(err){next(err)}
@@ -233,6 +242,28 @@ router.get('/shifts/:id', checkPermission('production','read'), async (req,res,n
     if (!s) return res.status(404).json({ error:'Turno no encontrado.' })
     res.json(s)
   } catch(err){next(err)}
+})
+// Miembros activos del turno (operativo) con su rol del catálogo. Lo consume
+// la UI de captura para decidir qué botones mostrar al usuario actual.
+router.get('/shifts/:id/members', checkPermission('production','read'), async (req,res,next) => {
+  try {
+    const { listShiftMembers } = require('./shiftAuthService')
+    res.json(await listShiftMembers({ shiftId: req.params.id }))
+  } catch(err){next(err)}
+})
+// Reasignar al responsable del handover durante el turno (relevo de última hora,
+// ausencia del designado original, etc.). Body: { memberId } del production_shift_members.
+router.post('/shifts/:id/set-handover-responsible', checkPermission('production','update'), async (req,res,next) => {
+  try {
+    const { setHandoverResponsible } = require('./shiftAuthService')
+    const { memberId } = req.body
+    if (!memberId) return res.status(400).json({ error: 'memberId es requerido.' })
+    const updated = await setHandoverResponsible({ shiftId: req.params.id, memberId })
+    res.json(updated)
+  } catch(err){
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
 })
 router.post('/shifts', checkPermission('production','create'), async (req,res,next) => {
   try {
@@ -508,11 +539,20 @@ router.get('/scheduled-shifts/operator-hours', checkPermission('production','rea
 router.post('/scheduled-shifts', checkPermission('production','manage'), async (req,res,next) => {
   try {
     const { productionOrderId,shiftNumber,scheduledDate,scheduledStart,operatorId,supervisorId,lineId,notes,
+            members,
             isOvertimeAcknowledged, overtimeContext } = req.body
-    if (!shiftNumber||!scheduledDate||!scheduledStart||!operatorId||!supervisorId) return res.status(400).json({ error:'Faltan campos requeridos.' })
+    // Aceptamos dos shapes:
+    //   Legacy: { operatorId, supervisorId } — el service los amarra al rol capturista/supervisor.
+    //   Dinámico: { members: [{ userId, shiftRoleId }, ...] }.
+    // Al menos uno de los dos debe llegar para validar contra el catálogo.
+    const hasMembers = Array.isArray(members) && members.length > 0
+    if (!shiftNumber||!scheduledDate||!scheduledStart || (!hasMembers && (!operatorId||!supervisorId))) {
+      return res.status(400).json({ error:'Faltan campos requeridos (asigna miembros o operator+supervisor).' })
+    }
     res.status(201).json(await svcSched.scheduleShift({
       tenantId:tid(req), productionOrderId,shiftNumber,scheduledDate,
       scheduledStart,operatorId,supervisorId,lineId,notes,
+      members,
       isOvertimeAcknowledged: !!isOvertimeAcknowledged, overtimeContext,
       userId:uid(req),ipAddress:ip(req),userAgent:ua(req)
     }))
@@ -523,8 +563,8 @@ router.post('/scheduled-shifts', checkPermission('production','manage'), async (
 })
 router.patch('/scheduled-shifts/:id', checkPermission('production','manage'), async (req,res,next) => {
   try {
-    const { scheduledDate,scheduledStart,operatorId,notes,status,isOvertime,absenceRegistered,replacementOperatorId } = req.body
-    res.json(await svcSched.updateScheduledShift({ tenantId:tid(req), id:req.params.id, scheduledDate,scheduledStart,operatorId,notes,status,isOvertime,absenceRegistered,replacementOperatorId, userId:uid(req),ipAddress:ip(req),userAgent:ua(req) }))
+    const { scheduledDate,scheduledStart,operatorId,notes,status,isOvertime,absenceRegistered,replacementOperatorId,members } = req.body
+    res.json(await svcSched.updateScheduledShift({ tenantId:tid(req), id:req.params.id, scheduledDate,scheduledStart,operatorId,notes,status,isOvertime,absenceRegistered,replacementOperatorId,members, userId:uid(req),ipAddress:ip(req),userAgent:ua(req) }))
   } catch(err){next(err)}
 })
 router.post('/scheduled-shifts/:id/confirm', async (req,res,next) => {

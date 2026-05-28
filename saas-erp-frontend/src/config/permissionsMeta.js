@@ -176,9 +176,12 @@ export const ROLE_TEMPLATES = [
   {
     key:   'produccion_supervisor',
     label: '👷 Producción (supervisor)',
-    description: 'Todo de producción más validación, cambio de fórmula y aprobación de scrap.',
+    description: 'Todo de producción incluyendo fórmula de mezcla (kg + %), validación, cambio de fórmula y aprobación de scrap. No ve costos.',
     matches: (p) =>
-      (p.resource === 'production') ||
+      // Producción completa EXCEPTO costos de receta (información financiera reservada
+      // a costeo / admin). Incluye explícitamente read_recipe para que el supervisor
+      // vea la composición que debe preparar el operador de mezcla.
+      (p.resource === 'production' && p.action !== 'read_recipe_costs') ||
       (p.resource === 'scrap') ||
       (p.resource === 'inventory') ||
       (p.resource === 'products' && p.action === 'read') ||

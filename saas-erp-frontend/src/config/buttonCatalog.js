@@ -225,6 +225,20 @@ export const BUTTON_CATALOG = [
     permission:       'production:manage',
   },
   {
+    key:              'production.view-recipe',
+    label:            'Ver fórmula de mezcla (ingredientes y kg) en la orden',
+    screen:           'Producción · Órdenes',
+    accessPermission: 'production:read',
+    permission:       'production:read_recipe',
+  },
+  {
+    key:              'production.view-recipe-costs',
+    label:            'Ver costos por kg y costo mezclado en la fórmula',
+    screen:           'Producción · Órdenes',
+    accessPermission: 'production:read_recipe',
+    permission:       'production:read_recipe_costs',
+  },
+  {
     key:              'production.configure-shifts',
     label:            'Configurar horarios de turnos',
     screen:           'Producción · Programación',

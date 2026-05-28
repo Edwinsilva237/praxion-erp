@@ -412,7 +412,17 @@ function EditModal({ shift, users, shiftConfig = [], onClose, onSaved }) {
 }
 
 // ── Modal programar turno ───────────────────────────────────────────────────
-function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervisor = true, shiftConfig = [], tenantConfig = null, onClose }) {
+//
+// SaaS v2: la asignación de personas al turno se hace por catálogo de
+// `tenant_shift_roles` (capturista, supervisor, calidad, alimentador, etc., o
+// roles custom del tenant). Para cada rol activo, renderizamos un selector
+// (1 persona si is_unique_per_shift, varias si no). El backend valida que
+// todos los roles `is_required` tengan al menos 1 miembro.
+//
+// El `operatorId` derivado (para el cálculo de horas y el shape legacy) es el
+// primer miembro asignado al rol con `can_capture=true` — típicamente el
+// capturista del catálogo.
+function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, shiftRoles = [], shiftConfig = [], tenantConfig = null, onClose }) {
   const qc = useQueryClient()
 
   const effectiveShifts = useMemo(() => buildEffectiveShifts(shiftConfig), [shiftConfig])
@@ -421,21 +431,43 @@ function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervi
   const [shiftNum, setShiftNum]     = useState(defaultShift || '1')
   const [date, setDate]             = useState(defaultDate || toLocalISODate(new Date()))
   const [start, setStart]           = useState(effectiveShifts.find(s => s.number === (defaultShift || '1'))?.hour || '06:00')
-  const [operatorId, setOperatorId] = useState('')
-  const [supervisorId, setSuperv]   = useState('')
+  // membersByRole: { [roleId]: [userId, userId, ...] }. Los roles únicos tienen
+  // longitud máx 1; los no-únicos pueden tener N.
+  const [membersByRole, setMembersByRole] = useState({})
+  // responsibleKey: clave única del miembro designado como responsable del
+  // handover (formato `roleId::userId`). Solo uno por turno. Lo que firma la
+  // entrega cuando el turno cierra y la recepción cuando arranca.
+  const [responsibleKey, setResponsibleKey] = useState(null)
   const [notes, setNotes]           = useState('')
   const [error, setError]           = useState(null)
   const [ackOvertime, setAckOT]     = useState(false)
 
-  // Estado de validación visual: marca campos vacíos cuando el usuario intenta enviar
-  // La orden NO es obligatoria asignar (es opcional); operador siempre, supervisor solo si el tenant lo usa.
+  const activeRoles = useMemo(
+    () => (shiftRoles || []).filter(r => r.is_active !== false)
+                            .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)),
+    [shiftRoles]
+  )
+
+  // Derivar operatorId (para el cálculo de horas y el campo legacy del backend):
+  // primer miembro asignado a un rol con can_capture=true. Fallback: primer
+  // miembro de cualquier rol.
+  const operatorId = useMemo(() => {
+    const captureRole = activeRoles.find(r => r.can_capture)
+    if (captureRole && membersByRole[captureRole.id]?.[0]) return membersByRole[captureRole.id][0]
+    for (const r of activeRoles) {
+      if (membersByRole[r.id]?.[0]) return membersByRole[r.id][0]
+    }
+    return ''
+  }, [membersByRole, activeRoles])
+
+  // Estado de validación visual: marca campos vacíos cuando el usuario intenta enviar.
   const [submitted, setSubmitted]   = useState(false)
-  const missingOperator   = submitted && !operatorId
-  const missingSupervisor = submitted && usesSupervisor && !supervisorId
-  const missingCount      = (missingOperator ? 1 : 0) + (missingSupervisor ? 1 : 0)
+  const requiredMissing = submitted ? activeRoles.filter(r => r.is_required && (membersByRole[r.id]?.length || 0) === 0) : []
+  const missingCount = requiredMissing.length
 
   const noOrders = !orders || orders.length === 0
   const noUsers  = !users  || users.length  === 0
+  const noRoles  = activeRoles.length === 0
 
   // Horas ya programadas del operador en el día/semana — solo consultar cuando
   // hay operador y fecha. Si el límite del tenant es null/0 lo ignoramos.
@@ -459,18 +491,35 @@ function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervi
   // Reset del check cuando cambia operador/fecha/turno (la condición de exceso cambia)
   useEffect(() => { setAckOT(false) }, [operatorId, date, shiftNum])
 
+  // Compone el payload `members` a partir de membersByRole. Marca
+  // isHandoverResponsible al miembro indicado por responsibleKey.
+  const buildMembersPayload = () => {
+    const list = []
+    for (const r of activeRoles) {
+      for (const userId of (membersByRole[r.id] || [])) {
+        if (userId) {
+          const key = `${r.id}::${userId}`
+          list.push({
+            userId,
+            shiftRoleId: r.id,
+            isHandoverResponsible: responsibleKey === key,
+          })
+        }
+      }
+    }
+    return list
+  }
+
   const mutation = useMutation({
     mutationFn: () => {
-      // La orden es OPCIONAL: el operador la elige de la cola al iniciar.
-      if (!operatorId) throw new Error('Operador requerido.')
-      if (usesSupervisor && !supervisorId) throw new Error('Supervisor requerido.')
+      const members = buildMembersPayload()
+      if (members.length === 0) throw new Error('Asigna al menos un miembro al turno.')
       return productionApi.scheduleShift({
         productionOrderId: orderId || null,
         shiftNumber:       shiftNum,
         scheduledDate:     date,
         scheduledStart:    start,
-        operatorId,
-        supervisorId: usesSupervisor ? supervisorId : (supervisorId || operatorId),
+        members,
         notes: notes || null,
         isOvertimeAcknowledged: excedeAlgo && ackOvertime,
         overtimeContext: excedeAlgo ? {
@@ -517,9 +566,18 @@ function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervi
   function handleSubmit() {
     setSubmitted(true)
     setError(null)
-    // Operador siempre requerido; supervisor solo si el tenant lo usa.
-    if (!operatorId || (usesSupervisor && !supervisorId)) {
-      setError('Completa los campos marcados en rojo antes de continuar.')
+    if (noRoles) {
+      setError('No hay roles de turno activos. Ve a Configuración → Roles de turno y activa al menos uno.')
+      return
+    }
+    // Cada rol con is_required debe tener al menos 1 miembro asignado.
+    const missing = activeRoles.filter(r => r.is_required && (membersByRole[r.id]?.length || 0) === 0)
+    if (missing.length > 0) {
+      setError(`Falta asignar el rol${missing.length > 1 ? 's' : ''}: ${missing.map(r => r.name).join(', ')}.`)
+      return
+    }
+    if (buildMembersPayload().length === 0) {
+      setError('Asigna al menos un miembro al turno.')
       return
     }
     if (noOrders) {
@@ -533,10 +591,30 @@ function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervi
     mutation.mutate()
   }
 
+  // Helpers para manipular la asignación por rol.
+  function setRoleMembers(roleId, userIds) {
+    setMembersByRole(prev => ({ ...prev, [roleId]: userIds }))
+  }
+  function addMemberToRole(roleId, userId) {
+    if (!userId) return
+    setMembersByRole(prev => {
+      const list = prev[roleId] || []
+      if (list.includes(userId)) return prev
+      return { ...prev, [roleId]: [...list, userId] }
+    })
+  }
+  function removeMemberFromRole(roleId, userId) {
+    setMembersByRole(prev => ({
+      ...prev,
+      [roleId]: (prev[roleId] || []).filter(u => u !== userId),
+    }))
+  }
+
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
-      <div className="card w-full max-w-md p-6 flex flex-col gap-4">
-        <div className="flex items-center justify-between">
+      <div className="card w-full max-w-md p-0 flex flex-col max-h-[90vh] overflow-hidden">
+        {/* Header sticky */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-line-subtle shrink-0">
           <h2 className="text-base font-semibold text-ink-primary">Programar turno</h2>
           <button onClick={onClose} className="btn-ghost btn-icon text-ink-muted">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -545,6 +623,9 @@ function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervi
           </button>
         </div>
 
+        {/* Body con scroll vertical — los inputs dinámicos por rol pueden hacer
+            el contenido más alto que la viewport en pantallas pequeñas. */}
+        <div className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-4">
         {/* Avisos contextuales si faltan datos base */}
         {noOrders && (
           <div className="rounded-lg border border-status-warning/40 bg-status-warning/10 p-3 text-sm text-status-warning">
@@ -612,35 +693,122 @@ function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervi
           </div>
         </div>
 
-        {/* Operador y supervisor */}
-        <div>
-          <label className="label">Operador <span className="text-status-danger">*</span></label>
-          <select
-            className={clsx('select', missingOperator && 'border-status-danger/40 ring-1 ring-status-danger/40')}
-            value={operatorId}
-            onChange={e => setOperatorId(e.target.value)}
-            disabled={noUsers}
-          >
-            <option value="">Seleccionar operador...</option>
-            {users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-          </select>
-          {missingOperator && <p className="field-error">Selecciona un operador.</p>}
-        </div>
-
-        {usesSupervisor && (
-          <div>
-            <label className="label">Supervisor <span className="text-status-danger">*</span></label>
-            <select
-              className={clsx('select', missingSupervisor && 'border-status-danger/40 ring-1 ring-status-danger/40')}
-              value={supervisorId}
-              onChange={e => setSuperv(e.target.value)}
-              disabled={noUsers}
-            >
-              <option value="">Seleccionar supervisor...</option>
-              {users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-            </select>
-            {missingSupervisor && <p className="field-error">Selecciona un supervisor.</p>}
+        {/* Asignación por rol del catálogo del tenant */}
+        {noRoles ? (
+          <div className="rounded-lg border border-status-warning/40 bg-status-warning/10 p-3 text-sm text-status-warning">
+            <p className="font-medium mb-1">⚠ Sin roles de turno configurados</p>
+            <p className="text-xs">Ve a Configuración → Roles de turno y activa al menos uno (capturista, supervisor, etc.) antes de programar turnos.</p>
           </div>
+        ) : (
+          activeRoles.map(role => {
+            const assigned = membersByRole[role.id] || []
+            const isMissing = submitted && role.is_required && assigned.length === 0
+            const availableUsers = users.filter(u => !assigned.includes(u.id))
+
+            // Radio "Responsable de handover" inline al lado del miembro.
+            // Selecciona uno entre TODOS los miembros del turno (no filtra
+            // por can_handover del rol — cualquier miembro puede ser designado).
+            const HandoverRadio = ({ userId }) => {
+              const key = `${role.id}::${userId}`
+              const checked = responsibleKey === key
+              return (
+                <label
+                  className={clsx(
+                    'flex items-center gap-1 text-[11px] cursor-pointer px-2 py-1 rounded-md border transition-colors shrink-0',
+                    checked
+                      ? 'border-brand-500/40 bg-brand-500/10 text-brand-300'
+                      : 'border-line-subtle text-ink-muted hover:bg-surface-elevated/40'
+                  )}
+                  title="Responsable de firmar la entrega y recepción del handover"
+                >
+                  <input
+                    type="radio"
+                    name="handover-responsible"
+                    className="w-3 h-3 accent-brand-600"
+                    checked={checked}
+                    onChange={() => setResponsibleKey(key)}
+                  />
+                  <span>Resp. handover</span>
+                </label>
+              )
+            }
+
+            if (role.is_unique_per_shift) {
+              // Selector único — 1 persona por rol.
+              return (
+                <div key={role.id}>
+                  <label className="label">
+                    {role.name}
+                    {role.is_required && <span className="text-status-danger ml-0.5">*</span>}
+                    {!role.is_required && <span className="text-xs text-ink-muted font-normal ml-1">(opcional)</span>}
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <select
+                      className={clsx('select flex-1', isMissing && 'border-status-danger/40 ring-1 ring-status-danger/40')}
+                      value={assigned[0] || ''}
+                      onChange={e => {
+                        const newId = e.target.value
+                        setRoleMembers(role.id, newId ? [newId] : [])
+                        // Si el responsable era el anterior, limpiarlo.
+                        if (responsibleKey && responsibleKey.startsWith(`${role.id}::`)) {
+                          setResponsibleKey(null)
+                        }
+                      }}
+                      disabled={noUsers}
+                    >
+                      <option value="">Seleccionar {role.name.toLowerCase()}...</option>
+                      {users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+                    </select>
+                    {assigned[0] && <HandoverRadio userId={assigned[0]} />}
+                  </div>
+                  {isMissing && <p className="field-error">Selecciona el {role.name.toLowerCase()}.</p>}
+                </div>
+              )
+            }
+
+            // Múltiples — array de personas por rol.
+            return (
+              <div key={role.id}>
+                <label className="label">
+                  {role.name}
+                  {role.is_required && <span className="text-status-danger ml-0.5">*</span>}
+                  <span className="text-xs text-ink-muted font-normal ml-1">(puede haber varios)</span>
+                </label>
+                <div className="space-y-1.5">
+                  {assigned.map(userId => {
+                    const u = users.find(uu => uu.id === userId)
+                    return (
+                      <div key={userId} className="flex items-center gap-2 px-2 py-1 rounded-lg bg-surface-elevated/40">
+                        <span className="text-sm flex-1 truncate">{u?.full_name || '—'}</span>
+                        <HandoverRadio userId={userId} />
+                        <button type="button" onClick={() => {
+                          removeMemberFromRole(role.id, userId)
+                          if (responsibleKey === `${role.id}::${userId}`) setResponsibleKey(null)
+                        }}
+                          className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-status-danger">
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+                          </svg>
+                        </button>
+                      </div>
+                    )
+                  })}
+                  {availableUsers.length > 0 && (
+                    <select
+                      className={clsx('select', isMissing && 'border-status-danger/40 ring-1 ring-status-danger/40')}
+                      value=""
+                      onChange={e => addMemberToRole(role.id, e.target.value)}
+                      disabled={noUsers}
+                    >
+                      <option value="">+ Agregar {role.name.toLowerCase()}...</option>
+                      {availableUsers.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+                    </select>
+                  )}
+                </div>
+                {isMissing && <p className="field-error">Asigna al menos un {role.name.toLowerCase()}.</p>}
+              </div>
+            )
+          })
         )}
 
         <div>
@@ -693,7 +861,9 @@ function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervi
           </div>
         )}
 
-        <div className="flex gap-2 pt-1">
+        </div>
+        {/* Footer sticky — siempre visible aunque el body desborde */}
+        <div className="flex gap-2 px-6 py-4 border-t border-line-subtle shrink-0">
           <button onClick={onClose} className="btn-secondary flex-1">Cancelar</button>
           <button
             onClick={handleSubmit}
@@ -713,8 +883,130 @@ function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervi
   )
 }
 
+// ── Modal: cambiar responsable del handover en un turno activo ─────────────
+//
+// Aplica cuando el turno ya está corriendo (status 'active' o 'pending_handover').
+// El supervisor reasigna al responsable si el designado original falta o se va
+// antes del cierre. Cualquier miembro activo del turno puede ser designado —
+// el backend no filtra por can_handover en la designación.
+function ActiveShiftHandoverModal({ shift, onClose }) {
+  const qc = useQueryClient()
+  const { data: members = [], isLoading } = useQuery({
+    queryKey: ['shift-members', shift.shift_id],
+    queryFn:  () => productionApi.listShiftMembers(shift.shift_id),
+    enabled:  !!shift.shift_id,
+  })
+
+  const currentResponsible = members.find(m => m.is_handover_responsible)
+
+  const mutation = useMutation({
+    mutationFn: (memberId) => productionApi.setHandoverResponsible(shift.shift_id, memberId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['shift-members', shift.shift_id] })
+      qc.invalidateQueries({ queryKey: ['scheduled-shifts'] })
+    },
+  })
+
+  if (!shift.shift_id) {
+    // El turno programado todavía no se materializó en production_shifts.
+    return createPortal(
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
+        <div className="card w-full max-w-md p-6 flex flex-col gap-3">
+          <h2 className="text-base font-semibold text-ink-primary">Turno aún sin arrancar</h2>
+          <p className="text-sm text-ink-secondary">
+            El responsable del handover se puede cambiar una vez que el turno haya iniciado (estado activo).
+            Mientras esté solo programado, edita los miembros desde el modal de programación.
+          </p>
+          <button onClick={onClose} className="btn-secondary self-end">Cerrar</button>
+        </div>
+      </div>,
+      document.body
+    )
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-md p-0 flex flex-col max-h-[90vh] overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-line-subtle shrink-0">
+          <div>
+            <h2 className="text-base font-semibold text-ink-primary">Responsable del handover</h2>
+            <p className="text-xs text-ink-muted mt-0.5">
+              Turno {shift.shift_number} · {shift.scheduled_date?.slice(0,10)}
+            </p>
+          </div>
+          <button onClick={onClose} className="btn-ghost btn-icon text-ink-muted">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-3">
+          <p className="text-xs text-ink-muted">
+            Marca al miembro que firmará la entrega del turno (al cerrarlo) y la recepción (al recibir del turno anterior).
+            Solo uno por turno. Cualquier miembro del turno puede ser designado.
+          </p>
+
+          {isLoading ? (
+            <div className="flex justify-center py-8"><Spinner /></div>
+          ) : members.length === 0 ? (
+            <p className="text-sm text-ink-muted text-center py-4">Este turno no tiene miembros activos.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {members.map(m => {
+                const checked = m.is_handover_responsible
+                return (
+                  <label key={m.id}
+                    className={clsx(
+                      'flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer border transition-colors',
+                      checked
+                        ? 'border-brand-500/40 bg-brand-500/10'
+                        : 'border-line-subtle hover:bg-surface-elevated/40'
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="active-handover-responsible"
+                      className="w-4 h-4 accent-brand-600"
+                      checked={checked}
+                      onChange={() => mutation.mutate(m.id)}
+                      disabled={mutation.isPending}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-ink-primary truncate">{m.user_name}</p>
+                      <p className="text-xs text-ink-muted">{m.role_name}</p>
+                    </div>
+                    {checked && <span className="text-xs font-semibold text-brand-300 shrink-0">Responsable</span>}
+                  </label>
+                )
+              })}
+            </div>
+          )}
+
+          {currentResponsible && (
+            <p className="text-[11px] text-ink-muted">
+              Actualmente: <b>{currentResponsible.user_name}</b> ({currentResponsible.role_name}).
+            </p>
+          )}
+
+          {mutation.isError && (
+            <div className="rounded-lg border border-status-danger/40 bg-status-danger/10 p-3 text-sm text-status-danger">
+              {mutation.error?.response?.data?.error || mutation.error?.message || 'No se pudo actualizar.'}
+            </div>
+          )}
+        </div>
+
+        <div className="flex gap-2 px-6 py-4 border-t border-line-subtle shrink-0">
+          <button onClick={onClose} className="btn-primary flex-1">Listo</button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 // ── Celda de la cuadrícula ──────────────────────────────────────────────────
-function GridCell({ shift, isToday, isPast, onEdit, onNew, shiftNum, dateStr }) {
+function GridCell({ shift, isToday, isPast, onEdit, onEditActive, onNew, shiftNum, dateStr }) {
   if (!shift) {
     if (isPast) return (
       <div className="h-20 rounded-xl bg-surface-elevated/40 border border-dashed border-line-subtle flex items-center justify-center">
@@ -737,7 +1029,11 @@ function GridCell({ shift, isToday, isPast, onEdit, onNew, shiftNum, dateStr }) 
 
   return (
     <button
-      onClick={() => !isPast && shift.status === 'scheduled' && onEdit(shift)}
+      onClick={() => {
+        if (isPast) return
+        if (shift.status === 'scheduled') onEdit(shift)
+        else if (shift.status === 'active' || shift.status === 'pending_handover') onEditActive?.(shift)
+      }}
       className={clsx(
         'h-20 rounded-xl border-2 p-2 text-left transition-all w-full',
         shift.status === 'active'     && 'border-status-success/40 bg-status-success/10',
@@ -777,12 +1073,21 @@ export default function ProduccionProgramacion() {
   const [weekOffset, setWeekOffset] = useState(0)
   const [editingShift, setEditing]  = useState(null)
   const [newShiftCtx, setNewCtx]    = useState(null) // { shiftNum, dateStr }
+  const [activeHandover, setActiveHandover] = useState(null) // turno activo p/ cambiar responsable
   const [successMsg, setSuccess]    = useState(null)
   const [showConfig, setShowConfig] = useState(false)
 
   const { data: shiftConfig = [] } = useQuery({
     queryKey: ['shift-config'],
     queryFn: productionApi.getShiftConfig,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  // Catálogo de roles del turno del tenant. La UI de programación renderiza
+  // un selector por cada rol activo (capturista, supervisor, calidad, etc.).
+  const { data: shiftRoles = [] } = useQuery({
+    queryKey: ['shift-roles-active'],
+    queryFn: () => processConfigApi.listShiftRoles({}),
     staleTime: 5 * 60 * 1000,
   })
   const effectiveShifts = useMemo(() => buildEffectiveShifts(shiftConfig), [shiftConfig])
@@ -987,6 +1292,7 @@ export default function ProduccionProgramacion() {
                     shiftNum={shift.number}
                     dateStr={dateStr}
                     onEdit={setEditing}
+                    onEditActive={setActiveHandover}
                     onNew={(num, ds) => setNewCtx({ shiftNum: num, dateStr: ds })}
                   />
                 ))}
@@ -1136,10 +1442,17 @@ export default function ProduccionProgramacion() {
           defaultDate={newShiftCtx.dateStr}
           orders={orders}
           users={users}
-          usesSupervisor={usesSupervisor}
+          shiftRoles={shiftRoles}
           shiftConfig={shiftConfig}
           tenantConfig={tenantConfig}
           onClose={() => setNewCtx(null)}
+        />
+      )}
+
+      {activeHandover && (
+        <ActiveShiftHandoverModal
+          shift={activeHandover}
+          onClose={() => setActiveHandover(null)}
         />
       )}
     </div>

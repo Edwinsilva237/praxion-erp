@@ -207,16 +207,20 @@ function CustomItemsSection({ control, register, errors, watch, setValue }) {
 }
 
 // ─── Sección de fórmula de mezcla ────────────────────────────────────────────
-function MpFormulaSection({ control, register, errors, mps, watch }) {
+// canSeeCosts controla si se muestran $/kg en el dropdown y el costo mezclado.
+// Sin ese permiso, el usuario edita la fórmula pero no ve cifras de costo.
+function MpFormulaSection({ control, register, errors, mps, watch, canSeeCosts = true }) {
   const { fields, append, remove } = useFieldArray({ control, name: 'mpFormula' })
   const formula = watch('mpFormula') || []
   const totalPct = formula.reduce((s, f) => s + parseFloat(f.percentage || 0), 0)
 
-  // Calcular costo promedio ponderado en tiempo real
-  const blendedCost = formula.reduce((sum, f) => {
-    const mat = mps.find(m => m.id === f.rawMaterialId)
-    return sum + (parseFloat(f.percentage||0) / 100) * parseFloat(mat?.cost_per_kg || 0)
-  }, 0)
+  // Calcular costo promedio ponderado en tiempo real (solo si el usuario puede verlo)
+  const blendedCost = canSeeCosts
+    ? formula.reduce((sum, f) => {
+        const mat = mps.find(m => m.id === f.rawMaterialId)
+        return sum + (parseFloat(f.percentage||0) / 100) * parseFloat(mat?.cost_per_kg || 0)
+      }, 0)
+    : 0
 
   const usedIds = formula.map(f => f.rawMaterialId).filter(Boolean)
   const available = mps.filter(m => !usedIds.includes(m.id))
@@ -226,7 +230,7 @@ function MpFormulaSection({ control, register, errors, mps, watch }) {
       <div className="flex items-center justify-between mb-2">
         <label className="label mb-0">Fórmula de mezcla<span className="text-status-danger ml-0.5">*</span></label>
         <div className="flex items-center gap-3">
-          {blendedCost > 0 && (
+          {canSeeCosts && blendedCost > 0 && (
             <span className="text-xs text-brand-300 font-medium">
               Costo mezcla: ${blendedCost.toFixed(4)}/kg
             </span>
@@ -244,11 +248,14 @@ function MpFormulaSection({ control, register, errors, mps, watch }) {
               className={clsx('select flex-1', errors.mpFormula?.[idx]?.rawMaterialId && 'input-error')}>
               <option value="">Seleccionar material...</option>
               {mps.filter(m => m.id === formula[idx]?.rawMaterialId || !usedIds.includes(m.id)).map(m => (
-                <option key={m.id} value={m.id}>{m.name} — {m.resin_type} · ${parseFloat(m.cost_per_kg||0).toFixed(2)}/kg</option>
+                <option key={m.id} value={m.id}>
+                  {m.name} — {m.resin_type}
+                  {canSeeCosts && ` · $${parseFloat(m.cost_per_kg||0).toFixed(2)}/kg`}
+                </option>
               ))}
             </select>
             <div className="relative w-24">
-              <input {...register(`mpFormula.${idx}.percentage`)} type="number" step="0.1" min="0.1" max="100"
+              <input {...register(`mpFormula.${idx}.percentage`)} type="number" step="0.01" min="0.01" max="100"
                 placeholder="0"
                 className={clsx('input pr-5', errors.mpFormula?.[idx]?.percentage && 'input-error')} />
               <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-ink-muted">%</span>
@@ -486,6 +493,9 @@ function LowStockReleaseModal({ order, availability, onClose, onConfirm, isPendi
 function OrderModal({ order, onClose }) {
   const queryClient = useQueryClient()
   const isEditing   = !!order
+  const can         = useAuthStore((s) => s.can)
+  const canSeeRecipe      = can('production', 'read_recipe')
+  const canSeeRecipeCosts = can('production', 'read_recipe_costs')
 
   // Solo productos que se fabrican internamente aparecen en órdenes de producción.
   // Los de reventa (is_produced=false) no pueden tener orden de fabricación.
@@ -701,11 +711,26 @@ function OrderModal({ order, onClose }) {
             </div>
           )}
 
-          {/* Fórmula de mezcla — requerida para corner_protector, opcional para otros */}
-          {(hasLinealSpec || formula.length > 0) && (
-            <MpFormulaSection control={control} register={register} errors={errors} mps={mps} watch={watch} />
+          {/* Fórmula de mezcla — requerida para producto con spec lineal, opcional para otros.
+              Edición manual visible solo con production:read_recipe. Sin ese permiso, el usuario
+              puede cargar la receta del producto (banner de arriba) pero no ve ni edita la
+              composición. Si la fórmula ya está cargada y no tiene permiso, mostramos resumen. */}
+          {canSeeRecipe && (hasLinealSpec || formula.length > 0) && (
+            <MpFormulaSection control={control} register={register} errors={errors} mps={mps} watch={watch}
+              canSeeCosts={canSeeRecipeCosts} />
           )}
-          {!hasLinealSpec && formula.length === 0 && !vigentRecipe && (
+          {!canSeeRecipe && formula.length > 0 && (
+            <div className="rounded-xl border border-line-subtle bg-surface-elevated/40 px-4 py-3">
+              <p className="text-xs text-ink-muted">Fórmula de mezcla</p>
+              <p className="text-sm text-ink-secondary mt-1">
+                Fórmula cargada · {formula.length} material{formula.length !== 1 ? 'es' : ''}.
+                <span className="text-ink-muted ml-1">
+                  No tienes permiso para ver el detalle de ingredientes.
+                </span>
+              </p>
+            </div>
+          )}
+          {canSeeRecipe && !hasLinealSpec && formula.length === 0 && !vigentRecipe && (
             <button type="button"
               onClick={() => setValue('mpFormula', [{ rawMaterialId: '', percentage: 100 }])}
               className="btn-secondary btn-sm w-full justify-center text-ink-muted">
@@ -713,8 +738,8 @@ function OrderModal({ order, onClose }) {
             </button>
           )}
 
-          {/* Panel: disponibilidad de MP en vivo — solo si hay fórmula */}
-          {hasLinealSpec && formula.length > 0 && (
+          {/* Panel: disponibilidad de MP en vivo — solo si hay fórmula y permiso para verla */}
+          {canSeeRecipe && hasLinealSpec && formula.length > 0 && (
             <StockPreviewPanel
               productId={watch('productId')}
               lengthMm={parseFloat(watch('lengthCm') || 0) * 10}
@@ -788,6 +813,24 @@ function OrderDetailModal({ order, onClose, onEdit, onCancel, onCloseOrder, onRe
   const userRoles = Array.isArray(currentUser?.roles) ? currentUser.roles : []
   const isAdmin = userRoles.includes('admin') || userRoles.includes('super_admin')
 
+  const can = useAuthStore((s) => s.can)
+  const canSeeRecipe      = can('production', 'read_recipe')
+  const canSeeRecipeCosts = can('production', 'read_recipe_costs')
+
+  // Si el usuario puede ver la fórmula, traemos las cantidades estimadas en kg
+  // por material para mostrarlas junto al porcentaje. Es lo que necesita quien
+  // prepara la mezcla para basarse en la orden en vez de tener que calcularlas.
+  const { data: stockAvail } = useQuery({
+    queryKey: ['order-stock-availability', order.id],
+    queryFn:  () => productionApi.getStockAvailability(order.id),
+    enabled:  canSeeRecipe && !!order.mpFormula?.length,
+    staleTime: 30_000,
+  })
+  const kgByMaterial = {}
+  for (const it of stockAvail?.items || []) {
+    kgByMaterial[it.rawMaterialId] = it.requiredKg
+  }
+
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto"
       style={{ background:'rgba(17,24,39,0.55)' }}
@@ -820,21 +863,47 @@ function OrderDetailModal({ order, onClose, onEdit, onCancel, onCloseOrder, onRe
             <div><p className="text-ink-muted text-xs mb-1">Avance</p><p className="font-medium text-brand-300">{parseFloat(order.progress_pct||0).toFixed(0)}%</p></div>
           </div>
 
-          {/* Fórmula de mezcla */}
-          {order.mpFormula?.length > 0 && (
+          {/* Fórmula de mezcla — detalle (kg + %) solo con production:read_recipe.
+              Costos ($/kg, costo mezclado) solo con production:read_recipe_costs.
+              Sin permiso: muestra placeholder con conteo de materiales. */}
+          {!canSeeRecipe && (order.mpFormulaSummary?.components_count > 0 || order.mpFormula?.length > 0) && (
+            <div>
+              <p className="text-xs text-ink-muted mb-2">Fórmula de mezcla</p>
+              <div className="px-3 py-2 bg-surface-elevated/40 rounded-lg text-sm text-ink-secondary">
+                Fórmula configurada · {order.mpFormulaSummary?.components_count ?? order.mpFormula.length} material{(order.mpFormulaSummary?.components_count ?? order.mpFormula.length) !== 1 ? 'es' : ''}.
+                <span className="block text-xs text-ink-muted mt-0.5">
+                  No tienes permiso para ver el detalle de ingredientes.
+                </span>
+              </div>
+            </div>
+          )}
+          {canSeeRecipe && order.mpFormula?.length > 0 && (
             <div>
               <p className="text-xs text-ink-muted mb-2">Fórmula de mezcla</p>
               <div className="space-y-2">
-                {order.mpFormula.map((f, i) => (
-                  <div key={i} className="flex items-center gap-3 px-3 py-2 bg-surface-elevated/40 rounded-lg">
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-ink-primary">{f.material_name}</p>
-                      <p className="text-xs text-ink-muted">{f.resin_type} · ${parseFloat(f.cost_per_kg||0).toFixed(2)}/kg</p>
+                {order.mpFormula.map((f, i) => {
+                  const reqKg = kgByMaterial[f.raw_material_id]
+                  return (
+                    <div key={i} className="flex items-center gap-3 px-3 py-2 bg-surface-elevated/40 rounded-lg">
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-ink-primary">{f.material_name}</p>
+                        <p className="text-xs text-ink-muted">
+                          {f.resin_type}
+                          {canSeeRecipeCosts && f.cost_per_kg != null && (
+                            <> · ${parseFloat(f.cost_per_kg||0).toFixed(2)}/kg</>
+                          )}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-sm font-bold text-brand-300">{parseFloat(f.percentage).toFixed(2)}%</span>
+                        {reqKg != null && reqKg > 0 && (
+                          <p className="text-[11px] text-ink-muted font-mono mt-0.5">≈ {reqKg.toFixed(1)} kg</p>
+                        )}
+                      </div>
                     </div>
-                    <span className="text-sm font-bold text-brand-300">{parseFloat(f.percentage).toFixed(1)}%</span>
-                  </div>
-                ))}
-                {order.blended_cost_per_kg && (
+                  )
+                })}
+                {canSeeRecipeCosts && order.blended_cost_per_kg && (
                   <div className="flex justify-between px-3 py-2 bg-brand-500/10 rounded-lg">
                     <span className="text-xs text-brand-300">Costo promedio mezcla</span>
                     <span className="text-sm font-bold text-brand-300">${parseFloat(order.blended_cost_per_kg).toFixed(4)}/kg</span>
