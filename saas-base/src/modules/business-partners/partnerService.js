@@ -121,17 +121,17 @@ async function createPartner({
        requiresPo === true,
        autoSendInvoice === true, autoSendRemission === true,
        billingNotes?.trim() || null,
-       supplierCreditDays ?? null,
-       supplierCreditLimit ?? null,
-       supplierLeadTimeDays ?? null,
-       supplierMinOrderAmount ?? null,
+       supplierCreditDays    === '' || supplierCreditDays    == null ? null : supplierCreditDays,
+       supplierCreditLimit   === '' || supplierCreditLimit   == null ? null : supplierCreditLimit,
+       supplierLeadTimeDays  === '' || supplierLeadTimeDays  == null ? null : supplierLeadTimeDays,
+       supplierMinOrderAmount === '' || supplierMinOrderAmount == null ? null : supplierMinOrderAmount,
        supplierBankName?.trim() || null,
        supplierAccountHolder?.trim() || null,
        supplierAccountNumber?.trim() || null,
        supplierClabe?.trim() || null,
        supplierSwift?.trim() || null,
        website?.trim() || null,
-       supplierRating || null]
+       supplierRating === '' || supplierRating == null ? null : supplierRating]
     )
     const partner = rows[0]
 
@@ -173,6 +173,14 @@ async function updatePartner({
   userId, ipAddress, userAgent,
 }) {
   const resolvedPersonType = rfc ? (rfc.length === 13 ? 'fisica' : 'moral') : null
+
+  // El frontend puede mandar string vacío en campos numéricos cuando el
+  // partner es solo cliente y nunca tuvo datos de proveedor (Socios.jsx
+  // hace `?? ''` al precargar el form). El operador `??` JS no normaliza
+  // string vacío a null, así que PostgreSQL fallaba con "invalid input
+  // syntax for type integer/numeric". Este helper colapsa '' / undefined / null
+  // a null para que COALESCE en la query lo trate como "no tocar el campo".
+  const numericOrNull = (v) => (v === '' || v == null ? null : v)
 
   const { rows } = await query(
     `UPDATE business_partners SET
@@ -217,7 +225,7 @@ async function updatePartner({
     [name || null, rfc?.toUpperCase().trim() || null, resolvedPersonType,
      taxName || null, taxRegime || null, taxRegimeCode || null,
      creditType || null,
-     creditDays ?? null, creditLimit ?? null, internalCode || null,
+     numericOrNull(creditDays), numericOrNull(creditLimit), internalCode || null,
      address || null, neighborhood || null, city || null, state || null, zipCode || null,
      notes || null, isActive !== undefined ? isActive : null,
      cfdiUse || null, paymentMethod || null, paymentForm || null,
@@ -226,17 +234,17 @@ async function updatePartner({
      autoSendInvoice !== undefined ? autoSendInvoice : null,
      autoSendRemission !== undefined ? autoSendRemission : null,
      billingNotes !== undefined ? (billingNotes || null) : null,
-     supplierCreditDays ?? null,
-     supplierCreditLimit ?? null,
-     supplierLeadTimeDays ?? null,
-     supplierMinOrderAmount ?? null,
-     supplierBankName ?? null,
-     supplierAccountHolder ?? null,
-     supplierAccountNumber ?? null,
-     supplierClabe ?? null,
-     supplierSwift ?? null,
-     website ?? null,
-     supplierRating ?? null,
+     numericOrNull(supplierCreditDays),
+     numericOrNull(supplierCreditLimit),
+     numericOrNull(supplierLeadTimeDays),
+     numericOrNull(supplierMinOrderAmount),
+     supplierBankName || null,
+     supplierAccountHolder || null,
+     supplierAccountNumber || null,
+     supplierClabe || null,
+     supplierSwift || null,
+     website || null,
+     numericOrNull(supplierRating),
      partnerId, tenantId]
   )
   if (rows.length === 0) return null
