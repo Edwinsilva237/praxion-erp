@@ -18,17 +18,9 @@ import { PendingSheetsPicker } from '@/components/productos/PendingSheetsPicker'
 import { PendingInventoryLevel } from '@/components/productos/PendingInventoryLevel'
 import { inventoryApi } from '@/api/inventory'
 import Can from '@/components/auth/Can'
+import SatUnitCombobox from '@/components/productos/SatUnitCombobox'
+import SatProductCodeCombobox from '@/components/productos/SatProductCodeCombobox'
 import clsx from 'clsx'
-
-// ─── Catálogos SAT ────────────────────────────────────────────────────────────
-const SAT_UNITS = [
-  { code: 'H87', label: 'H87 — Pieza' },
-  { code: 'KGM', label: 'KGM — Kilogramo' },
-  { code: 'MTR', label: 'MTR — Metro' },
-  { code: 'LTR', label: 'LTR — Litro' },
-  { code: 'XBX', label: 'XBX — Caja' },
-  { code: 'ACT', label: 'ACT — Actividad' },
-]
 
 const OBJETO_IMP = [
   { code: '02', label: '02 — Sí objeto de impuesto' },
@@ -582,14 +574,20 @@ function ProductModal({ product: initialProduct, onClose }) {
           <Section number="3" title="Datos SAT para facturación" badge="requerido para timbrar">
             <div className="grid grid-cols-3 gap-3">
               <Field label="Clave producto SAT" required error={errors.satProductCode?.message}
-                hint="Catálogo c_ClaveProdServ">
-                <input {...register('satProductCode')} placeholder="44102305"
-                  className={clsx('input', errors.satProductCode && 'input-error')} />
+                hint="Catálogo c_ClaveProdServ. Busca por código (ej. 50202200) o por nombre (ej. palomitas).">
+                <SatProductCodeCombobox
+                  value={watch('satProductCode')}
+                  onChange={v => setValue('satProductCode', v, { shouldValidate: true, shouldDirty: true })}
+                  error={!!errors.satProductCode}
+                />
               </Field>
-              <Field label="Clave unidad SAT" required error={errors.satUnitCode?.message}>
-                <select {...register('satUnitCode')} className={clsx('select', errors.satUnitCode && 'input-error')}>
-                  {SAT_UNITS.map((u) => <option key={u.code} value={u.code}>{u.label}</option>)}
-                </select>
+              <Field label="Clave unidad SAT" required error={errors.satUnitCode?.message}
+                hint="Busca por código (ej. KGM) o por nombre (ej. kilo). Acepta cualquier clave del catálogo SAT.">
+                <SatUnitCombobox
+                  value={watch('satUnitCode')}
+                  onChange={v => setValue('satUnitCode', v, { shouldValidate: true, shouldDirty: true })}
+                  error={!!errors.satUnitCode}
+                />
               </Field>
               <Field label="Objeto de impuesto" required error={errors.objetoImp?.message}>
                 <select {...register('objetoImp')} className={clsx('select', errors.objetoImp && 'input-error')}>
@@ -763,14 +761,10 @@ function PackOptionsEditor({ product }) {
         </div>
         <div className="col-span-3">
           <label className="label">Clave SAT</label>
-          <select className="select text-sm"
+          <SatUnitCombobox
             value={newRow.satUnitCode}
-            onChange={e => setNewRow(r => ({ ...r, satUnitCode: e.target.value }))}>
-            {SAT_UNITS.map(u => <option key={u.code} value={u.code}>{u.code}</option>)}
-            <option value="XRO">XRO — Rollo</option>
-            <option value="XBJ">XBJ — Cubeta</option>
-            <option value="MIL">MIL — Millar (uso interno)</option>
-          </select>
+            onChange={v => setNewRow(r => ({ ...r, satUnitCode: v }))}
+          />
         </div>
         <div className="col-span-2">
           <button type="button" onClick={submitNew} disabled={addMut.isPending}
