@@ -1177,6 +1177,18 @@ function MpLoadTab({ shiftId, shiftDetail, onFeedback, onSuccess }) {
 
   return (
     <div className="space-y-4">
+      {/* Banner informativo: cargar MP es opcional cuando uses_lots=true */}
+      <div className="rounded-xl border border-status-info/30 bg-status-info/5 px-4 py-3 flex gap-3">
+        <svg className="w-5 h-5 shrink-0 text-status-info mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <div className="text-xs text-ink-secondary leading-relaxed">
+          <p className="font-medium text-ink-primary mb-0.5">Carga de MP opcional</p>
+          <p>Si conoces el lote específico que estás usando, decláralo aquí para mantener trazabilidad FEFO.</p>
+          <p className="mt-1">Si no, el sistema <span className="font-medium text-ink-primary">estimará el consumo al cerrar el turno</span> según la fórmula × peso real producido. En ese caso pierdes el rastreo por lote pero el inventario se descuenta igual.</p>
+        </div>
+      </div>
+
       <form onSubmit={(e) => {
         e.preventDefault()
         if (!rawMaterialId || !loadedKg) return

@@ -559,6 +559,11 @@ function OrderModal({ order, onClose }) {
 
   // Convierte componentes de receta (cantidades absolutas) a mpFormula (porcentajes).
   // Solo funciona limpiamente cuando todos los componentes están en la misma unidad.
+  //
+  // Importante: la conversión a 2 decimales puede dejar una suma 99.99 o 100.01
+  // (ej. 3 componentes iguales → 33.33×3 = 99.99). El último componente absorbe
+  // el residual para garantizar suma exacta = 100.00 y que el form no bloquee
+  // con "Los porcentajes deben sumar exactamente 100%".
   function applyRecipe() {
     if (!vigentRecipeFull?.components?.length) return
     const comps = vigentRecipeFull.components
@@ -568,6 +573,13 @@ function OrderModal({ order, onClose }) {
       rawMaterialId: c.raw_material_id,
       percentage:    Math.round((parseFloat(c.quantity) / total) * 10000) / 100, // 2 decimales
     }))
+    // Ajuste de residual: si la suma quedó ≠ 100 por redondeo, el último item absorbe la diferencia.
+    const sumPct = formula.reduce((s, x) => s + x.percentage, 0)
+    const diff   = Math.round((100 - sumPct) * 100) / 100
+    if (formula.length > 0 && Math.abs(diff) >= 0.01) {
+      const last = formula[formula.length - 1]
+      last.percentage = Math.round((last.percentage + diff) * 100) / 100
+    }
     setValue('mpFormula', formula, { shouldDirty: true })
   }
 
@@ -859,16 +871,16 @@ function OrderDetailModal({ order, onClose, onEdit, onCancel, onCloseOrder, onRe
               return (
                 <div>
                   <p className="text-xs text-ink-muted mb-2 flex items-center gap-1"><IconStar /> Personalización</p>
-                  <div className="rounded-xl overflow-hidden border border-purple-100">
-                    <div className="grid grid-cols-[1fr_auto] gap-3 px-3 py-1.5 bg-purple-50 border-b border-purple-100">
-                      <span className="text-[11px] font-semibold text-purple-700 uppercase tracking-wide">Descripción</span>
-                      <span className="text-[11px] font-semibold text-purple-700 uppercase tracking-wide">Costo</span>
+                  <div className="rounded-xl overflow-hidden border border-purple-500/30">
+                    <div className="grid grid-cols-[1fr_auto] gap-3 px-3 py-1.5 bg-purple-500/10 border-b border-purple-500/20">
+                      <span className="text-[11px] font-semibold text-purple-300 uppercase tracking-wide">Descripción</span>
+                      <span className="text-[11px] font-semibold text-purple-300 uppercase tracking-wide">Costo</span>
                     </div>
-                    <div className="divide-y divide-purple-50 bg-white">
+                    <div className="divide-y divide-line-subtle bg-bg-tertiary/40">
                       {items.map((item, i) => (
                         <div key={i} className="grid grid-cols-[1fr_auto] gap-3 px-3 py-2 items-center">
                           <span className="text-sm text-ink-primary">{item.d || item.description}</span>
-                          <span className="text-sm font-mono text-purple-700 text-right whitespace-nowrap">
+                          <span className="text-sm font-mono text-purple-300 text-right whitespace-nowrap">
                             {parseFloat(item.c ?? item.cost ?? 0) > 0
                               ? `$${parseFloat(item.c ?? item.cost ?? 0).toFixed(2)}`
                               : <span className="text-ink-muted text-xs">—</span>}
@@ -877,9 +889,9 @@ function OrderDetailModal({ order, onClose, onEdit, onCancel, onCloseOrder, onRe
                       ))}
                     </div>
                     {total > 0 && (
-                      <div className="flex justify-between px-3 py-2 bg-purple-50 border-t border-purple-100">
-                        <span className="text-xs font-semibold text-purple-700">Total cargo</span>
-                        <span className="text-sm font-bold text-purple-700">+${total.toFixed(2)}</span>
+                      <div className="flex justify-between px-3 py-2 bg-purple-500/10 border-t border-purple-500/20">
+                        <span className="text-xs font-semibold text-purple-300">Total cargo</span>
+                        <span className="text-sm font-bold text-purple-300">+${total.toFixed(2)}</span>
                       </div>
                     )}
                   </div>
