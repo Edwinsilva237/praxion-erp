@@ -9,6 +9,7 @@ import Spinner from '@/components/ui/Spinner'
 import { fmtMXN, fmtDate, fmtNum } from '@/utils/fmt'
 import { downloadBlob } from '@/utils/downloadBlob'
 import useAuthStore from '@/store/useAuthStore'
+import SatCatalogSelect from '@/components/fiscal/SatCatalogSelect'
 import clsx from 'clsx'
 
 // ── Datos fiscales y de pago ────────────────────────────────────────────────
@@ -949,14 +950,13 @@ function CreditNoteModal({ invoice, onConfirm, onClose, loading }) {
             </div>
             <div>
               <label className="label">Forma de pago</label>
-              <select className="select" value={paymentForm} onChange={e => setPaymentForm(e.target.value)} disabled={loading}>
-                <option value="01">01 — Efectivo</option>
-                <option value="02">02 — Cheque</option>
-                <option value="03">03 — Transferencia</option>
-                <option value="04">04 — Tarjeta de crédito</option>
-                <option value="28">28 — Tarjeta de débito</option>
-                <option value="99">99 — Por definir</option>
-              </select>
+              <SatCatalogSelect
+                endpoint="forma-pago"
+                value={paymentForm}
+                onChange={code => setPaymentForm(code)}
+                placeholder="Buscar forma de pago…"
+                disabled={loading}
+              />
             </div>
           </div>
 

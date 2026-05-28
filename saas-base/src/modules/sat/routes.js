@@ -310,6 +310,7 @@ router.get('/impuesto',          simpleListRoute('sat_impuesto'))
 router.get('/tipo-factor',       simpleListRoute('sat_tipo_factor'))
 router.get('/tasa-cuota',        simpleListRoute('sat_tasa_cuota'))
 router.get('/tipo-comprobante',  simpleListRoute('sat_tipo_comprobante'))
+router.get('/tipo-relacion',     simpleListRoute('sat_tipo_relacion'))
 
 // País: muchos (250), buscable por código o nombre.
 router.get('/pais', async (req, res, next) => {

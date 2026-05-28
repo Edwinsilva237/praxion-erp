@@ -5,6 +5,7 @@ import { invoicingApi } from '@/api/invoicing'
 import { salesApi } from '@/api/sales'
 import { partnersApi } from '@/api/partners'
 import Spinner from '@/components/ui/Spinner'
+import SatCatalogSelect from '@/components/fiscal/SatCatalogSelect'
 import { fmtMXN, fmtDate } from '@/utils/fmt'
 import clsx from 'clsx'
 
@@ -606,27 +607,31 @@ export function FacturaFormModal({ onClose, onCreated }) {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="label">Uso CFDI</label>
-              <select className="select" value={useCfdi}
-                onChange={e => { setUseCfdi(e.target.value); setOverrideTouched(true) }}>
-                {!useCfdi && <option value="">— Selecciona —</option>}
-                {CFDI_USE_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
+              <SatCatalogSelect
+                endpoint="uso-cfdi"
+                params={partnerProfile?.tax_regime_code ? { regimen: partnerProfile.tax_regime_code } : {}}
+                value={useCfdi}
+                onChange={code => { setUseCfdi(code); setOverrideTouched(true) }}
+                placeholder="Buscar por código o nombre…"
+              />
             </div>
             <div>
               <label className="label">Método de pago</label>
-              <select className="select" value={paymentMethod}
-                onChange={e => { setPaymentMethod(e.target.value); setOverrideTouched(true) }}>
-                {!paymentMethod && <option value="">— Selecciona —</option>}
-                {PAYMENT_METHOD_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
+              <SatCatalogSelect
+                endpoint="metodo-pago"
+                value={paymentMethod}
+                onChange={code => { setPaymentMethod(code); setOverrideTouched(true) }}
+                placeholder="PUE / PPD"
+              />
             </div>
             <div>
               <label className="label">Forma de pago</label>
-              <select className="select" value={paymentForm}
-                onChange={e => { setPaymentForm(e.target.value); setOverrideTouched(true) }}>
-                {!paymentForm && <option value="">— Selecciona —</option>}
-                {PAYMENT_FORM_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
+              <SatCatalogSelect
+                endpoint="forma-pago"
+                value={paymentForm}
+                onChange={code => { setPaymentForm(code); setOverrideTouched(true) }}
+                placeholder="Efectivo, transferencia…"
+              />
             </div>
           </div>
           {/* OC del cliente (po_number) — precargada del pedido/remisión si existe */}
