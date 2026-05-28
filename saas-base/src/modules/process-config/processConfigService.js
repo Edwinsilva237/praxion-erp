@@ -44,6 +44,9 @@ const ALLOWED_UPDATES = [
   // §142: flags para atributos específicos de plástico
   'uses_resin_types',
   'tracks_material_origin',
+  // §49: límites de horas por operador (mig 156)
+  'max_hours_per_day',
+  'max_hours_per_week',
 ]
 
 // Conjuntos de valores enum válidos. Duplican los CHECK constraints en SQL,
@@ -131,6 +134,22 @@ async function updateConfig({ tenantId, userId, updates, ipAddress, userAgent })
   if (cleaned.expiry_alert_days !== undefined && cleaned.expiry_alert_days !== null) {
     if (!Number.isInteger(cleaned.expiry_alert_days) || cleaned.expiry_alert_days < 0) {
       const err = new Error('expiry_alert_days debe ser un entero >= 0 o null.')
+      err.status = 400
+      throw err
+    }
+  }
+
+  // Límites de horas: enteros dentro de rango. La BD también lo protege con CHECK.
+  if (cleaned.max_hours_per_day !== undefined) {
+    if (!Number.isInteger(cleaned.max_hours_per_day) || cleaned.max_hours_per_day < 1 || cleaned.max_hours_per_day > 24) {
+      const err = new Error('max_hours_per_day debe ser un entero entre 1 y 24.')
+      err.status = 400
+      throw err
+    }
+  }
+  if (cleaned.max_hours_per_week !== undefined) {
+    if (!Number.isInteger(cleaned.max_hours_per_week) || cleaned.max_hours_per_week < 1 || cleaned.max_hours_per_week > 168) {
+      const err = new Error('max_hours_per_week debe ser un entero entre 1 y 168.')
       err.status = 400
       throw err
     }

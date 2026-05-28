@@ -498,13 +498,22 @@ router.get('/scheduled-shifts/my-today', async (req,res,next) => {
   try { res.json(await svcSched.getTodayShiftsForOperator({ tenantId:tid(req), operatorId:uid(req) })) }
   catch(err){next(err)}
 })
+router.get('/scheduled-shifts/operator-hours', checkPermission('production','read'), async (req,res,next) => {
+  try {
+    const { operatorId, date } = req.query
+    if (!operatorId || !date) return res.status(400).json({ error: 'operatorId y date son requeridos.' })
+    res.json(await svcSched.getOperatorHoursForDate({ tenantId:tid(req), operatorId, date }))
+  } catch(err){next(err)}
+})
 router.post('/scheduled-shifts', checkPermission('production','manage'), async (req,res,next) => {
   try {
-    const { productionOrderId,shiftNumber,scheduledDate,scheduledStart,operatorId,supervisorId,lineId,notes } = req.body
+    const { productionOrderId,shiftNumber,scheduledDate,scheduledStart,operatorId,supervisorId,lineId,notes,
+            isOvertimeAcknowledged, overtimeContext } = req.body
     if (!shiftNumber||!scheduledDate||!scheduledStart||!operatorId||!supervisorId) return res.status(400).json({ error:'Faltan campos requeridos.' })
     res.status(201).json(await svcSched.scheduleShift({
       tenantId:tid(req), productionOrderId,shiftNumber,scheduledDate,
       scheduledStart,operatorId,supervisorId,lineId,notes,
+      isOvertimeAcknowledged: !!isOvertimeAcknowledged, overtimeContext,
       userId:uid(req),ipAddress:ip(req),userAgent:ua(req)
     }))
   } catch(err){

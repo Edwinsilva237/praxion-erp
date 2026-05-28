@@ -7,6 +7,7 @@ const { audit } = require('../../utils/audit')
 async function scheduleShift({
   tenantId, productionOrderId, shiftNumber, scheduledDate,
   scheduledStart, operatorId, supervisorId, lineId, notes,
+  isOvertimeAcknowledged, overtimeContext,
   userId, ipAddress, userAgent,
 }) {
   // Regla de negocio: aunque la orden NO sea obligatoria en el turno,
@@ -54,7 +55,74 @@ async function scheduleShift({
     ipAddress, userAgent,
   })
 
+  // Registro de tiempo extra: el supervisor confirmó "Sí, programar aunque
+  // exceda el límite". overtimeContext trae los detalles que la UI mostró.
+  if (isOvertimeAcknowledged) {
+    await audit({
+      tenantId, userId, action: 'scheduled_shift.overtime_acknowledged',
+      resource: 'scheduled_shifts', resourceId: rows[0].id,
+      payload: {
+        scheduledDate, shiftNumber, operatorId,
+        ...(overtimeContext && typeof overtimeContext === 'object' ? overtimeContext : {}),
+      },
+      ipAddress, userAgent,
+    })
+  }
+
   return rows[0]
+}
+
+// ─── Horas programadas del operador (día y semana) ───────────────────────────
+// Suma `duration_hours` del tenant_shift_config por cada turno NO cancelado del
+// operador en el día y en la semana del lunes-domingo que contiene la fecha.
+// Retorna { day, week, dayMax, weekMax } — los maxes vienen del tenant_process_config.
+async function getOperatorHoursForDate({ tenantId, operatorId, date }) {
+  if (!operatorId || !date) {
+    return { day: 0, week: 0, dayMax: 9, weekMax: 48 }
+  }
+  const { rows: cfgRows } = await query(
+    `SELECT max_hours_per_day, max_hours_per_week
+     FROM tenant_process_config WHERE tenant_id = $1`,
+    [tenantId]
+  )
+  const dayMax  = cfgRows[0]?.max_hours_per_day  ?? 9
+  const weekMax = cfgRows[0]?.max_hours_per_week ?? 48
+
+  // Día solicitado: suma de duration_hours de los turnos no-cancelados.
+  const { rows: dayRows } = await query(
+    `SELECT COALESCE(SUM(COALESCE(sc.duration_hours, 8)), 0)::INT AS hours
+     FROM scheduled_shifts ss
+     LEFT JOIN tenant_shift_config sc
+       ON sc.tenant_id = ss.tenant_id
+       AND sc.shift_number::TEXT = ss.shift_number::TEXT
+     WHERE ss.tenant_id = $1
+       AND ss.operator_id = $2
+       AND ss.scheduled_date = $3
+       AND ss.status <> 'cancelled'`,
+    [tenantId, operatorId, date]
+  )
+
+  // Semana: lunes-domingo que contiene `date` (PostgreSQL ISO: lunes=1).
+  const { rows: weekRows } = await query(
+    `SELECT COALESCE(SUM(COALESCE(sc.duration_hours, 8)), 0)::INT AS hours
+     FROM scheduled_shifts ss
+     LEFT JOIN tenant_shift_config sc
+       ON sc.tenant_id = ss.tenant_id
+       AND sc.shift_number::TEXT = ss.shift_number::TEXT
+     WHERE ss.tenant_id = $1
+       AND ss.operator_id = $2
+       AND ss.status <> 'cancelled'
+       AND ss.scheduled_date >= date_trunc('week', $3::date)::date
+       AND ss.scheduled_date <  date_trunc('week', $3::date)::date + INTERVAL '7 days'`,
+    [tenantId, operatorId, date]
+  )
+
+  return {
+    day:     dayRows[0]?.hours  ?? 0,
+    week:    weekRows[0]?.hours ?? 0,
+    dayMax,
+    weekMax,
+  }
 }
 
 // ─── Listar turnos programados ────────────────────────────────────────────────
@@ -315,4 +383,5 @@ module.exports = {
   updateScheduledShift,
   confirmPresence,
   autoActivatePendingShifts,
+  getOperatorHoursForDate,
 }

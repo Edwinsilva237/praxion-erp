@@ -69,6 +69,7 @@ export const productionApi = {
   // Turnos programados
   listScheduledShifts:  (params) => api.get(`${BASE}/scheduled-shifts`, { params }).then(r => r.data),
   getMyTodayShifts:     ()       => api.get(`${BASE}/scheduled-shifts/my-today`).then(r => r.data),
+  getOperatorHours:     (params) => api.get(`${BASE}/scheduled-shifts/operator-hours`, { params }).then(r => r.data),
   setShiftActiveOrder:  (shiftId, orderId) => api.patch(`${BASE}/shifts/${shiftId}/active-order`, { orderId }).then(r => r.data),
   scheduleShift:        (body)   => api.post(`${BASE}/scheduled-shifts`, body).then(r => r.data),
   updateScheduledShift: (id, body) => api.patch(`${BASE}/scheduled-shifts/${id}`, body).then(r => r.data),

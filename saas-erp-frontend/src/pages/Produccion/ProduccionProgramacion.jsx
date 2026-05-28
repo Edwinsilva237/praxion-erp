@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { productionApi } from '@/api/production'
@@ -10,11 +10,50 @@ import Spinner from '@/components/ui/Spinner'
 import clsx from 'clsx'
 
 // ── Constantes ─────────────────────────────────────────────────────────────
-const SHIFTS = [
-  { number: '1', label: 'Turno 1', hour: '06:00', range: '6am – 2pm' },
-  { number: '2', label: 'Turno 2', hour: '14:00', range: '2pm – 10pm' },
-  { number: '3', label: 'Turno 3', hour: '22:00', range: '10pm – 6am' },
+// Fallback usado solo si el tenant no tiene config de turnos. La fuente real
+// es `tenant_shift_config` (mig 048+156) — soporta 1..N turnos por tenant.
+const FALLBACK_SHIFTS = [
+  { number: '1', label: 'Turno 1', hour: '06:00', range: '6am – 2pm', durationHours: 8 },
+  { number: '2', label: 'Turno 2', hour: '14:00', range: '2pm – 10pm', durationHours: 8 },
+  { number: '3', label: 'Turno 3', hour: '22:00', range: '10pm – 6am', durationHours: 8 },
 ]
+
+function fmtHour12(mins) {
+  const hh = Math.floor(mins / 60) % 24
+  const mm = mins % 60
+  const ampm = hh >= 12 ? 'pm' : 'am'
+  const hh12 = ((hh + 11) % 12) + 1
+  return mm === 0 ? `${hh12}${ampm}` : `${hh12}:${String(mm).padStart(2, '0')}${ampm}`
+}
+
+// Construye el array efectivo `{ number, label, hour, range, durationHours }`
+// a partir de la config real del tenant. Cae al FALLBACK si viene vacío.
+function buildEffectiveShifts(shiftConfig) {
+  if (!shiftConfig || shiftConfig.length === 0) return FALLBACK_SHIFTS
+  return shiftConfig
+    .slice()
+    .sort((a, b) => a.shift_number - b.shift_number)
+    .map(s => {
+      const hour = String(s.start_time || '06:00').slice(0, 5)
+      const [h, m] = hour.split(':').map(Number)
+      const startMins = h * 60 + m
+      const duration = s.duration_hours || 8
+      const endMins = startMins + duration * 60
+      return {
+        number: String(s.shift_number),
+        label: s.name || `Turno ${s.shift_number}`,
+        hour,
+        range: `${fmtHour12(startMins)} – ${fmtHour12(endMins)}`,
+        durationHours: duration,
+      }
+    })
+}
+
+function shiftLabelOf(shiftConfig, shiftNumber) {
+  const list = buildEffectiveShifts(shiftConfig)
+  return list.find(s => s.number === String(shiftNumber))?.label
+    || `Turno ${shiftNumber}`
+}
 
 
 function timeToMins(t) {
@@ -68,7 +107,7 @@ function toLocalISODate(d) {
 }
 
 // ── Modal configuración de turnos ────────────────────────────────────────────
-function ShiftConfigModal({ currentConfig, onClose }) {
+function ShiftConfigModal({ currentConfig, tenantConfig, onClose }) {
   const qc = useQueryClient()
   const [shifts, setShifts] = useState(
     currentConfig.map(s => ({
@@ -79,13 +118,49 @@ function ShiftConfigModal({ currentConfig, onClose }) {
       confirmationToleranceMinutes: s.confirmation_tolerance_minutes || 15,
     }))
   )
+  const [maxHoursDay,  setMaxHoursDay]  = useState(tenantConfig?.max_hours_per_day  ?? 9)
+  const [maxHoursWeek, setMaxHoursWeek] = useState(tenantConfig?.max_hours_per_week ?? 48)
   const [error, setError] = useState(null)
-  function upd(idx, key, val) { setShifts(p => p.map((s, i) => i !== idx ? s : { ...s, [key]: val })) }
+
+  function upd(idx, key, val) {
+    setShifts(p => p.map((s, i) => i !== idx ? s : { ...s, [key]: val }))
+  }
+  function addShift() {
+    setShifts(p => {
+      const used = new Set(p.map(s => s.shiftNumber))
+      let next = 1
+      while (used.has(next)) next++
+      return [...p, {
+        shiftNumber: next,
+        name: `Turno ${next}`,
+        startTime: '06:00',
+        durationHours: 8,
+        confirmationToleranceMinutes: p[0]?.confirmationToleranceMinutes || 15,
+      }]
+    })
+  }
+  function removeShift(idx) {
+    setShifts(p => p.filter((_, i) => i !== idx))
+  }
+
   const mutation = useMutation({
-    mutationFn: () => productionApi.updateShiftConfig({ shifts }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['shift-config'] }); onClose() },
+    mutationFn: async () => {
+      if (shifts.length === 0) throw { response: { data: { error: 'Debe haber al menos un turno.' } } }
+      await productionApi.updateShiftConfig({ shifts })
+      // Solo PATCH si algo cambió respecto a los valores iniciales
+      const patch = {}
+      if (maxHoursDay  !== (tenantConfig?.max_hours_per_day  ?? 9))  patch.max_hours_per_day  = Number(maxHoursDay)
+      if (maxHoursWeek !== (tenantConfig?.max_hours_per_week ?? 48)) patch.max_hours_per_week = Number(maxHoursWeek)
+      if (Object.keys(patch).length > 0) await processConfigApi.updateConfig(patch)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['shift-config'] })
+      qc.invalidateQueries({ queryKey: ['tenant-process-config'] })
+      onClose()
+    },
     onError: (e) => setError(e.response?.data?.error || 'Error al guardar'),
   })
+
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
       <div className="card w-full max-w-lg p-6 flex flex-col gap-4 max-h-[90vh] overflow-y-auto">
@@ -102,7 +177,15 @@ function ShiftConfigModal({ currentConfig, onClose }) {
         </div>
         {shifts.map((s, idx) => (
           <div key={s.shiftNumber} className="border border-line-subtle rounded-xl p-4 flex flex-col gap-3">
-            <p className="text-xs font-bold text-brand-300 uppercase tracking-wider">Turno {s.shiftNumber}</p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold text-brand-300 uppercase tracking-wider">Turno {s.shiftNumber}</p>
+              {shifts.length > 1 && (
+                <button type="button" onClick={() => removeShift(idx)}
+                  className="text-xs text-status-danger hover:underline">
+                  Quitar
+                </button>
+              )}
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
                 <label className="label">Nombre</label>
@@ -114,24 +197,51 @@ function ShiftConfigModal({ currentConfig, onClose }) {
               </div>
               <div>
                 <label className="label">Duración (horas)</label>
-                <input type="number" min="1" max="12" className="input" value={s.durationHours}
-                  onChange={e => upd(idx, 'durationHours', parseInt(e.target.value))} />
+                <input type="number" min="1" max="24" className="input" value={s.durationHours}
+                  onChange={e => upd(idx, 'durationHours', parseInt(e.target.value) || 1)} />
               </div>
             </div>
           </div>
         ))}
+        <button type="button" onClick={addShift}
+          className="btn-secondary border-dashed text-xs">
+          + Agregar turno
+        </button>
+
+        <div className="bg-surface-elevated/60 border border-line-subtle rounded-xl p-4 flex flex-col gap-3">
+          <p className="text-xs font-semibold text-ink-secondary">Límites por operador</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Horas máx. por día</label>
+              <input type="number" min="1" max="24" className="input"
+                value={maxHoursDay}
+                onChange={e => setMaxHoursDay(parseInt(e.target.value) || 1)} />
+            </div>
+            <div>
+              <label className="label">Horas máx. por semana</label>
+              <input type="number" min="1" max="168" className="input"
+                value={maxHoursWeek}
+                onChange={e => setMaxHoursWeek(parseInt(e.target.value) || 1)} />
+            </div>
+          </div>
+          <p className="text-xs text-ink-muted">
+            Default según LFT: 9 h/día y 48 h/semana. Excederlo no bloquea —
+            requiere confirmación del supervisor y queda en bitácora como tiempo extra.
+          </p>
+        </div>
+
         <div className="bg-surface-elevated/60 border border-line-subtle rounded-xl p-4">
           <label className="label">Tolerancia de confirmación (minutos)</label>
           <input type="number" min="0" max="60" className="input w-24"
             value={shifts[0]?.confirmationToleranceMinutes || 15}
-            onChange={e => setShifts(p => p.map(s => ({ ...s, confirmationToleranceMinutes: parseInt(e.target.value) })))}
+            onChange={e => setShifts(p => p.map(s => ({ ...s, confirmationToleranceMinutes: parseInt(e.target.value) || 0 })))}
           />
           <p className="text-xs text-ink-muted mt-1">Tiempo máximo para confirmar presencia antes de generar alerta.</p>
         </div>
         {error && <p className="field-error">{error}</p>}
         <div className="flex gap-2">
           <button onClick={onClose} className="btn-secondary flex-1">Cancelar</button>
-          <button onClick={() => mutation.mutate()} disabled={mutation.isPending} className="btn-primary flex-1">
+          <button onClick={() => mutation.mutate()} disabled={mutation.isPending || shifts.length === 0} className="btn-primary flex-1">
             {mutation.isPending ? <Spinner size="sm" /> : 'Guardar cambios'}
           </button>
         </div>
@@ -142,7 +252,7 @@ function ShiftConfigModal({ currentConfig, onClose }) {
 }
 
 // ── Modal editar turno ──────────────────────────────────────────────────────
-function EditModal({ shift, users, onClose, onSaved }) {
+function EditModal({ shift, users, shiftConfig = [], onClose, onSaved }) {
   const qc = useQueryClient()
   const [operatorId, setOperatorId]   = useState(shift.operator_id || '')
   const [notes, setNotes]             = useState(shift.notes || '')
@@ -191,7 +301,7 @@ function EditModal({ shift, users, onClose, onSaved }) {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-base font-semibold text-ink-primary">
-              {SHIFTS.find(s => s.number === String(shift.shift_number))?.label} · {fmtDay(new Date(shift.scheduled_date))}
+              {shiftLabelOf(shiftConfig, shift.shift_number)} · {fmtDay(new Date(shift.scheduled_date))}
             </h2>
             <p className="text-xs text-ink-muted mt-0.5">
               {shift.product_name ? `${shift.product_name} · ${shift.order_number}` : 'Sin orden asignada'}
@@ -278,7 +388,7 @@ function EditModal({ shift, users, onClose, onSaved }) {
         <div className="flex gap-2 pt-1">
           <button
             onClick={() => {
-              if (window.confirm(`¿Cancelar el ${SHIFTS.find(s => s.number === String(shift.shift_number))?.label} del ${fmtDay(new Date(shift.scheduled_date))}?`)) {
+              if (window.confirm(`¿Cancelar el ${shiftLabelOf(shiftConfig, shift.shift_number)} del ${fmtDay(new Date(shift.scheduled_date))}?`)) {
                 cancelMutation.mutate()
               }
             }}
@@ -302,25 +412,52 @@ function EditModal({ shift, users, onClose, onSaved }) {
 }
 
 // ── Modal programar turno ───────────────────────────────────────────────────
-function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervisor = true, onClose }) {
+function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervisor = true, shiftConfig = [], tenantConfig = null, onClose }) {
   const qc = useQueryClient()
+
+  const effectiveShifts = useMemo(() => buildEffectiveShifts(shiftConfig), [shiftConfig])
+
   const [orderId, setOrderId]       = useState('')
   const [shiftNum, setShiftNum]     = useState(defaultShift || '1')
   const [date, setDate]             = useState(defaultDate || toLocalISODate(new Date()))
-  const [start, setStart]           = useState(SHIFTS.find(s => s.number === (defaultShift || '1'))?.hour || '06:00')
+  const [start, setStart]           = useState(effectiveShifts.find(s => s.number === (defaultShift || '1'))?.hour || '06:00')
   const [operatorId, setOperatorId] = useState('')
   const [supervisorId, setSuperv]   = useState('')
   const [notes, setNotes]           = useState('')
   const [error, setError]           = useState(null)
+  const [ackOvertime, setAckOT]     = useState(false)
 
   // Estado de validación visual: marca campos vacíos cuando el usuario intenta enviar
   // La orden NO es obligatoria asignar (es opcional); operador siempre, supervisor solo si el tenant lo usa.
   const [submitted, setSubmitted]   = useState(false)
   const missingOperator   = submitted && !operatorId
   const missingSupervisor = submitted && usesSupervisor && !supervisorId
+  const missingCount      = (missingOperator ? 1 : 0) + (missingSupervisor ? 1 : 0)
 
   const noOrders = !orders || orders.length === 0
   const noUsers  = !users  || users.length  === 0
+
+  // Horas ya programadas del operador en el día/semana — solo consultar cuando
+  // hay operador y fecha. Si el límite del tenant es null/0 lo ignoramos.
+  const { data: hoursInfo } = useQuery({
+    queryKey: ['operator-hours', operatorId, date],
+    queryFn: () => productionApi.getOperatorHours({ operatorId, date }),
+    enabled: !!operatorId && !!date,
+    staleTime: 10 * 1000,
+  })
+
+  const turnoActual = effectiveShifts.find(s => s.number === shiftNum)
+  const horasDelTurno = turnoActual?.durationHours || 8
+  const horasDia    = (hoursInfo?.day  || 0) + horasDelTurno
+  const horasSemana = (hoursInfo?.week || 0) + horasDelTurno
+  const limDia      = hoursInfo?.dayMax  || (tenantConfig?.max_hours_per_day  ?? 9)
+  const limSemana   = hoursInfo?.weekMax || (tenantConfig?.max_hours_per_week ?? 48)
+  const excedeDia    = !!operatorId && horasDia    > limDia
+  const excedeSemana = !!operatorId && horasSemana > limSemana
+  const excedeAlgo   = excedeDia || excedeSemana
+
+  // Reset del check cuando cambia operador/fecha/turno (la condición de exceso cambia)
+  useEffect(() => { setAckOT(false) }, [operatorId, date, shiftNum])
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -335,6 +472,16 @@ function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervi
         operatorId,
         supervisorId: usesSupervisor ? supervisorId : (supervisorId || operatorId),
         notes: notes || null,
+        isOvertimeAcknowledged: excedeAlgo && ackOvertime,
+        overtimeContext: excedeAlgo ? {
+          plannedHoursForShift: horasDelTurno,
+          previousDayHours:     hoursInfo?.day  || 0,
+          previousWeekHours:    hoursInfo?.week || 0,
+          dayMax:               limDia,
+          weekMax:              limSemana,
+          dayExcess:    Math.max(0, horasDia    - limDia),
+          weekExcess:   Math.max(0, horasSemana - limSemana),
+        } : null,
       })
     },
     onSuccess: () => {
@@ -377,6 +524,10 @@ function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervi
     }
     if (noOrders) {
       setError('No hay órdenes liberadas o en proceso. Crea o libera una orden antes de programar turnos.')
+      return
+    }
+    if (excedeAlgo && !ackOvertime) {
+      setError('Marca la confirmación de tiempo extra antes de continuar.')
       return
     }
     mutation.mutate()
@@ -432,8 +583,8 @@ function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervi
         {/* Turno */}
         <div>
           <label className="label">Turno <span className="text-status-danger">*</span></label>
-          <div className="grid grid-cols-3 gap-2">
-            {SHIFTS.map(s => (
+          <div className={clsx('grid gap-2', effectiveShifts.length <= 3 ? 'grid-cols-3' : 'grid-cols-2')}>
+            {effectiveShifts.map(s => (
               <button key={s.number} type="button"
                 onClick={() => { setShiftNum(s.number); setStart(s.hour) }}
                 className={clsx(
@@ -498,6 +649,33 @@ function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, usesSupervi
             onChange={e => setNotes(e.target.value)}
             placeholder="Instrucciones para el operador..." />
         </div>
+
+        {/* Warning de tiempo extra: aparece cuando el operador excede el límite
+            de horas/día u horas/semana del tenant. Bloquea submit hasta confirmar. */}
+        {excedeAlgo && (
+          <div className="rounded-lg border-2 border-status-warning/40 bg-status-warning/10 p-3 flex flex-col gap-2">
+            <p className="text-sm font-semibold text-status-warning">⚠ Excede el límite de horas</p>
+            {excedeDia && (
+              <p className="text-xs text-status-warning">
+                Este operador ya tiene <b>{hoursInfo?.day || 0} h</b> programadas hoy.
+                Sumando este turno serían <b>{horasDia} h</b> — excede el límite de {limDia} h/día en {horasDia - limDia} h.
+              </p>
+            )}
+            {excedeSemana && (
+              <p className="text-xs text-status-warning">
+                Esta semana acumula <b>{hoursInfo?.week || 0} h</b>; con este turno serían <b>{horasSemana} h</b>
+                {' '}— excede el límite de {limSemana} h/semana en {horasSemana - limSemana} h.
+              </p>
+            )}
+            <label className="flex items-center gap-2 cursor-pointer pt-1">
+              <input type="checkbox" checked={ackOvertime} onChange={e => setAckOT(e.target.checked)}
+                className="w-4 h-4 accent-amber-500" />
+              <span className="text-sm font-medium text-status-warning">
+                Confirmo programar como tiempo extra
+              </span>
+            </label>
+          </div>
+        )}
 
         {/* Banner de error grande y visible */}
         {error && (
@@ -607,11 +785,7 @@ export default function ProduccionProgramacion() {
     queryFn: productionApi.getShiftConfig,
     staleTime: 5 * 60 * 1000,
   })
-  const shiftsToRender = shiftConfig.length > 0 ? shiftConfig : [
-    { shift_number: 1, name: 'Turno 1', start_time: '06:00', duration_hours: 8 },
-    { shift_number: 2, name: 'Turno 2', start_time: '14:00', duration_hours: 8 },
-    { shift_number: 3, name: 'Turno 3', start_time: '22:00', duration_hours: 8 },
-  ]
+  const effectiveShifts = useMemo(() => buildEffectiveShifts(shiftConfig), [shiftConfig])
 
   const monday = getMonday(weekOffset)
   const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6)
@@ -664,12 +838,12 @@ export default function ProduccionProgramacion() {
         return sd === dateStr
       })
       const byShift = {}
-      SHIFTS.forEach(sh => {
+      effectiveShifts.forEach(sh => {
         byShift[sh.number] = dayShifts.find(s => String(s.shift_number) === sh.number) || null
       })
       return { date: d, dateStr, isPast, isToday, byShift, allShifts: dayShifts }
     })
-  }, [shifts, monday, todayStr])
+  }, [shifts, monday, todayStr, effectiveShifts])
 
   // Alerta de turnos sin confirmar hoy
   const pendingToday = shifts.filter(s => {
@@ -741,7 +915,7 @@ export default function ProduccionProgramacion() {
             </p>
             {pendingToday.map(s => (
               <p key={s.id} className="text-xs text-status-warning mt-0.5">
-                {SHIFTS.find(sh => sh.number === String(s.shift_number))?.label} ({s.scheduled_start?.slice(0, 5)}) — {s.operator_name}
+                {shiftLabelOf(shiftConfig, s.shift_number)} ({s.scheduled_start?.slice(0, 5)}) — {s.operator_name}
               </p>
             ))}
           </div>
@@ -796,7 +970,7 @@ export default function ProduccionProgramacion() {
             </div>
 
             {/* Filas por turno */}
-            {SHIFTS.map(shift => (
+            {effectiveShifts.map(shift => (
               <div key={shift.number} className="grid grid-cols-8 gap-2 mb-2">
                 {/* Label turno */}
                 <div className="flex flex-col justify-center pr-2">
@@ -877,7 +1051,7 @@ export default function ProduccionProgramacion() {
                 </div>
               ) : (
                 <div className="divide-y divide-line-subtle">
-                  {SHIFTS.map(sh => {
+                  {effectiveShifts.map(sh => {
                     const s = allShifts.find(x => String(x.shift_number) === sh.number)
                     const sc = s ? STATUS_CONFIG[s.status] : null
                     return (
@@ -940,12 +1114,17 @@ export default function ProduccionProgramacion() {
 
       {/* Modales */}
       {showConfig && shiftConfig.length > 0 && (
-        <ShiftConfigModal currentConfig={shiftConfig} onClose={() => setShowConfig(false)} />
+        <ShiftConfigModal
+          currentConfig={shiftConfig}
+          tenantConfig={tenantConfig}
+          onClose={() => setShowConfig(false)}
+        />
       )}
       {editingShift && (
         <EditModal
           shift={editingShift}
           users={users}
+          shiftConfig={shiftConfig}
           onClose={() => setEditing(null)}
           onSaved={handleSaved}
         />
@@ -958,6 +1137,8 @@ export default function ProduccionProgramacion() {
           orders={orders}
           users={users}
           usesSupervisor={usesSupervisor}
+          shiftConfig={shiftConfig}
+          tenantConfig={tenantConfig}
           onClose={() => setNewCtx(null)}
         />
       )}
