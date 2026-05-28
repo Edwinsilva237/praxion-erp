@@ -21,7 +21,10 @@ const TYPE_OPTIONS = [
     desc: 'Productos que compras terminados a un proveedor para vender sin transformarlos.' },
 ]
 
-const RESIN_REQUIRED = ['raw_material', 'regrind']
+// Tipos que ofrecen el campo "Tipo de resina" como etiqueta opcional cuando
+// el tenant tiene `uses_resin_types=true`. No es obligatorio: un mismo almacén
+// puede contener varias resinas — la resina vive en la materia prima.
+const RESIN_OFFERED = ['raw_material', 'regrind']
 
 export default function WarehouseModal({ warehouse, onClose, onSaved }) {
   const isEditing = !!warehouse
@@ -56,7 +59,7 @@ export default function WarehouseModal({ warehouse, onClose, onSaved }) {
     staleTime: 300000,
   })
   const usesResinTypes = tenantConfig?.uses_resin_types ?? false
-  const requiresResin = usesResinTypes && RESIN_REQUIRED.includes(form.type)
+  const showResinField = usesResinTypes && RESIN_OFFERED.includes(form.type)
 
   // ── Mutaciones ─────────────────────────────────────────────────────────────
   const createMut = useMutation({
@@ -77,8 +80,7 @@ export default function WarehouseModal({ warehouse, onClose, onSaved }) {
 
   // ── Validación ─────────────────────────────────────────────────────────────
   const errors = []
-  if (!form.name.trim())                   errors.push('El nombre es obligatorio.')
-  if (requiresResin && !form.resin_type)   errors.push('Los almacenes MP/Regrind requieren tipo de resina.')
+  if (!form.name.trim()) errors.push('El nombre es obligatorio.')
 
   // ── Submit ─────────────────────────────────────────────────────────────────
   function handleSubmit(e) {
@@ -178,19 +180,25 @@ export default function WarehouseModal({ warehouse, onClose, onSaved }) {
             )}
           </div>
 
-          {/* ── Resina ─────────────────────────────────────────────── */}
-          {requiresResin && (
+          {/* ── Resina (opcional) ──────────────────────────────────── */}
+          {showResinField && (
             <div>
-              <label className="label">Tipo de resina *</label>
+              <label className="label">
+                Tipo de resina <span className="text-ink-muted font-normal">(opcional)</span>
+              </label>
               <select
-                className={clsx('select', showFieldErrors && !form.resin_type && 'border-status-danger/40')}
+                className="select"
                 value={form.resin_type}
                 onChange={e => setForm(f => ({ ...f, resin_type: e.target.value }))}
               >
-                <option value="">— Selecciona —</option>
+                <option value="">— Sin segregar (acepta cualquier resina) —</option>
                 <option value="PP">PP — Polipropileno</option>
                 <option value="PE">PE — Polietileno</option>
               </select>
+              <p className="text-[11px] text-ink-muted mt-1.5 leading-relaxed">
+                Solo márcala si físicamente segregas el almacén por resina. La resina vive en cada materia prima
+                — un mismo almacén puede contener varias.
+              </p>
             </div>
           )}
 

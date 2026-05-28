@@ -3,8 +3,7 @@
 const { query, withTransaction } = require('../../db')
 const createError = require('http-errors')
 
-const VALID_TYPES = ['raw_material', 'wip', 'finished_product', 'regrind', 'resale']
-const RESIN_REQUIRED_TYPES = ['raw_material', 'regrind']
+const VALID_TYPES = ['raw_material', 'packaging', 'wip', 'finished_product', 'regrind', 'resale']
 
 /**
  * Lista todos los almacenes con conteo de stock y movimientos.
@@ -40,11 +39,12 @@ async function list({ tenantId, type, includeInactive = false }) {
     ORDER BY
       CASE w.type
         WHEN 'raw_material'     THEN 1
-        WHEN 'wip'              THEN 2
-        WHEN 'finished_product' THEN 3
-        WHEN 'regrind'          THEN 4
-        WHEN 'resale'           THEN 5
-        ELSE 6
+        WHEN 'packaging'        THEN 2
+        WHEN 'wip'              THEN 3
+        WHEN 'finished_product' THEN 4
+        WHEN 'regrind'          THEN 5
+        WHEN 'resale'           THEN 6
+        ELSE 7
       END,
       w.is_default DESC,
       w.name ASC
@@ -66,7 +66,8 @@ async function getById({ tenantId, id }) {
  *
  * Reglas:
  *   - Tipo debe ser uno de los 5 del sistema.
- *   - Tipos raw_material y regrind requieren resin_type.
+ *   - resin_type es opcional (etiqueta informativa) para tenants que físicamente
+ *     segregan por resina; un mismo almacén puede contener PE y PP.
  *   - Si makeDefault=true, desmarca el default existente del mismo tipo.
  *   - Si NO existe ningún default activo del tipo, este se marca default
  *     automáticamente (para evitar que un tipo se quede sin default).
@@ -76,9 +77,6 @@ async function create({ tenantId, name, type, resinType, description, isActive =
   if (!VALID_TYPES.includes(type)) {
     throw createError(400, `type inválido. Valores permitidos: ${VALID_TYPES.join(', ')}.`)
   }
-  if (RESIN_REQUIRED_TYPES.includes(type) && !resinType) {
-    throw createError(400, `Los almacenes tipo ${type} requieren resin_type (PP o PE).`)
-  }
   if (resinType && !['PP', 'PE'].includes(resinType)) {
     throw createError(400, 'resin_type debe ser PP o PE.')
   }
@@ -86,6 +84,7 @@ async function create({ tenantId, name, type, resinType, description, isActive =
   // Mapa enum legacy → code en tenant_warehouse_types (migration 121)
   const TYPE_TO_CATALOG_CODE = {
     raw_material:     'materia_prima',
+    packaging:        'embalaje',
     regrind:          'merma',
     wip:              'wip',
     finished_product: 'producto_terminado',
@@ -162,14 +161,9 @@ async function update({ tenantId, id, patch }) {
       throw createError(400, 'No se puede cambiar el tipo de un almacén existente. Desactívalo y crea uno nuevo.')
     }
 
-    // Validación de resin_type
-    if ('resin_type' in patch) {
-      if (RESIN_REQUIRED_TYPES.includes(wh.type) && !patch.resin_type) {
-        throw createError(400, `Los almacenes tipo ${wh.type} requieren resin_type.`)
-      }
-      if (patch.resin_type && !['PP', 'PE'].includes(patch.resin_type)) {
-        throw createError(400, 'resin_type debe ser PP o PE.')
-      }
+    // Validación de resin_type (opcional, solo formato)
+    if ('resin_type' in patch && patch.resin_type && !['PP', 'PE'].includes(patch.resin_type)) {
+      throw createError(400, 'resin_type debe ser PP o PE.')
     }
 
     // Validación de desactivación del default

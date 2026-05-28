@@ -3,7 +3,7 @@
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
 const { recordMovement, recordPackageCaptured, recordProductionValidation, recordScrapWipEntry,
-        getWarehouseId } = require('../inventory/inventoryService')
+        getWarehouseId, getWarehouseIdForRawMaterial } = require('../inventory/inventoryService')
 const { resolveRecipeForOrder } = require('./recipeResolver')  // SaaS v2 refactor §5d
 const { selectLotsForQuantity } = require('./lotSelector')     // SaaS v2 refactor §5f
 const { ensureProductLotForPackage, distributeRawMaterialLotsToProductLots,
@@ -445,7 +445,9 @@ async function previewStockForRecipe({ tenantId, recipeId, totalPtKg }) {
     }
   }
 
-  // Stock por componente
+  // Stock por componente. Suma de almacenes raw_material + packaging — los
+  // tenants que separan bolsas/etiquetas en almacén dedicado (type='packaging')
+  // ven el stock total correctamente. Tenants sin almacén packaging operan igual.
   const materialIds = compRows.map(c => c.raw_material_id)
   const { rows: stockRows } = await query(
     `SELECT s.item_id, COALESCE(SUM(s.quantity), 0) AS available_kg
@@ -453,7 +455,7 @@ async function previewStockForRecipe({ tenantId, recipeId, totalPtKg }) {
      JOIN warehouses w ON w.id = s.warehouse_id
      WHERE s.tenant_id = $1 AND s.item_type = 'raw_material'
        AND s.item_id = ANY($2::uuid[]) AND s.status = 'available'
-       AND w.type = 'raw_material' AND w.is_active = true
+       AND w.type IN ('raw_material','packaging') AND w.is_active = true
      GROUP BY s.item_id`,
     [tenantId, materialIds]
   )
@@ -574,7 +576,7 @@ async function previewStockForNewOrder({ tenantId, productId, lengthMm, quantity
   )
   const matMap = Object.fromEntries(matRows.map(m => [m.id, m.name]))
 
-  // Stock disponible por material en almacén MP
+  // Stock disponible por material en almacenes consumibles (MP + embalaje)
   const { rows: stockRows } = await query(
     `SELECT s.item_id, COALESCE(SUM(s.quantity), 0) AS available_kg
      FROM inventory_stock s
@@ -583,7 +585,7 @@ async function previewStockForNewOrder({ tenantId, productId, lengthMm, quantity
        AND s.item_type = 'raw_material'
        AND s.item_id   = ANY($2::uuid[])
        AND s.status    = 'available'
-       AND w.type = 'raw_material'
+       AND w.type IN ('raw_material','packaging')
        AND w.is_active = true
      GROUP BY s.item_id`,
     [tenantId, materialIds]
@@ -716,7 +718,7 @@ async function getOrderStockAvailability({ tenantId, orderId }) {
     }
   }
 
-  // Stock disponible por material en almacén MP (status='available')
+  // Stock disponible por material en almacenes consumibles (MP + embalaje, status='available')
   const materialIds = requiredByMaterial.map(c => c.rawMaterialId)
   const { rows: stockRows } = await query(
     `SELECT s.item_id, COALESCE(SUM(s.quantity), 0) AS available_kg
@@ -726,7 +728,7 @@ async function getOrderStockAvailability({ tenantId, orderId }) {
        AND s.item_type = 'raw_material'
        AND s.item_id   = ANY($2::uuid[])
        AND s.status    = 'available'
-       AND w.type = 'raw_material'
+       AND w.type IN ('raw_material','packaging')
        AND w.is_active = true
      GROUP BY s.item_id`,
     [tenantId, materialIds]
@@ -1484,14 +1486,16 @@ async function recordScrap({ tenantId, shiftId, scrapType, scrapTypeId, destinat
           )
           const usesLots = cfgRows[0]?.uses_lots
 
-          const { rows: whRows } = await client.query(
-            `SELECT id FROM warehouses
-             WHERE tenant_id = $1 AND type = 'raw_material' AND is_active = true
-             ORDER BY is_default DESC, created_at ASC LIMIT 1`,
-            [tenantId]
-          )
-          if (whRows[0]) {
-            const rmWarehouseId = whRows[0].id
+          // Rutea por item_kind del linked_raw_material: si la MP recuperada
+          // es de tipo 'packaging', escribe en el almacén de embalaje del tenant
+          // (si lo tiene configurado); si no, cae al default raw_material.
+          let rmWarehouseId = null
+          try {
+            rmWarehouseId = await getWarehouseIdForRawMaterial(client, tenantId, catalog.linked_raw_material_id)
+          } catch (_) {
+            rmWarehouseId = null
+          }
+          if (rmWarehouseId) {
 
             if (usesLots) {
               const lotNum = `REP-${scrapRecord.id.slice(0, 8).toUpperCase()}`

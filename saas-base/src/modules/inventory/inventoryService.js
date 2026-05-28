@@ -26,6 +26,47 @@ async function getWarehouseId(client, tenantId, type) {
 }
 
 /**
+ * Devuelve el almacén default según el `item_kind` de la materia prima.
+ *
+ * Reglas:
+ *   - item_kind='packaging' → intenta `type='packaging'`; si el tenant no tiene
+ *     almacén de embalaje configurado, cae a `type='raw_material'` (modo legacy
+ *     en el que todo lo consumible vive en MP).
+ *   - item_kind='raw_material' o 'additive' → `type='raw_material'`.
+ *
+ * Esto permite que tenants que separan físicamente bolsas/etiquetas tengan un
+ * almacén dedicado, mientras que tenants que no lo necesitan operen con un
+ * único almacén raw_material como hasta hoy.
+ */
+async function getWarehouseIdForItemKind(client, tenantId, itemKind) {
+  if (itemKind === 'packaging') {
+    const { rows } = await client.query(
+      `SELECT id FROM warehouses
+       WHERE tenant_id = $1 AND type = 'packaging' AND is_active = true
+       ORDER BY is_default DESC, created_at ASC, id ASC
+       LIMIT 1`,
+      [tenantId]
+    )
+    if (rows[0]) return rows[0].id
+    // Fallback: tenant sin almacén packaging → usar raw_material como antes
+  }
+  return getWarehouseId(client, tenantId, 'raw_material')
+}
+
+/**
+ * Resuelve el warehouse default según el `item_kind` de un raw_material por ID.
+ * Atajo para callers que solo tienen el rawMaterialId.
+ */
+async function getWarehouseIdForRawMaterial(client, tenantId, rawMaterialId) {
+  const { rows } = await client.query(
+    `SELECT item_kind FROM raw_materials WHERE id = $1 AND tenant_id = $2`,
+    [rawMaterialId, tenantId]
+  )
+  const itemKind = rows[0]?.item_kind || 'raw_material'
+  return getWarehouseIdForItemKind(client, tenantId, itemKind)
+}
+
+/**
  * Upsert en inventory_stock con costo promedio ponderado.
  *
  * Entradas (+): recalcula avg_cost.
@@ -1013,6 +1054,8 @@ module.exports = {
   getStock,
   getWarehouses,
   getWarehouseId,
+  getWarehouseIdForItemKind,
+  getWarehouseIdForRawMaterial,
   getMovements,
   getInventorySummary,
 
