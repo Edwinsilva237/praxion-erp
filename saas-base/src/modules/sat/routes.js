@@ -102,6 +102,88 @@ router.get('/product-codes/:code', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// ─── c_ClaveUnidad (~2,418 entradas, sin descripciones por default) ────────
+router.get('/unit-codes', async (req, res, next) => {
+  try {
+    const q = String(req.query.q || '').trim()
+    const limit = Math.min(parseInt(req.query.limit || 30, 10), 100)
+    if (!q) {
+      const { rows } = await query(
+        `SELECT code, name FROM sat_unit_codes
+          WHERE is_active = true ORDER BY code LIMIT $1`,
+        [limit]
+      )
+      return res.json(rows)
+    }
+    // El código del SAT puede ser 1-3 caracteres alfanuméricos (KGM, MTR, H87,
+    // pero también '11', 'KT'). Buscamos por prefijo de code en mayúsculas y
+    // por substring de name (las pocas que tienen descripción).
+    const qUpper = q.toUpperCase()
+    const { rows } = await query(
+      `SELECT code, name FROM sat_unit_codes
+        WHERE is_active = true
+          AND (code LIKE $1 || '%' OR name ILIKE '%' || $2 || '%')
+        ORDER BY (code = $1) DESC, similarity(name, $2) DESC, code
+        LIMIT $3`,
+      [qUpper, q, limit]
+    )
+    res.json(rows)
+  } catch (err) { next(err) }
+})
+
+router.get('/unit-codes/:code', async (req, res, next) => {
+  try {
+    const code = String(req.params.code || '').trim().toUpperCase()
+    const { rows } = await query(
+      `SELECT code, name FROM sat_unit_codes WHERE code = $1`,
+      [code]
+    )
+    if (!rows[0]) return res.status(404).json({ error: 'Código no encontrado.' })
+    res.json(rows[0])
+  } catch (err) { next(err) }
+})
+
+router.post('/unit-codes/bulk-import',
+  assertSuperAdmin,
+  upload.single('file'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'Se requiere un archivo CSV.' })
+      const text = req.file.buffer.toString('utf8')
+      const lines = text.split(/\r?\n/).filter(l => l.trim())
+      if (lines.length === 0) return res.status(400).json({ error: 'Archivo vacío.' })
+      const startIdx = /^[A-Z0-9]{1,3}\s*,/.test(lines[0]) ? 0 : 1
+      const rows = []
+      const errors = []
+      for (let i = startIdx; i < lines.length; i++) {
+        const m = lines[i].match(/^([A-Z0-9]{1,3})\s*,\s*(?:"([^"]*)"|(.+?))\s*$/)
+        if (!m) { errors.push({ line: i + 1, content: lines[i].slice(0, 80) }); continue }
+        const code = m[1]
+        const name = (m[2] ?? m[3] ?? '').trim()
+        if (name) rows.push({ code, name })
+      }
+      let upserted = 0
+      const BATCH = 1000
+      for (let i = 0; i < rows.length; i += BATCH) {
+        const batch = rows.slice(i, i + BATCH)
+        const values = []
+        const params = []
+        for (const r of batch) {
+          values.push(`($${params.length + 1}, $${params.length + 2})`)
+          params.push(r.code, r.name)
+        }
+        await query(
+          `INSERT INTO sat_unit_codes (code, name) VALUES ${values.join(',')}
+           ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()`,
+          params
+        )
+        upserted += batch.length
+      }
+      res.json({ upserted, skipped: errors.length, errors: errors.slice(0, 20) })
+    } catch (err) { next(err) }
+  }
+)
+
 /**
  * POST /api/sat/product-codes/bulk-import
  *
