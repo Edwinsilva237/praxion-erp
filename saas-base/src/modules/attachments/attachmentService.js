@@ -86,6 +86,19 @@ async function saveAttachment({
      key, buffer.length, mimeType, description || null, uploadedBy || null]
   )
 
+  // Imagen única del producto: además de guardar el attachment, denormalizamos
+  // su id en `products.image_attachment_id` para que el frontend la encuentre
+  // sin tener que escanear la lista de attachments. Sin este UPDATE el campo
+  // queda en NULL y ProductImageUploader nunca solicita el blob — síntoma:
+  // la imagen "se sube sin error pero no aparece".
+  if (entityType === 'product' && category === 'image') {
+    await query(
+      `UPDATE products SET image_attachment_id = $1
+        WHERE id = $2 AND tenant_id = $3`,
+      [rows[0].id, entityId, tenantId]
+    )
+  }
+
   return rows[0]
 }
 
@@ -138,7 +151,7 @@ async function getAttachmentInfo({ tenantId, attachmentId }) {
 async function deleteAttachment({ tenantId, attachmentId }) {
   const { rows } = await query(
     `DELETE FROM attachments WHERE id = $1 AND tenant_id = $2
-     RETURNING id, storage_path, filename`,
+     RETURNING id, storage_path, filename, entity_type, entity_id, category`,
     [attachmentId, tenantId]
   )
 
@@ -146,6 +159,16 @@ async function deleteAttachment({ tenantId, attachmentId }) {
 
   await storage.remove(rows[0].storage_path)
   logger.info('Attachment deleted', { key: rows[0].storage_path })
+
+  // Espejo de la denormalización en saveAttachment: si era la imagen del
+  // producto, limpiar la referencia para que el front sepa que ya no existe.
+  if (rows[0].entity_type === 'product' && rows[0].category === 'image') {
+    await query(
+      `UPDATE products SET image_attachment_id = NULL
+        WHERE id = $1 AND tenant_id = $2 AND image_attachment_id = $3`,
+      [rows[0].entity_id, tenantId, rows[0].id]
+    )
+  }
 
   return rows[0]
 }
