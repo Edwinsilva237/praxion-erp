@@ -11,6 +11,7 @@ import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
 import clsx from 'clsx'
+import SatCatalogSelect from '@/components/fiscal/SatCatalogSelect'
 
 // ─── Catálogos SAT ────────────────────────────────────────────────────────────
 const REGIMENES = [
@@ -630,18 +631,16 @@ function PartnerModal({ partner: partnerStub, onClose, onSaved }) {
 
             <div>
               <label className="label">Régimen fiscal</label>
-              <select className="select" {...register('taxRegimeCode')}
-                onChange={(e) => {
-                  setValue('taxRegimeCode', e.target.value)
-                  const found = REGIMENES.find(r => r.code === e.target.value)
-                  if (found) setValue('taxRegime', found.label)
+              <SatCatalogSelect
+                endpoint="regimen-fiscal"
+                value={watch('taxRegimeCode')}
+                onChange={code => {
+                  setValue('taxRegimeCode', code, { shouldDirty: true })
+                  // taxRegime guarda el nombre (compat con código viejo).
+                  if (code) setValue('taxRegime', code, { shouldDirty: true })
                 }}
-              >
-                <option value="">Seleccionar régimen</option>
-                {REGIMENES.map(r => (
-                  <option key={r.code} value={r.code}>{r.label}</option>
-                ))}
-              </select>
+                placeholder="Buscar por código o nombre…"
+              />
             </div>
 
           </Section>
@@ -655,22 +654,32 @@ function PartnerModal({ partner: partnerStub, onClose, onSaved }) {
           >
             <div>
               <label className="label">Uso de CFDI</label>
-              <select className="select" {...register('cfdiUse')}>
-                {CFDI_USES.map(u => <option key={u.code} value={u.code}>{u.label}</option>)}
-              </select>
+              <SatCatalogSelect
+                endpoint="uso-cfdi"
+                params={watch('taxRegimeCode') ? { regimen: watch('taxRegimeCode') } : {}}
+                value={watch('cfdiUse')}
+                onChange={code => setValue('cfdiUse', code, { shouldDirty: true })}
+                placeholder="Buscar por código o nombre…"
+              />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="label">Método de pago</label>
-                <select className="select" {...register('paymentMethod')}>
-                  {PAYMENT_METHODS.map(m => <option key={m.code} value={m.code}>{m.label}</option>)}
-                </select>
+                <SatCatalogSelect
+                  endpoint="metodo-pago"
+                  value={watch('paymentMethod')}
+                  onChange={code => setValue('paymentMethod', code, { shouldDirty: true })}
+                  placeholder="PUE / PPD"
+                />
               </div>
               <div>
                 <label className="label">Forma de pago</label>
-                <select className="select" {...register('paymentForm')}>
-                  {PAYMENT_FORMS.map(f => <option key={f.code} value={f.code}>{f.label}</option>)}
-                </select>
+                <SatCatalogSelect
+                  endpoint="forma-pago"
+                  value={watch('paymentForm')}
+                  onChange={code => setValue('paymentForm', code, { shouldDirty: true })}
+                  placeholder="Efectivo, transferencia…"
+                />
               </div>
             </div>
           </Section>

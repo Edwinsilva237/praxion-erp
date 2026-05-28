@@ -175,6 +175,32 @@ router.post('/invoices/:id/cancel', checkPermission('invoicing', 'update'), asyn
  * endpoint /stamp-status?jobId=X. Si no, ejecuta sincrónico y devuelve el
  * resultado completo como antes.
  */
+/**
+ * POST /api/invoicing/invoices/:id/validate-sat
+ * Corre solo las validaciones SAT (sin timbrar). Util para que el frontend
+ * muestre errores al usuario antes de pulsar "Timbrar". Devuelve:
+ *   { ok: bool, errors: [{ field, code, message }] }
+ * Permiso solo de read porque no muta nada.
+ */
+router.post('/invoices/:id/validate-sat', checkPermission('invoicing', 'read'), async (req, res, next) => {
+  try {
+    const { query } = require('../../db')
+    const { validateAgainstSatCatalogs } = require('./satCatalogValidator')
+    const { rows } = await query(
+      `SELECT inv.*, bp.rfc AS partner_rfc, bp.tax_regime_code AS partner_tax_regime,
+              tfi.rfc AS emisor_rfc, tfi.tax_regime AS emisor_regime
+         FROM invoices inv
+         JOIN business_partners bp ON bp.id = inv.partner_id
+         LEFT JOIN tenant_fiscal_info tfi ON tfi.tenant_id = inv.tenant_id
+        WHERE inv.id = $1 AND inv.tenant_id = $2`,
+      [req.params.id, req.tenant.id]
+    )
+    if (!rows[0]) return res.status(404).json({ error: 'Factura no encontrada.' })
+    const errors = await validateAgainstSatCatalogs(rows[0])
+    res.json({ ok: errors.length === 0, errors })
+  } catch (err) { next(err) }
+})
+
 router.post('/invoices/:id/stamp', checkPermission('invoicing', 'create'), async (req, res, next) => {
   try {
     const out = await enqueueInvoiceStamp({

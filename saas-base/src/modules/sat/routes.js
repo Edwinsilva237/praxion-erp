@@ -254,4 +254,83 @@ router.post('/product-codes/bulk-import',
   }
 )
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CATALOGOS FISCALES (mig 170) — alimentan dropdowns en formularios de
+// facturacion y validacion pre-timbrado. Todos son catalogos globales.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Helper genérico para devolver toda la lista activa de un catálogo.
+function simpleListRoute(table, orderBy = 'code') {
+  return async (req, res, next) => {
+    try {
+      const { rows } = await query(
+        `SELECT * FROM ${table} WHERE is_active = true ORDER BY ${orderBy}`
+      )
+      res.json(rows)
+    } catch (err) { next(err) }
+  }
+}
+
+router.get('/regimen-fiscal', async (req, res, next) => {
+  try {
+    // Opcional: ?persona=fisica|moral filtra los regimenes que aplican.
+    const persona = String(req.query.persona || '').toLowerCase()
+    let where = 'WHERE is_active = true'
+    if (persona === 'fisica') where += ' AND fisica = true'
+    else if (persona === 'moral') where += ' AND moral = true'
+    const { rows } = await query(`SELECT * FROM sat_regimen_fiscal ${where} ORDER BY code`)
+    res.json(rows)
+  } catch (err) { next(err) }
+})
+
+router.get('/uso-cfdi', async (req, res, next) => {
+  try {
+    // ?persona=fisica|moral y/o ?regimen=612 filtra los usos compatibles.
+    const persona = String(req.query.persona || '').toLowerCase()
+    const regimen = String(req.query.regimen || '').trim()
+    let where = 'WHERE is_active = true'
+    const params = []
+    if (persona === 'fisica') where += ' AND fisica = true'
+    else if (persona === 'moral') where += ' AND moral = true'
+    if (regimen) {
+      // regimenes_csv es "601, 603, 606, 612, ..." — buscamos el código entre los
+      // separados por coma (con tolerancia a espacios).
+      params.push(regimen)
+      where += ` AND (regimenes_csv IS NULL OR string_to_array(regexp_replace(regimenes_csv, '\\\\s+', '', 'g'), ',') @> ARRAY[$${params.length}])`
+    }
+    const { rows } = await query(`SELECT * FROM sat_uso_cfdi ${where} ORDER BY code`, params)
+    res.json(rows)
+  } catch (err) { next(err) }
+})
+
+router.get('/forma-pago',        simpleListRoute('sat_forma_pago'))
+router.get('/metodo-pago',       simpleListRoute('sat_metodo_pago'))
+router.get('/objeto-imp',        simpleListRoute('sat_objeto_imp'))
+router.get('/impuesto',          simpleListRoute('sat_impuesto'))
+router.get('/tipo-factor',       simpleListRoute('sat_tipo_factor'))
+router.get('/tasa-cuota',        simpleListRoute('sat_tasa_cuota'))
+router.get('/tipo-comprobante',  simpleListRoute('sat_tipo_comprobante'))
+
+// País: muchos (250), buscable por código o nombre.
+router.get('/pais', async (req, res, next) => {
+  try {
+    const q = String(req.query.q || '').trim()
+    if (!q) {
+      const { rows } = await query(
+        `SELECT * FROM sat_pais WHERE is_active = true ORDER BY name LIMIT 50`
+      )
+      return res.json(rows)
+    }
+    const { rows } = await query(
+      `SELECT * FROM sat_pais
+        WHERE is_active = true
+          AND (code ILIKE $1 || '%' OR name ILIKE '%' || $1 || '%')
+        ORDER BY (code = upper($1)) DESC, name
+        LIMIT 50`,
+      [q]
+    )
+    res.json(rows)
+  } catch (err) { next(err) }
+})
+
 module.exports = router

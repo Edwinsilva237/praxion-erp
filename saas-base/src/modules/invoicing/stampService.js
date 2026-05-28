@@ -5,6 +5,7 @@ const { audit } = require('../../utils/audit')
 const logger = require('../../config/logger')
 const { getFacturapiForTenant } = require('./facturapiClient')
 const { assertSubscriptionActive, assertCanStampInvoice } = require('../billing/enforcement')
+const { validateAgainstSatCatalogs } = require('./satCatalogValidator')
 
 /**
  * Timbra una factura en borrador usando Facturapi.
@@ -59,6 +60,21 @@ async function stampInvoice({ tenantId, invoiceId, userId, ipAddress, userAgent 
         partnerName:   inv.partner_name,
         missingFields: missing,
       }
+      throw err
+    }
+
+    // Validación contra catálogos oficiales del SAT (mig 170). Bloquea antes
+    // de gastar la llamada al PAC si hay datos invalidos: régimen incompatible
+    // con persona física/moral, uso CFDI no permitido por el régimen del
+    // receptor, forma/método de pago inexistente, etc. Estos son rechazos
+    // típicos que el PAC reporta tarde y consumen timbres.
+    const satErrors = await validateAgainstSatCatalogs(inv)
+    if (satErrors.length) {
+      const err = createError(422,
+        `La factura tiene datos no válidos contra el catálogo del SAT: ${satErrors[0].message}`
+      )
+      err.code = 'SAT_CATALOG_VALIDATION_FAILED'
+      err.details = { errors: satErrors }
       throw err
     }
 
