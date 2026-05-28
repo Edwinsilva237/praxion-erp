@@ -6,6 +6,7 @@ const { authGuard }       = require('../../middleware/authGuard')
 const { requireActiveTenant } = require('../../middleware/requireActiveTenant')
 const { checkPermission } = require('../../middleware/checkPermission')
 const svc                 = require('./rawMaterialService')
+const { query }           = require('../../db')
 
 const router = express.Router()
 router.use(tenantResolver)
@@ -43,11 +44,19 @@ router.post('/', checkPermission('products', 'create'), async (req, res, next) =
   try {
     const { name, code, resinType, materialType, itemKind, unit, maxRegrindPct, costPerKg, description, leadTimeDays } = req.body
     if (!name) return res.status(400).json({ error: 'name es requerido.' })
-    // resin_type solo es obligatorio para tipo 'raw_material' (plástico). Para
-    // 'packaging' (bolsas, etiquetas) y 'additive' (saborizantes) no aplica.
+    // resin_type solo es obligatorio cuando el tenant maneja resinas
+    // (uses_resin_types=true, típico de plástico) Y el item es 'raw_material'.
+    // Para verticales como palomitas/pastelería/frituras (uses_resin_types=false)
+    // o subtipos packaging/additive, viene como NULL y se acepta.
     const kind = itemKind || 'raw_material'
     if (kind === 'raw_material' && !resinType) {
-      return res.status(400).json({ error: 'resinType es requerido para materia prima.' })
+      const { rows: cfgRows } = await query(
+        `SELECT uses_resin_types FROM tenant_process_config WHERE tenant_id = $1`,
+        [req.tenant.id]
+      )
+      if (cfgRows[0]?.uses_resin_types) {
+        return res.status(400).json({ error: 'resinType es requerido para materia prima.' })
+      }
     }
     const item = await svc.createRawMaterial({
       tenantId: req.tenant.id,
