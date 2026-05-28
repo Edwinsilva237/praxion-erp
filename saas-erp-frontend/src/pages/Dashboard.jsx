@@ -1,46 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, Navigate } from 'react-router-dom'
-import api from '@/api/axios'
 import useAuthStore from '@/store/useAuthStore'
 import { tenantsApi } from '@/api/tenants'
 import { reportsApi } from '@/api/reports'
+import { salesApi } from '@/api/sales'
+import { purchasesApi } from '@/api/purchases'
 import Badge from '@/components/ui/Badge'
-import Spinner from '@/components/ui/Spinner'
 
 const MONTHS_ES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
 const fmtCurrency = (n) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(n || 0)
 const fmtCurrencyFull = (n) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n || 0)
-
-// ── Helpers ───────────────────────────────────────────────────────────────
-const fmt = fmtCurrency
-
-// ── Skeleton metric card ──────────────────────────────────────────────────
-function MetricSkeleton() {
-  return (
-    <div className="card-sm space-y-2">
-      <div className="skeleton h-3 w-24 rounded" />
-      <div className="skeleton h-7 w-32 rounded" />
-      <div className="skeleton h-3 w-20 rounded" />
-    </div>
-  )
-}
-
-// ── Metric card ───────────────────────────────────────────────────────────
-function MetricCard({ label, value, delta, deltaType = 'neutral' }) {
-  const deltaColor = {
-    up:      'text-status-success',
-    down:    'text-status-danger',
-    neutral: 'text-ink-muted',
-  }[deltaType]
-
-  return (
-    <div className="card-sm">
-      <p className="text-xs text-ink-muted mb-1">{label}</p>
-      <p className="text-xl font-semibold text-ink-primary">{value}</p>
-      {delta && <p className={`text-xs mt-1 ${deltaColor}`}>{delta}</p>}
-    </div>
-  )
-}
 
 // ── Recent orders table ───────────────────────────────────────────────────
 function RecentOrders({ data, loading }) {
@@ -106,53 +75,35 @@ export default function Dashboard() {
     return <Navigate to="/produccion/ordenes" replace />
   }
 
-  // En producción estos endpoints devolverán datos reales.
-  // Por ahora usamos datos mock mientras el backend no tenga endpoint de dashboard.
-  const { data: metrics, isLoading: loadingMetrics } = useQuery({
-    queryKey: ['dashboard-metrics'],
-    queryFn: async () => {
-      // TODO: reemplazar con endpoint real cuando exista
-      // return api.get('/dashboard/metrics').then(r => r.data)
-      await new Promise(r => setTimeout(r, 600))
-      return {
-        ventasMes:       284500,
-        ventasDelta:     '+12%',
-        ordenesPendientes: 14,
-        cxcPendiente:    97200,
-        cxcVencidas:     2,
-        recepcionesHoy:  3,
-      }
-    },
-    staleTime: 5 * 60 * 1000,
-  })
+  const canReadSales     = can('sales', 'read')
+  const canReadPurchases = can('purchases', 'read')
 
   const { data: recentOrders, isLoading: loadingOrders } = useQuery({
     queryKey: ['dashboard-recent-orders'],
-    queryFn: async () => {
-      // TODO: await api.get('/sales/orders?limit=5&sort=created_at:desc').then(r => r.data.items)
-      await new Promise(r => setTimeout(r, 800))
-      return [
-        { id: '1', partnerName: 'Empaque Michoacán',   orderNumber: 'OV-2026-0087', status: 'confirmed' },
-        { id: '2', partnerName: 'Plásticos del Centro', orderNumber: 'OV-2026-0086', status: 'received' },
-        { id: '3', partnerName: 'Distribuidora Lerma',  orderNumber: 'OV-2026-0085', status: 'invoiced' },
-        { id: '4', partnerName: 'Grupo Envases SA',     orderNumber: 'OV-2026-0084', status: 'paid' },
-      ]
-    },
+    queryFn:  () => salesApi.listOrders({ limit: 5 }).then(r =>
+      (r.data || []).map(o => ({
+        id:          o.id,
+        partnerName: o.partner_name,
+        orderNumber: o.order_number,
+        status:      o.status,
+      }))
+    ),
     staleTime: 2 * 60 * 1000,
+    enabled:   canReadSales,
   })
 
   const { data: recentPurchases, isLoading: loadingPurchases } = useQuery({
     queryKey: ['dashboard-recent-purchases'],
-    queryFn: async () => {
-      await new Promise(r => setTimeout(r, 700))
-      return [
-        { id: '1', partnerName: 'Resina HDPE',    orderNumber: 'OC-2026-0031', status: 'partially_received' },
-        { id: '2', partnerName: 'Pigmento negro', orderNumber: 'OC-2026-0030', status: 'received' },
-        { id: '3', partnerName: 'Resina PP',      orderNumber: 'OC-2026-0029', status: 'invoiced' },
-        { id: '4', partnerName: 'Aditivo UV',     orderNumber: 'OC-2026-0028', status: 'cancelled' },
-      ]
-    },
+    queryFn:  () => purchasesApi.listOrders({ limit: 5 }).then(r =>
+      (r.data || []).map(o => ({
+        id:          o.id,
+        partnerName: o.is_generic ? (o.generic_supplier || 'Proveedor genérico') : o.partner_name,
+        orderNumber: o.order_number,
+        status:      o.status,
+      }))
+    ),
     staleTime: 2 * 60 * 1000,
+    enabled:   canReadPurchases,
   })
 
   // Branding del tenant — logo + nombre comercial para el hero del dashboard.
@@ -216,62 +167,34 @@ export default function Dashboard() {
         <IvaMonthCard   data={snapshot?.iva}   loading={loadingSnapshot} month={snapshot?.period?.month} />
       </div>
 
-      {/* Métricas */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {loadingMetrics ? (
-          [1,2,3,4].map(i => <MetricSkeleton key={i} />)
-        ) : (
-          <>
-            <MetricCard
-              label="Ventas del mes"
-              value={fmt(metrics.ventasMes)}
-              delta={`${metrics.ventasDelta} vs mes anterior`}
-              deltaType="up"
-            />
-            <MetricCard
-              label="Órdenes pendientes"
-              value={metrics.ordenesPendientes}
-              delta="3 vencen hoy"
-              deltaType="neutral"
-            />
-            <MetricCard
-              label="Por cobrar"
-              value={fmt(metrics.cxcPendiente)}
-              delta={`${metrics.cxcVencidas} facturas vencidas`}
-              deltaType={metrics.cxcVencidas > 0 ? 'down' : 'neutral'}
-            />
-            <MetricCard
-              label="Recepciones hoy"
-              value={metrics.recepcionesHoy}
-              delta="1 pendiente confirmar"
-              deltaType="neutral"
-            />
-          </>
-        )}
-      </div>
-
       {/* Tablas recientes */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {(canReadSales || canReadPurchases) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-        {/* Ventas */}
-        <div className="card">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-ink-primary">Últimas órdenes de venta</h3>
-            <Link to="/ventas" className="text-xs text-brand-300 hover:underline">Ver todo</Link>
-          </div>
-          <RecentOrders data={recentOrders} loading={loadingOrders} />
+          {/* Ventas */}
+          {canReadSales && (
+            <div className="card">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-ink-primary">Últimas órdenes de venta</h3>
+                <Link to="/ventas" className="text-xs text-brand-300 hover:underline">Ver todo</Link>
+              </div>
+              <RecentOrders data={recentOrders} loading={loadingOrders} />
+            </div>
+          )}
+
+          {/* Compras */}
+          {canReadPurchases && (
+            <div className="card">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-ink-primary">Compras recientes</h3>
+                <Link to="/compras/ordenes" className="text-xs text-brand-300 hover:underline">Ver todo</Link>
+              </div>
+              <RecentOrders data={recentPurchases} loading={loadingPurchases} />
+            </div>
+          )}
+
         </div>
-
-        {/* Compras */}
-        <div className="card">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-ink-primary">Compras recientes</h3>
-            <Link to="/compras/ordenes" className="text-xs text-brand-300 hover:underline">Ver todo</Link>
-          </div>
-          <RecentOrders data={recentPurchases} loading={loadingPurchases} />
-        </div>
-
-      </div>
+      )}
     </div>
   )
 }
