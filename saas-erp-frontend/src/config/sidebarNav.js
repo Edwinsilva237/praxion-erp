@@ -24,35 +24,35 @@ export const NAV_SECTIONS = [
   {
     label: 'Comercial',
     items: [
-      { label: 'Cotizaciones',        to: '/cotizaciones',    iconKey: 'orders',   permission: 'sales:read',              module: 'quotations' },
+      { label: 'Cotizaciones',        to: '/cotizaciones',    iconKey: 'quote',    permission: 'sales:read',              module: 'quotations' },
       { label: 'Pedidos',             to: '/ventas',          iconKey: 'orders',   permission: 'sales:read',              module: 'sales' },
       { label: 'Remisiones',          to: '/remisiones',      iconKey: 'delivery', permission: 'sales:read',              module: 'sales' },
       { label: 'Facturación',         to: '/facturacion',     iconKey: 'invoice',  permission: 'invoicing:read',          module: 'invoicing' },
       { label: 'Pagos recibidos',     to: '/cxc',             iconKey: 'card',     permission: 'financials:read',         module: 'sales' },
-      { label: 'Precios por cliente', to: '/precios-cliente', iconKey: 'card',     permission: 'business_partners:read' },
+      { label: 'Precios por cliente', to: '/precios-cliente', iconKey: 'tag',      permission: 'business_partners:read' },
       { label: 'Socios de negocio',   to: '/socios',          iconKey: 'partners', permission: 'business_partners:read' },
     ],
   },
   {
     label: 'Reportes',
     items: [
-      { label: 'Ventas',              to: '/reportes/ventas',             iconKey: 'card',    permission: 'reports:sales',       module: 'reports' },
-      { label: 'Producción',          to: '/reportes/produccion',         iconKey: 'receipt', permission: 'reports:production',  module: 'reports' },
-      { label: 'Cuentas por cobrar',  to: '/reportes/cuentas-por-cobrar', iconKey: 'card',    permission: 'reports:cxc',         module: 'reports' },
-      { label: 'Cuentas por pagar',   to: '/reportes/cuentas-por-pagar',  iconKey: 'money',   permission: 'reports:cxp',         module: 'reports' },
-      { label: 'Contable',            to: '/finanzas/reporte-contable',   iconKey: 'invoice', permission: 'reports:accounting',  module: 'reports' },
+      { label: 'Ventas',              to: '/reportes/ventas',             iconKey: 'chartBar',  permission: 'reports:sales',       module: 'reports' },
+      { label: 'Producción',          to: '/reportes/produccion',         iconKey: 'chartLine', permission: 'reports:production',  module: 'reports' },
+      { label: 'Cuentas por cobrar',  to: '/reportes/cuentas-por-cobrar', iconKey: 'card',      permission: 'reports:cxc',         module: 'reports' },
+      { label: 'Cuentas por pagar',   to: '/reportes/cuentas-por-pagar',  iconKey: 'money',     permission: 'reports:cxp',         module: 'reports' },
+      { label: 'Contable',            to: '/finanzas/reporte-contable',   iconKey: 'book',      permission: 'reports:accounting',  module: 'reports' },
     ],
   },
   {
     label: 'Producción',
     items: [
-      { label: 'Órdenes',         to: '/produccion/ordenes',      iconKey: 'orders',   permission: 'production:read',    module: 'production' },
+      { label: 'Órdenes',         to: '/produccion/ordenes',      iconKey: 'factory',  permission: 'production:read',    module: 'production' },
       { label: 'Recetas',         to: '/produccion/recetas',      iconKey: 'receipt',  permission: 'recipes:read',       module: 'production' },
       { label: 'Especificaciones', to: '/produccion/especificaciones', iconKey: 'card', permission: 'products:read',     module: 'production' },
-      { label: 'Captura',         to: '/produccion/captura',      iconKey: 'receipt',  permission: 'production:create',  module: 'production' },
-      { label: 'Validación',      to: '/produccion/validacion',   iconKey: 'invoice',  permission: 'production:approve', module: 'production' },
+      { label: 'Captura',         to: '/produccion/captura',      iconKey: 'pencil',   permission: 'production:create',  module: 'production' },
+      { label: 'Validación',      to: '/produccion/validacion',   iconKey: 'check',    permission: 'production:approve', module: 'production' },
       { label: 'Programación',    to: '/produccion/programacion', iconKey: 'calendar', permission: 'production:read',    module: 'production' },
-      { label: 'Histórico',       to: '/produccion/historico',    iconKey: 'receipt',  permission: 'production:read',    module: 'production' },
+      { label: 'Histórico',       to: '/produccion/historico',    iconKey: 'history',  permission: 'production:read',    module: 'production' },
     ],
   },
   {
@@ -68,10 +68,10 @@ export const NAV_SECTIONS = [
   {
     label: 'Inventario',
     items: [
-      { label: 'Stock y kardex',  to: '/inventario',         iconKey: 'inventory', permission: 'inventory:read',     module: 'inventory', end: true },
-      { label: 'Conteos físicos', to: '/inventario/conteos', iconKey: 'inventory', permission: 'inventory:read',     module: 'inventory' },
-      { label: 'Productos',       to: '/productos',          iconKey: 'inventory', permission: 'products:read',      module: 'inventory' },
-      { label: 'Materias primas', to: '/materias-primas',    iconKey: 'inventory', permission: 'raw_materials:read', module: 'inventory' },
+      { label: 'Stock y kardex',  to: '/inventario',         iconKey: 'boxes',     permission: 'inventory:read',     module: 'inventory', end: true },
+      { label: 'Conteos físicos', to: '/inventario/conteos', iconKey: 'clipboard', permission: 'inventory:read',     module: 'inventory' },
+      { label: 'Productos',       to: '/productos',          iconKey: 'package',   permission: 'products:read',      module: 'inventory' },
+      { label: 'Materias primas', to: '/materias-primas',    iconKey: 'flask',     permission: 'raw_materials:read', module: 'inventory' },
     ],
   },
   {
@@ -91,10 +91,10 @@ export const NAV_SECTIONS = [
     label: 'Costeo',
     items: [
       { label: 'Resumen',           to: '/costeo',                   iconKey: 'card',     permission: 'overhead:read',   module: 'production', end: true },
-      { label: 'Gastos indirectos', to: '/costeo/gastos-indirectos', iconKey: 'card',     permission: 'overhead:read',   module: 'production' },
+      { label: 'Gastos indirectos', to: '/costeo/gastos-indirectos', iconKey: 'coins',    permission: 'overhead:read',   module: 'production' },
       { label: 'Períodos del mes',  to: '/costeo/periodos',          iconKey: 'calendar', permission: 'overhead:read',   module: 'production' },
       { label: 'Cierre de mes',     to: '/costeo/cierre',            iconKey: 'receipt',  permission: 'overhead:update', module: 'production' },
-      { label: 'Reporte varianza',  to: '/costeo/varianza',          iconKey: 'card',     permission: 'overhead:read',   module: 'production' },
+      { label: 'Reporte varianza',  to: '/costeo/varianza',          iconKey: 'chartBar', permission: 'overhead:read',   module: 'production' },
     ],
   },
   {
