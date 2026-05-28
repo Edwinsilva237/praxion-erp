@@ -239,6 +239,13 @@ export const BUTTON_CATALOG = [
     permission:       'production:read_recipe_costs',
   },
   {
+    key:              'production.revert-validation',
+    label:            'Revertir validación de turno (corrige post-validación)',
+    screen:           'Producción · Resumen de turno',
+    accessPermission: 'production:read',
+    permission:       'production:revert_validation',
+  },
+  {
     key:              'production.configure-shifts',
     label:            'Configurar horarios de turnos',
     screen:           'Producción · Programación',

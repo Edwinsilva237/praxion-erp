@@ -164,13 +164,30 @@ async function createOrder({
   if (!recipeId && mpFormula && mpFormula.length > 0) {
     const materialIds = mpFormula.map(f => f.rawMaterialId)
     const { rows: materials } = await query(
-      `SELECT id, cost_per_kg FROM raw_materials WHERE id = ANY($1)`,
+      `SELECT id, cost_per_kg, unit FROM raw_materials WHERE id = ANY($1)`,
       [materialIds]
     )
-    const costMap = Object.fromEntries(materials.map(m => [m.id, parseFloat(m.cost_per_kg||0)]))
-    blendedCostPerKg = mpFormula.reduce((sum, f) => {
-      return sum + (parseFloat(f.percentage) / 100) * (costMap[f.rawMaterialId] || 0)
-    }, 0)
+    // §P3 simple (mig 163 sesión 2026-05-29): solo entran al cálculo del costo
+    // mezclado los materiales cuya unidad nativa sea masa (kg). Materiales por
+    // pieza (bolsas, etiquetas) o por volumen (lt) NO se mezclan por porcentaje
+    // de la masa total — se modelan como consumibles fijos del producto
+    // (1 bolsa por paquete, X etiquetas por lote) y entran al costo del PT
+    // por una vía distinta. Esto evita el bug donde una "bolsa de celofán a
+    // $1 por pieza" contaminaba el blended_cost como si fuera $1/kg de mezcla.
+    const costMap = Object.fromEntries(
+      materials
+        .filter(m => (m.unit || 'kg').toLowerCase() === 'kg')
+        .map(m => [m.id, parseFloat(m.cost_per_kg||0)])
+    )
+    const massFormula = mpFormula.filter(f => costMap[f.rawMaterialId] !== undefined)
+    if (massFormula.length > 0) {
+      const massPctTotal = massFormula.reduce((s, f) => s + parseFloat(f.percentage), 0)
+      if (massPctTotal > 0) {
+        blendedCostPerKg = massFormula.reduce((sum, f) => {
+          return sum + (parseFloat(f.percentage) / massPctTotal) * costMap[f.rawMaterialId]
+        }, 0)
+      }
+    }
   }
 
   return withTransaction(async (client) => {
@@ -4348,6 +4365,327 @@ async function setShiftActiveOrder({ tenantId, shiftId, orderId, userId }) {
   })
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// REVERSIÓN DE VALIDACIÓN — Mig 163 / sesión 2026-05-29
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Permite revertir un turno reviewed cuando surge un imprevisto después de
+// validar. Las restricciones se evalúan contra tenant_process_config + estado
+// del sistema (orden cerrada, periodo contable cerrado, stock disponible).
+//
+// Diseño: en vez de "deshacer" la operación, registramos movimientos de
+// inventario OPUESTOS (signo invertido) referenciados al turno. Esto preserva
+// trazabilidad — auditor ve la validación original Y su reverso, no un hueco.
+
+/**
+ * Calcula si un turno reviewed puede revertirse y por qué motivos no, sin
+ * mutar nada. La UI lo consume vía GET /shifts/:id/revert-context para pintar
+ * el botón habilitado/deshabilitado con el tooltip correcto.
+ *
+ * Devuelve:
+ *   {
+ *     allowed: boolean,
+ *     blockers: [{ code, message }],   // motivos por los que NO se puede
+ *     warnings: [{ code, message }],   // se permite pero el usuario debe saber
+ *     config: { ...flags... },
+ *     window_hours_remaining: number|null,
+ *     requires_dual_approval: boolean,
+ *     reversal_preview: {
+ *       mp_to_return:  [{ raw_material_id, name, kg, unit_cost }],
+ *       pt_to_remove:  [{ product_id, name, units, unit_cost }],
+ *     },
+ *   }
+ */
+async function getRevertContext({ tenantId, shiftId }) {
+  const { rows: shiftRows } = await query(
+    `SELECT ps.*, po.status AS order_status, po.order_number
+     FROM production_shifts ps
+     LEFT JOIN production_orders po ON po.id = ps.production_order_id
+     WHERE ps.id = $1 AND ps.tenant_id = $2`,
+    [shiftId, tenantId]
+  )
+  if (!shiftRows[0]) throw createError(404, 'Turno no encontrado.')
+  const shift = shiftRows[0]
+
+  const { rows: cfgRows } = await query(
+    `SELECT allow_revert_validation, revert_validation_window_hours,
+            block_revert_if_order_fulfilled, block_revert_if_period_closed,
+            require_revert_dual_approval
+     FROM tenant_process_config WHERE tenant_id = $1`,
+    [tenantId]
+  )
+  const config = cfgRows[0] || {
+    allow_revert_validation: true,
+    revert_validation_window_hours: 72,
+    block_revert_if_order_fulfilled: true,
+    block_revert_if_period_closed: true,
+    require_revert_dual_approval: false,
+  }
+
+  const blockers = []
+  const warnings = []
+
+  // 1) Estado del turno: debe ser reviewed.
+  if (shift.status !== 'reviewed') {
+    blockers.push({ code: 'NOT_REVIEWED', message: `El turno está en estado ${shift.status}, no en reviewed.` })
+  }
+
+  // 2) Flag del tenant.
+  if (!config.allow_revert_validation) {
+    blockers.push({ code: 'NOT_ALLOWED_BY_TENANT', message: 'El tenant tiene desactivada la reversión de validación.' })
+  }
+
+  // 3) Ventana de tiempo.
+  let windowHoursRemaining = null
+  if (config.revert_validation_window_hours != null) {
+    const { rows: handover } = await query(
+      `SELECT reviewed_at FROM shift_handovers WHERE shift_id = $1`,
+      [shiftId]
+    )
+    const reviewedAt = handover[0]?.reviewed_at
+    if (reviewedAt) {
+      const hoursSince = (Date.now() - new Date(reviewedAt).getTime()) / 3600000
+      windowHoursRemaining = config.revert_validation_window_hours - hoursSince
+      if (windowHoursRemaining <= 0) {
+        blockers.push({
+          code: 'WINDOW_EXPIRED',
+          message: `Han pasado más de ${config.revert_validation_window_hours} horas desde la validación.`,
+        })
+      }
+    }
+  }
+
+  // 4) Orden cerrada (fulfilled / completed).
+  if (config.block_revert_if_order_fulfilled
+      && ['fulfilled', 'completed'].includes(shift.order_status)) {
+    blockers.push({
+      code: 'ORDER_FULFILLED',
+      message: `La orden ${shift.order_number || ''} ya está ${shift.order_status}.`,
+    })
+  }
+  if (shift.order_status === 'cancelled') {
+    blockers.push({
+      code: 'ORDER_CANCELLED',
+      message: 'La orden está cancelada — no se puede revertir el turno.',
+    })
+  }
+
+  // 5) Periodo contable cerrado (overhead aplicado al turno).
+  //    Detectamos por la presencia de filas en production_shift_overhead para el turno.
+  if (config.block_revert_if_period_closed) {
+    const { rows: ohRows } = await query(
+      `SELECT 1 FROM production_shift_overhead WHERE shift_id = $1 LIMIT 1`,
+      [shiftId]
+    )
+    if (ohRows.length > 0) {
+      blockers.push({
+        code: 'PERIOD_CLOSED',
+        message: 'El periodo contable del turno ya cerró y el overhead se aplicó.',
+      })
+    }
+  }
+
+  // 6) Stock disponible para reversa (chequeo de integridad inviolable).
+  //    Si el PT que se va a sacar del almacén ya se vendió, no se puede.
+  //    Lo computamos pero también lo materializamos en reversal_preview.
+  const { rows: movs } = await query(
+    `SELECT itm.item_type, itm.item_id, itm.warehouse_id, itm.quantity, itm.unit_cost,
+            itm.movement_type, w.warehouse_type_id, twt.system_role
+     FROM inventory_movements itm
+     LEFT JOIN warehouses w ON w.id = itm.warehouse_id
+     LEFT JOIN tenant_warehouse_types twt ON twt.id = w.warehouse_type_id
+     WHERE itm.tenant_id = $1
+       AND itm.reference_type = 'production_shift'
+       AND itm.reference_id   = $2
+     ORDER BY itm.created_at`,
+    [tenantId, shiftId]
+  )
+
+  // Agregar movimientos por (warehouse_id, item_id) sumando quantities — neto de
+  // lo que efectivamente entró/salió en cada almacén.
+  const netByKey = new Map()
+  for (const m of movs) {
+    const key = `${m.warehouse_id}::${m.item_type}::${m.item_id}`
+    const prev = netByKey.get(key) || {
+      warehouse_id: m.warehouse_id, item_type: m.item_type, item_id: m.item_id,
+      system_role: m.system_role, net: 0, unit_cost: parseFloat(m.unit_cost || 0),
+    }
+    prev.net += parseFloat(m.quantity)
+    netByKey.set(key, prev)
+  }
+
+  const mpToReturn = []
+  const ptToRemove = []
+  for (const agg of netByKey.values()) {
+    if (agg.item_type === 'raw_material' && agg.net < 0 && agg.system_role === 'input') {
+      mpToReturn.push({ raw_material_id: agg.item_id, kg: -agg.net, unit_cost: agg.unit_cost })
+    } else if (agg.item_type === 'product' && agg.net > 0 && agg.system_role === 'output') {
+      ptToRemove.push({ product_id: agg.item_id, units: agg.net, unit_cost: agg.unit_cost })
+    }
+  }
+
+  // Para cada PT a sacar, verificar que aún haya suficiente en el almacén.
+  for (const pt of ptToRemove) {
+    const { rows: stockRows } = await query(
+      `SELECT COALESCE(SUM(quantity), 0) AS available
+       FROM inventory_stock
+       WHERE tenant_id = $1 AND item_type = 'product' AND item_id = $2 AND status = 'available'`,
+      [tenantId, pt.product_id]
+    )
+    const available = parseFloat(stockRows[0].available)
+    if (available < pt.units) {
+      const { rows: pn } = await query(`SELECT name FROM products WHERE id = $1`, [pt.product_id])
+      blockers.push({
+        code: 'PT_INSUFFICIENT_STOCK',
+        message: `El PT "${pn[0]?.name || pt.product_id}" tiene ${available} en almacén; el turno entregó ${pt.units}. Anula remisiones/ventas que lo consumieron primero.`,
+      })
+    }
+  }
+
+  // Enriquecer con nombres legibles
+  for (const m of mpToReturn) {
+    const { rows: rn } = await query(`SELECT name FROM raw_materials WHERE id = $1`, [m.raw_material_id])
+    m.name = rn[0]?.name || ''
+  }
+  for (const p of ptToRemove) {
+    const { rows: pn } = await query(`SELECT name FROM products WHERE id = $1`, [p.product_id])
+    p.name = pn[0]?.name || ''
+  }
+
+  return {
+    allowed: blockers.length === 0,
+    blockers,
+    warnings,
+    config,
+    window_hours_remaining: windowHoursRemaining,
+    requires_dual_approval: !!config.require_revert_dual_approval,
+    reversal_preview: { mp_to_return: mpToReturn, pt_to_remove: ptToRemove },
+  }
+}
+
+/**
+ * Ejecuta la reversión de validación. Llama a getRevertContext primero para
+ * validar y abortar 422 si hay blockers. Si todo OK, dentro de una transacción:
+ *
+ *  1. Inserta inventory_movements con signo opuesto a los del turno, referenciados
+ *     al mismo shift_id pero con movement_type='production_validation_reversed'.
+ *     Esto restaura el stock al estado pre-validación SIN borrar el histórico.
+ *  2. UPDATE production_shifts SET status='active', closed_at=NULL, cost_per_unit=NULL.
+ *  3. UPDATE shift_handovers SET reviewed_by=NULL, reviewed_at=NULL, supervisor_notes=NULL.
+ *  4. Si la orden estaba 'fulfilled' por culpa de este turno, regresarla a 'in_progress'.
+ *  5. Audit log con reason + secondary approver id si aplica.
+ */
+async function revertValidation({
+  tenantId, shiftId, reason, secondaryApproverId,
+  userId, ipAddress, userAgent,
+}) {
+  if (!reason || String(reason).trim().length < 20) {
+    throw createError(400, 'La razón de la reversión debe tener al menos 20 caracteres.')
+  }
+
+  const ctx = await getRevertContext({ tenantId, shiftId })
+  if (!ctx.allowed) {
+    const err = new Error(ctx.blockers.map(b => b.message).join(' '))
+    err.status = 422
+    err.code   = 'REVERT_BLOCKED'
+    err.blockers = ctx.blockers
+    throw err
+  }
+  if (ctx.requires_dual_approval) {
+    if (!secondaryApproverId) {
+      throw createError(400, 'El tenant requiere un aprobador secundario para revertir.')
+    }
+    if (secondaryApproverId === userId) {
+      throw createError(400, 'El aprobador secundario debe ser distinto al supervisor que reversa.')
+    }
+    const { rows: approver } = await query(
+      `SELECT 1 FROM users u
+       JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       WHERE u.id = $1 AND u.tenant_id = $2 AND r.name IN ('admin', 'super_admin')`,
+      [secondaryApproverId, tenantId]
+    )
+    if (!approver[0]) {
+      throw createError(400, 'El aprobador secundario debe ser admin del tenant.')
+    }
+  }
+
+  return withTransaction(async (client) => {
+    // 1) Reverse de movimientos: insertar el opuesto para cada movimiento del turno.
+    const { rows: original } = await client.query(
+      `SELECT id, warehouse_id, item_type, item_id, quantity, unit, unit_cost,
+              movement_type, status_to
+       FROM inventory_movements
+       WHERE tenant_id = $1 AND reference_type = 'production_shift' AND reference_id = $2`,
+      [tenantId, shiftId]
+    )
+    for (const m of original) {
+      await recordMovement(client, {
+        tenantId,
+        warehouseId: m.warehouse_id,
+        itemType:    m.item_type,
+        itemId:      m.item_id,
+        movementType:'production_validation_reversed',
+        quantity:    -parseFloat(m.quantity),
+        unit:        m.unit,
+        unitCost:    parseFloat(m.unit_cost || 0),
+        statusTo:    m.status_to,
+        referenceType: 'production_shift',
+        referenceId:   shiftId,
+        notes:       `Reverso de validación: ${reason.trim().slice(0, 200)}`,
+        createdBy:   userId,
+      })
+    }
+
+    // 2) Revertir status del turno + limpiar cost_per_unit (se recalcula al re-validar).
+    await client.query(
+      `UPDATE production_shifts
+          SET status = 'active', closed_at = NULL, cost_per_unit = NULL
+        WHERE id = $1 AND tenant_id = $2`,
+      [shiftId, tenantId]
+    )
+
+    // 3) Limpiar reviewed_at / reviewed_by para reflejar que ya no está validado.
+    await client.query(
+      `UPDATE shift_handovers
+          SET reviewed_at = NULL, reviewed_by = NULL, supervisor_notes = NULL
+        WHERE shift_id = $1`,
+      [shiftId]
+    )
+
+    // 4) Si la orden estaba fulfilled, devolverla a in_progress (no si está
+    //    completed/cancelled — esos casos están bloqueados arriba).
+    await client.query(
+      `UPDATE production_orders
+          SET status = 'in_progress'
+        WHERE id = (SELECT production_order_id FROM production_shifts WHERE id = $1)
+          AND status = 'fulfilled'`,
+      [shiftId]
+    )
+
+    await audit({
+      tenantId, userId,
+      action: 'shift.validation_reverted',
+      resource: 'production_shifts',
+      resourceId: shiftId,
+      payload: {
+        reason: reason.trim(),
+        secondaryApproverId: secondaryApproverId || null,
+        movements_reversed: original.length,
+        mp_returned_kg:  ctx.reversal_preview.mp_to_return.reduce((s, x) => s + x.kg, 0),
+        pt_removed_units: ctx.reversal_preview.pt_to_remove.reduce((s, x) => s + x.units, 0),
+      },
+      ipAddress, userAgent,
+    })
+
+    return {
+      reverted: true,
+      shift_id: shiftId,
+      movements_reversed: original.length,
+    }
+  })
+}
+
 module.exports = {
   getOrdersQueue, listOrders, getOrder, createOrder, updateOrder, cancelOrder,
   releaseOrder, updateOrderPriority, reorderQueue, getOrderStockAvailability,
@@ -4368,4 +4706,6 @@ module.exports = {
   // Versionado de fórmula MP
   changeOrderFormula, getOrderFormulaHistory,
   setShiftActiveOrder,
+  // Reversión de validación (mig 163)
+  getRevertContext, revertValidation,
 }

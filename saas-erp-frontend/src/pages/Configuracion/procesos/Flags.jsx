@@ -290,6 +290,20 @@ export default function Flags() {
           <FlagRow field="allow_adhoc_shifts"   values={values} onChange={handleChange} disabled={disabled} />
         </div>
 
+        {/* ── Reversión de validación ──────────────────────────────────── */}
+        <div className="card p-4">
+          <h2 className="text-sm font-semibold text-ink-primary mb-3 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-status-danger inline-block" />
+            Reversión de validación
+            <HelpTip text="Qué condiciones permiten al supervisor revertir un turno que ya fue validado para corregirlo. Las reversiones reversean los movimientos de inventario del turno." />
+          </h2>
+          <FlagRow   field="allow_revert_validation"         values={values} onChange={handleChange} disabled={disabled} />
+          <NumberRow field="revert_validation_window_hours"  values={values} onChange={handleChange} disabled={disabled || !values.allow_revert_validation} min={1} nullable />
+          <FlagRow   field="block_revert_if_order_fulfilled" values={values} onChange={handleChange} disabled={disabled || !values.allow_revert_validation} />
+          <FlagRow   field="block_revert_if_period_closed"   values={values} onChange={handleChange} disabled={disabled || !values.allow_revert_validation} />
+          <FlagRow   field="require_revert_dual_approval"    values={values} onChange={handleChange} disabled={disabled || !values.allow_revert_validation} />
+        </div>
+
         {/* ── Costos ───────────────────────────────────────────────────── */}
         <div className="card p-4">
           <h2 className="text-sm font-semibold text-ink-primary mb-3 flex items-center gap-2">

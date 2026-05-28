@@ -251,6 +251,38 @@ router.get('/shifts/:id/members', checkPermission('production','read'), async (r
     res.json(await listShiftMembers({ shiftId: req.params.id }))
   } catch(err){next(err)}
 })
+// Reversión de validación (mig 163). Pre-check: GET /revert-context devuelve si
+// se permite + razones de bloqueo + preview de movimientos a reversar.
+// Acción real: POST /revert-validation con { reason, secondaryApproverId? }.
+router.get('/shifts/:id/revert-context', checkPermission('production','revert_validation'), async (req,res,next) => {
+  try {
+    res.json(await svc.getRevertContext({ tenantId: tid(req), shiftId: req.params.id }))
+  } catch(err){
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+router.post('/shifts/:id/revert-validation', checkPermission('production','revert_validation'), async (req,res,next) => {
+  try {
+    const { reason, secondaryApproverId } = req.body || {}
+    const result = await svc.revertValidation({
+      tenantId: tid(req), shiftId: req.params.id,
+      reason, secondaryApproverId: secondaryApproverId || null,
+      userId: uid(req), ipAddress: ip(req), userAgent: ua(req),
+    })
+    res.json(result)
+  } catch(err){
+    if (err.status) {
+      return res.status(err.status).json({
+        error: err.message,
+        code:  err.code || null,
+        blockers: err.blockers || null,
+      })
+    }
+    next(err)
+  }
+})
+
 // Reasignar al responsable del handover durante el turno (relevo de última hora,
 // ausencia del designado original, etc.). Body: { memberId } del production_shift_members.
 router.post('/shifts/:id/set-handover-responsible', checkPermission('production','update'), async (req,res,next) => {

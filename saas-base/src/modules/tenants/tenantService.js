@@ -52,6 +52,32 @@ async function provisionTenant({ slug, name, plan = 'free', adminEmail, adminPas
       [user.id, tenant.id]
     )
 
+    // Almacenes default: crear uno por cada tipo activo en tenant_warehouse_types
+    // (raw_material, packaging, wip, finished_product). Sin esto el tenant queda
+    // operativo en producción solo a medias — recordProductionValidation no
+    // puede mover MP→WIP→PT y los movimientos se pierden silenciosos.
+    // Acompañado de mig 164 que backfilleó tenants vivos a los que les faltaban.
+    await client.query(
+      `INSERT INTO warehouses
+         (tenant_id, warehouse_type_id, name, type, is_active)
+       SELECT $1, twt.id, twt.name,
+              (CASE twt.system_role
+                WHEN 'input'  THEN CASE twt.code WHEN 'embalaje' THEN 'packaging' ELSE 'raw_material' END
+                WHEN 'output' THEN 'finished_product'
+                WHEN 'wip'    THEN 'wip'
+              END)::warehouse_type,
+              true
+         FROM tenant_warehouse_types twt
+        WHERE twt.tenant_id = $1
+          AND twt.is_active = true
+          AND twt.system_role IN ('input','output','wip')
+          AND NOT EXISTS (
+            SELECT 1 FROM warehouses w
+             WHERE w.tenant_id = $1 AND w.warehouse_type_id = twt.id
+          )`,
+      [tenant.id]
+    )
+
     // Crear suscripción trial: plan gratis, status='trialing',
     // trial_end = NOW + STRIPE_TRIAL_DAYS. Sin contactar Stripe — solo se
     // contacta cuando el tenant decide pagar (createCheckoutSession).

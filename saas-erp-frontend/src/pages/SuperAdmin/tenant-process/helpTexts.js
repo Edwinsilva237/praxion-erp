@@ -289,4 +289,9 @@ export const FIELD_LABELS = {
   simplified_overhead:          'Overhead simplificado',
   uses_resin_types:             'Usar tipo de resina (PP/PE)',
   tracks_material_origin:       'Distinguir virgen vs reciclado',
+  allow_revert_validation:         'Permitir revertir validación',
+  revert_validation_window_hours:  'Ventana de tiempo (horas)',
+  block_revert_if_order_fulfilled: 'Bloquear si la orden ya cerró',
+  block_revert_if_period_closed:   'Bloquear si el periodo contable cerró',
+  require_revert_dual_approval:    'Requerir doble aprobación',
 }

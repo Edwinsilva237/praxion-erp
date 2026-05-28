@@ -80,6 +80,11 @@ export const productionApi = {
   setHandoverResponsible: (shiftId, memberId) =>
     api.post(`${BASE}/shifts/${shiftId}/set-handover-responsible`, { memberId }).then(r => r.data),
 
+  // Reversión de validación (mig 163)
+  getRevertContext: (shiftId) => api.get(`${BASE}/shifts/${shiftId}/revert-context`).then(r => r.data),
+  revertValidation: (shiftId, body) =>
+    api.post(`${BASE}/shifts/${shiftId}/revert-validation`, body).then(r => r.data),
+
   // Configuración de turnos
   getShiftConfig:    ()      => api.get(`${BASE}/shift-config`).then(r => r.data),
   updateShiftConfig: (body)  => api.put(`${BASE}/shift-config`, body).then(r => r.data),

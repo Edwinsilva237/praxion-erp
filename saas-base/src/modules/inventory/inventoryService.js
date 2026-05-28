@@ -309,13 +309,34 @@ async function recordScrapWipEntry(client, { tenantId, shift, scrapRecord, mpFor
 }
 
 async function recordProductionValidation(client, { tenantId, shift, userId }) {
+  // §P2 robusto (sesión 2026-05-29): si pt_goes_to_wip_first=true necesitamos WIP
+  // obligatoriamente. Antes hacíamos warn silencioso y retornábamos sin generar
+  // movimientos — el tenant quedaba con 0 filas en inventory_movements sin que
+  // nadie se enterara (paopops). Ahora lanzamos error explícito para que la
+  // validación falle y el supervisor sepa que falta configurar almacenes.
+  const { rows: cfgPre } = await client.query(
+    `SELECT pt_goes_to_wip_first FROM tenant_process_config WHERE tenant_id = $1`,
+    [tenantId]
+  )
+  const wipRequired = cfgPre[0]?.pt_goes_to_wip_first !== false
+
   let warehouseWIP, warehousePT, warehouseMP
   try {
     warehouseWIP = await getWarehouseId(client, tenantId, 'wip')
     warehousePT  = await getWarehouseId(client, tenantId, 'finished_product')
     warehouseMP  = await getWarehouseId(client, tenantId, 'raw_material')
   } catch (e) {
-    console.warn('[inventory] Almacenes no configurados:', e.message)
+    if (wipRequired) {
+      const err = new Error(
+        `Almacenes no configurados (${e.message}). El tenant tiene pt_goes_to_wip_first=true y necesita almacén tipo wip, finished_product y raw_material. Crea los almacenes faltantes en Configuración → Almacenes.`
+      )
+      err.status = 422
+      err.code = 'WAREHOUSES_NOT_CONFIGURED'
+      throw err
+    }
+    // Si el tenant tiene pt_goes_to_wip_first=false el flujo no requiere WIP;
+    // se permite seguir y la captura habrá tocado PT directo en recordPackageCaptured.
+    console.warn('[inventory] Almacenes parciales (pt_goes_to_wip_first=false):', e.message)
     return
   }
 

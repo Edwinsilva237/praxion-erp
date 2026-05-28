@@ -214,13 +214,26 @@ function MpFormulaSection({ control, register, errors, mps, watch, canSeeCosts =
   const formula = watch('mpFormula') || []
   const totalPct = formula.reduce((s, f) => s + parseFloat(f.percentage || 0), 0)
 
-  // Calcular costo promedio ponderado en tiempo real (solo si el usuario puede verlo)
-  const blendedCost = canSeeCosts
-    ? formula.reduce((sum, f) => {
-        const mat = mps.find(m => m.id === f.rawMaterialId)
-        return sum + (parseFloat(f.percentage||0) / 100) * parseFloat(mat?.cost_per_kg || 0)
-      }, 0)
-    : 0
+  // P3: detectar materiales por pieza/litro en la fórmula. La mezcla por % solo
+  // tiene sentido en masa; estos consumibles deberían ser fijos del producto.
+  const nonMassInFormula = formula
+    .map(f => mps.find(m => m.id === f.rawMaterialId))
+    .filter(m => m && (m.unit || 'kg').toLowerCase() !== 'kg')
+
+  // Calcular costo promedio ponderado solo con materiales en kg (ver §P3 backend).
+  // Renormalizamos al 100% de la masa para que un material por pieza con 10% no
+  // distorsione el blended_cost de los materiales reales.
+  let blendedCost = 0
+  if (canSeeCosts) {
+    const massEntries = formula
+      .map(f => ({ pct: parseFloat(f.percentage||0), mat: mps.find(m => m.id === f.rawMaterialId) }))
+      .filter(x => x.mat && (x.mat.unit || 'kg').toLowerCase() === 'kg')
+    const massPctTotal = massEntries.reduce((s, x) => s + x.pct, 0)
+    if (massPctTotal > 0) {
+      blendedCost = massEntries.reduce((s, x) =>
+        s + (x.pct / massPctTotal) * parseFloat(x.mat.cost_per_kg || 0), 0)
+    }
+  }
 
   const usedIds = formula.map(f => f.rawMaterialId).filter(Boolean)
   const available = mps.filter(m => !usedIds.includes(m.id))
@@ -279,6 +292,17 @@ function MpFormulaSection({ control, register, errors, mps, watch, canSeeCosts =
       {errors.mpFormula?.message && <p className="field-error mt-1">{errors.mpFormula.message}</p>}
       {Math.abs(totalPct - 100) > 0.01 && totalPct > 0 && (
         <p className="text-xs text-status-warning mt-1">Los porcentajes deben sumar exactamente 100%</p>
+      )}
+      {nonMassInFormula.length > 0 && (
+        <div className="mt-2 rounded-lg border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
+          <p className="font-semibold mb-0.5">
+            ⚠ {nonMassInFormula.map(m => m.name).join(', ')} {nonMassInFormula.length > 1 ? 'son' : 'es'} por {nonMassInFormula[0].unit || 'pieza'}
+          </p>
+          <p>
+            Los materiales que no se miden en kg (bolsas, etiquetas, etc.) deberían modelarse como consumibles fijos del producto
+            (ej. "1 bolsa por paquete"), no como porcentaje de la mezcla. Por ahora se ignoran del cálculo del costo mezclado.
+          </p>
+        </div>
       )}
     </div>
   )

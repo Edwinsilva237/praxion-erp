@@ -47,6 +47,12 @@ const ALLOWED_UPDATES = [
   // §49: límites de horas por operador (mig 156)
   'max_hours_per_day',
   'max_hours_per_week',
+  // §53: reversión de validación (mig 163)
+  'allow_revert_validation',
+  'revert_validation_window_hours',
+  'block_revert_if_order_fulfilled',
+  'block_revert_if_period_closed',
+  'require_revert_dual_approval',
 ]
 
 // Conjuntos de valores enum válidos. Duplican los CHECK constraints en SQL,
