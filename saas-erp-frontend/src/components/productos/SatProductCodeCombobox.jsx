@@ -123,16 +123,14 @@ export default function SatProductCodeCombobox({ value, onChange, error, disable
         autoComplete="off"
       />
 
-      {/* Descripción del código actual al lado/debajo del input. Solo se ve
-          cuando el valor del form matchea una entrada del catálogo. */}
+      {/* Descripción del código actual debajo del input cuando matchea con
+          una entrada del catálogo local. Si el código del cliente no está en
+          nuestro seed (el catálogo del SAT tiene ~52K entradas, el seed solo
+          cubre lo más común), no mostramos advertencia — el SAT valida al
+          timbrar y el cliente sabe qué código está usando. */}
       {!open && value && resolved && (
         <p className="text-[11px] text-ink-muted mt-1">
           <span className="font-mono">{resolved.code}</span> · {resolved.name}
-        </p>
-      )}
-      {!open && value && /^\d{8}$/.test(value) && resolved === null && (
-        <p className="text-[11px] text-status-warning mt-1">
-          Código no encontrado en el catálogo local. Verifica en el portal del SAT.
         </p>
       )}
 
@@ -167,7 +165,7 @@ export default function SatProductCodeCombobox({ value, onChange, error, disable
               className="w-full text-left px-3 py-2 text-sm border-t border-line-subtle hover:bg-brand-500/10 flex items-center gap-3"
             >
               <span className="font-mono text-xs text-brand-300 w-20 shrink-0">{debounced}</span>
-              <span className="text-brand-300">Usar como código personalizado (no verificado)</span>
+              <span className="text-brand-300">Usar este código del SAT</span>
             </button>
           )}
         </div>

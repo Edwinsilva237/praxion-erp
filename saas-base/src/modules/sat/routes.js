@@ -1,11 +1,38 @@
 'use strict'
 
 const express = require('express')
+const multer = require('multer')
 const { authGuard } = require('../../middleware/authGuard')
 const { query } = require('../../db')
 
 const router = express.Router()
 router.use(authGuard)
+
+// Multer en memoria — el CSV del SAT pesa ~5MB (~52K entradas).
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits:  { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok = ['text/csv', 'application/vnd.ms-excel', 'application/csv', 'text/plain'].includes(file.mimetype)
+      || /\.(csv|txt)$/i.test(file.originalname)
+    cb(ok ? null : new Error('Solo CSV/TXT.'), ok)
+  },
+})
+
+// Solo super_admin (rol global, tenant_id NULL) puede cargar el catálogo
+// completo del SAT — afecta a todos los tenants.
+async function assertSuperAdmin(req, res, next) {
+  try {
+    const { rows } = await query(
+      `SELECT 1 FROM user_roles ur
+       JOIN roles r ON r.id = ur.role_id
+       WHERE ur.user_id = $1 AND r.name = 'super_admin' AND r.tenant_id IS NULL`,
+      [req.auth.userId]
+    )
+    if (!rows[0]) return res.status(403).json({ error: 'Solo super_admin puede cargar el catálogo SAT.' })
+    next()
+  } catch (err) { next(err) }
+}
 
 /**
  * GET /api/sat/product-codes
@@ -74,5 +101,75 @@ router.get('/product-codes/:code', async (req, res, next) => {
     res.json(rows[0])
   } catch (err) { next(err) }
 })
+
+/**
+ * POST /api/sat/product-codes/bulk-import
+ *
+ * Recibe CSV con columnas `code,name` (header opcional) y hace upsert masivo
+ * en sat_product_codes. Idempotente — re-correr con el mismo archivo no
+ * duplica. Pensado para cargar el catálogo c_ClaveProdServ completo del SAT
+ * (~52K entradas) cuando esté disponible. Solo super_admin global.
+ *
+ * Formato esperado del CSV:
+ *   code,name
+ *   01010101,No existe en el catálogo
+ *   10101500,Animales vivos
+ *   ...
+ *
+ * El header se ignora si la primera línea no parece código (8 dígitos).
+ */
+router.post('/product-codes/bulk-import',
+  assertSuperAdmin,
+  upload.single('file'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'Se requiere un archivo CSV.' })
+
+      const text = req.file.buffer.toString('utf8')
+      const lines = text.split(/\r?\n/).filter(l => l.trim())
+      if (lines.length === 0) return res.status(400).json({ error: 'El archivo está vacío.' })
+
+      // Detectar y saltar header.
+      const startIdx = /^\d{8}/.test(lines[0]) ? 0 : 1
+      const rows = []
+      const errors = []
+      for (let i = startIdx; i < lines.length; i++) {
+        // Soporta CSV simple "code,name" — nombres con coma deben ir entre comillas.
+        const m = lines[i].match(/^(\d{8})\s*,\s*(?:"([^"]*)"|(.+?))\s*$/)
+        if (!m) { errors.push({ line: i + 1, content: lines[i].slice(0, 80) }); continue }
+        const code = m[1]
+        const name = (m[2] ?? m[3] ?? '').trim()
+        if (name) rows.push({ code, name })
+      }
+
+      // Upsert en batches de 1000 para no pasar el límite de parámetros (65535).
+      let upserted = 0
+      const BATCH = 1000
+      for (let i = 0; i < rows.length; i += BATCH) {
+        const batch = rows.slice(i, i + BATCH)
+        const values = []
+        const params = []
+        for (const r of batch) {
+          values.push(`($${params.length + 1}, $${params.length + 2})`)
+          params.push(r.code, r.name)
+        }
+        await query(
+          `INSERT INTO sat_product_codes (code, name)
+           VALUES ${values.join(',')}
+           ON CONFLICT (code) DO UPDATE
+             SET name = EXCLUDED.name, updated_at = NOW()`,
+          params
+        )
+        upserted += batch.length
+      }
+
+      res.json({
+        upserted,
+        skipped: errors.length,
+        errors: errors.slice(0, 20),
+      })
+    } catch (err) { next(err) }
+  }
+)
 
 module.exports = router

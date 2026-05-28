@@ -93,8 +93,31 @@ async function remove(key) {
  * @param {string} opts.mimeType     - Content-Type a forzar
  * @param {string} [opts.disposition='attachment']  - 'attachment' | 'inline'
  */
-async function serve(res, key, { filename, mimeType, disposition = 'attachment' } = {}) {
+async function serve(res, key, { filename, mimeType, disposition = 'attachment', proxy = false } = {}) {
   if (useR2) {
+    // Modo proxy: descargamos el blob de R2 y lo reenviamos. Útil para imágenes
+    // — evita el round-trip CORS del browser contra `*.r2.cloudflarestorage.com`
+    // que falla cuando el bucket no tiene CORS configurado para el dominio
+    // del cliente (caso común post cambio de DNS del SaaS). El costo: más
+    // bytes por nuestro backend, pero para imágenes pequeñas es despreciable.
+    if (proxy) {
+      try {
+        const out = await s3Client.send(new GetObjectCommand({
+          Bucket: config.storage.bucket, Key: key,
+        }))
+        if (mimeType) res.setHeader('Content-Type', mimeType)
+        if (filename) res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"`)
+        // out.Body es un stream en SDK v3 → pipe directo.
+        return out.Body.pipe(res)
+      } catch (err) {
+        if (err.name === 'NoSuchKey' || err.$metadata?.httpStatusCode === 404) {
+          return res.status(404).json({ error: 'Archivo no encontrado.' })
+        }
+        throw err
+      }
+    }
+    // Modo redirect (default): el browser baja directo de R2 vía signed URL.
+    // Requiere CORS del bucket habilitado para el origin del frontend.
     const url = await getSignedUrl(
       s3Client,
       new GetObjectCommand({

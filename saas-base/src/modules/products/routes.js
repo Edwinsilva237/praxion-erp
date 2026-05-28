@@ -272,10 +272,15 @@ router.get('/:id/attachments/:attachmentId/download',
         tenantId: req.tenant.id, attachmentId: req.params.attachmentId,
       })
       if (!file) return res.status(404).json({ error: 'Archivo no encontrado.' })
+      // Imágenes: proxy del blob (evita CORS contra R2 cuando el bucket no
+      // tiene CORS habilitado para el dominio del SaaS). Otros (PDFs, etc):
+      // redirect a signed URL para no pasar bytes grandes por nuestro backend.
+      const isImage = (file.mime_type || '').startsWith('image/')
       await storage.serve(res, file.storage_path, {
         filename:    file.filename,
         mimeType:    file.mime_type,
-        disposition: 'attachment',
+        disposition: isImage ? 'inline' : 'attachment',
+        proxy:       isImage,
       })
     } catch (err) { next(err) }
   }
