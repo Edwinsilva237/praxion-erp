@@ -49,7 +49,10 @@ export default function Almacenes() {
   const can = useAuthStore(s => s.can)
   const permissions = useAuthStore(s => s.permissions)
   const isSuperAdmin = permissions?.includes?.('*')
-  const canManage = isSuperAdmin || can?.('inventario', 'manage')
+  const canCreate = isSuperAdmin || can?.('warehouses', 'create')
+  const canUpdate = isSuperAdmin || can?.('warehouses', 'update')
+  const canDelete = isSuperAdmin || can?.('warehouses', 'delete')
+  const canManage = canCreate || canUpdate || canDelete
 
   const [filterType, setFilterType]       = useState('')
   const [showInactive, setShowInactive]   = useState(false)
@@ -126,7 +129,7 @@ export default function Almacenes() {
           <h1 className="page-title">Almacenes</h1>
           <p className="page-subtitle">Configuración de almacenes del sistema</p>
         </div>
-        {canManage && (
+        {canCreate && (
           <button onClick={() => setEditing('new')} className="btn-primary">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/>
@@ -192,7 +195,7 @@ export default function Almacenes() {
       ) : filtered.length === 0 ? (
         <div className="empty-state">
           <p className="font-medium text-ink-secondary">Sin almacenes para mostrar</p>
-          {canManage && (
+          {canCreate && (
             <button onClick={() => setEditing('new')} className="btn-primary btn-sm mt-3">
               + Crear primer almacén
             </button>
@@ -276,13 +279,15 @@ export default function Almacenes() {
                               onClick={() => setActionMenuOpen(null)}
                             />
                             <div className="absolute right-2 top-9 z-40 w-56 bg-surface-primary shadow-card rounded-xl border border-line-subtle py-1 text-sm">
-                              <button
-                                onClick={() => { setEditing(w); setActionMenuOpen(null) }}
-                                className="w-full text-left px-3 py-2 hover:bg-surface-elevated/40 text-ink-secondary"
-                              >
-                                ✏️ Editar
-                              </button>
-                              {!w.is_default && w.is_active && (
+                              {canUpdate && (
+                                <button
+                                  onClick={() => { setEditing(w); setActionMenuOpen(null) }}
+                                  className="w-full text-left px-3 py-2 hover:bg-surface-elevated/40 text-ink-secondary"
+                                >
+                                  ✏️ Editar
+                                </button>
+                              )}
+                              {canUpdate && !w.is_default && w.is_active && (
                                 <button
                                   onClick={() => { setDefaultMut.mutate(w.id); setActionMenuOpen(null) }}
                                   className="w-full text-left px-3 py-2 hover:bg-surface-elevated/40 text-ink-secondary"
@@ -290,22 +295,28 @@ export default function Almacenes() {
                                   ⭐ Marcar como default
                                 </button>
                               )}
-                              <button
-                                onClick={() => handleToggleActive(w)}
-                                className={clsx(
-                                  'w-full text-left px-3 py-2 hover:bg-surface-elevated/40',
-                                  w.is_active ? 'text-status-warning' : 'text-status-success'
-                                )}
-                              >
-                                {w.is_active ? '⏸ Desactivar' : '▶ Activar'}
-                              </button>
-                              <div className="border-t border-line-subtle my-1" />
-                              <button
-                                onClick={() => { handleRemove(w); setActionMenuOpen(null) }}
-                                className="w-full text-left px-3 py-2 hover:bg-status-danger/10 text-status-danger"
-                              >
-                                🗑 Eliminar
-                              </button>
+                              {canUpdate && (
+                                <button
+                                  onClick={() => handleToggleActive(w)}
+                                  className={clsx(
+                                    'w-full text-left px-3 py-2 hover:bg-surface-elevated/40',
+                                    w.is_active ? 'text-status-warning' : 'text-status-success'
+                                  )}
+                                >
+                                  {w.is_active ? '⏸ Desactivar' : '▶ Activar'}
+                                </button>
+                              )}
+                              {canDelete && (
+                                <>
+                                  <div className="border-t border-line-subtle my-1" />
+                                  <button
+                                    onClick={() => { handleRemove(w); setActionMenuOpen(null) }}
+                                    className="w-full text-left px-3 py-2 hover:bg-status-danger/10 text-status-danger"
+                                  >
+                                    🗑 Eliminar
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </>
                         )}

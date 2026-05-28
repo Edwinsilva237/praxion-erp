@@ -83,8 +83,8 @@ export const NAV_SECTIONS = [
   {
     label: 'Trazabilidad',
     items: [
-      { label: 'Rastreo de lotes',      to: '/trazabilidad/lotes',        iconKey: 'card',     permission: 'production:read', module: 'production' },
-      { label: 'Vencimientos próximos', to: '/trazabilidad/vencimientos', iconKey: 'calendar', permission: 'production:read', module: 'production' },
+      { label: 'Rastreo de lotes',      to: '/trazabilidad/lotes',        iconKey: 'card',     permission: 'traceability:read', module: 'traceability' },
+      { label: 'Vencimientos próximos', to: '/trazabilidad/vencimientos', iconKey: 'calendar', permission: 'traceability:read', module: 'traceability' },
     ],
   },
   {

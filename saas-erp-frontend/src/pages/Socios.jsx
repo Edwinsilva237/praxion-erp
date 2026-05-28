@@ -9,6 +9,7 @@ import { partnersApi } from '@/api/partners'
 import { useCodeSuggestion } from '@/hooks/useCodeSuggestion'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
+import Can from '@/components/auth/Can'
 import clsx from 'clsx'
 
 // ─── Catálogos SAT ────────────────────────────────────────────────────────────
@@ -1322,19 +1323,21 @@ export default function Socios() {
           <h1 className="page-title">Socios de negocio</h1>
           <p className="page-subtitle">{isLoading ? '...' : `${total} registros`}</p>
         </div>
-        <div className="flex gap-2">
-          <button className="btn-secondary" onClick={() => setModal('new')}
-            title="Form completo con datos fiscales y comerciales">
-            Captura completa
-          </button>
-          <button className="btn-primary" onClick={() => setModal('quick')}
-            title="Cliente sin RFC, solo para remisión">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-            Captura rápida
-          </button>
-        </div>
+        <Can do="business_partners:create">
+          <div className="flex gap-2">
+            <button className="btn-secondary" onClick={() => setModal('new')}
+              title="Form completo con datos fiscales y comerciales">
+              Captura completa
+            </button>
+            <button className="btn-primary" onClick={() => setModal('quick')}
+              title="Cliente sin RFC, solo para remisión">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Captura rápida
+            </button>
+          </div>
+        </Can>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-3">
@@ -1390,13 +1393,15 @@ export default function Socios() {
                     <Badge variant={p.is_active ? 'green' : 'gray'} label={p.is_active ? 'Activo' : 'Inactivo'} />
                   </td>
                   <td>
-                    <button onClick={() => setModal(p)}
-                      className="btn-ghost btn-sm btn-icon text-ink-muted hover:text-ink-secondary" title="Editar">
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                      </svg>
-                    </button>
+                    <Can do="business_partners:update">
+                      <button onClick={() => setModal(p)}
+                        className="btn-ghost btn-sm btn-icon text-ink-muted hover:text-ink-secondary" title="Editar">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                    </Can>
                   </td>
                 </tr>
               ))}

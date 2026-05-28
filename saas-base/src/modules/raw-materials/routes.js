@@ -14,7 +14,7 @@ router.use(authGuard)
 router.use(requireActiveTenant)
 
 // GET /api/raw-materials
-router.get('/', checkPermission('products', 'read'), async (req, res, next) => {
+router.get('/', checkPermission('raw_materials', 'read'), async (req, res, next) => {
   try {
     const { resinType, materialType, itemKind, isActive, search, withStock, page, limit } = req.query
     const result = await svc.listRawMaterials({
@@ -31,7 +31,7 @@ router.get('/', checkPermission('products', 'read'), async (req, res, next) => {
 })
 
 // GET /api/raw-materials/:id
-router.get('/:id', checkPermission('products', 'read'), async (req, res, next) => {
+router.get('/:id', checkPermission('raw_materials', 'read'), async (req, res, next) => {
   try {
     const item = await svc.getRawMaterial({ tenantId: req.tenant.id, id: req.params.id })
     if (!item) return res.status(404).json({ error: 'Materia prima no encontrada.' })
@@ -40,7 +40,7 @@ router.get('/:id', checkPermission('products', 'read'), async (req, res, next) =
 })
 
 // POST /api/raw-materials
-router.post('/', checkPermission('products', 'create'), async (req, res, next) => {
+router.post('/', checkPermission('raw_materials', 'create'), async (req, res, next) => {
   try {
     const { name, code, resinType, materialType, itemKind, unit, maxRegrindPct, costPerKg, description, leadTimeDays } = req.body
     if (!name) return res.status(400).json({ error: 'name es requerido.' })
@@ -76,7 +76,7 @@ router.post('/', checkPermission('products', 'create'), async (req, res, next) =
 })
 
 // PATCH /api/raw-materials/:id
-router.patch('/:id', checkPermission('products', 'update'), async (req, res, next) => {
+router.patch('/:id', checkPermission('raw_materials', 'update'), async (req, res, next) => {
   try {
     const { name, code, materialType, unit, maxRegrindPct, costPerKg, description, isActive, leadTimeDays } = req.body
     const item = await svc.updateRawMaterial({

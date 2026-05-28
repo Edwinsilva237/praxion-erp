@@ -14,7 +14,7 @@ router.use(requireActiveTenant)
 router.use(requireModule('inventory'))
 
 // ── GET /api/warehouses ────────────────────────────────────────────────────
-router.get('/', checkPermission('inventory', 'read'), async (req, res, next) => {
+router.get('/', checkPermission('warehouses', 'read'), async (req, res, next) => {
   try {
     const { type, include_inactive } = req.query
     const data = await warehouseService.list({
@@ -27,7 +27,7 @@ router.get('/', checkPermission('inventory', 'read'), async (req, res, next) => 
 })
 
 // ── GET /api/warehouses/:id ────────────────────────────────────────────────
-router.get('/:id', checkPermission('inventory', 'read'), async (req, res, next) => {
+router.get('/:id', checkPermission('warehouses', 'read'), async (req, res, next) => {
   try {
     const w = await warehouseService.getById({ tenantId: req.tenant.id, id: req.params.id })
     if (!w) return res.status(404).json({ error: 'Almacén no encontrado.' })
@@ -36,7 +36,7 @@ router.get('/:id', checkPermission('inventory', 'read'), async (req, res, next) 
 })
 
 // ── POST /api/warehouses ───────────────────────────────────────────────────
-router.post('/', checkPermission('inventory', 'create'), async (req, res, next) => {
+router.post('/', checkPermission('warehouses', 'create'), async (req, res, next) => {
   try {
     const { name, type, resin_type, description, is_active, make_default } = req.body
     const w = await warehouseService.create({
@@ -53,7 +53,7 @@ router.post('/', checkPermission('inventory', 'create'), async (req, res, next) 
 })
 
 // ── PATCH /api/warehouses/:id ──────────────────────────────────────────────
-router.patch('/:id', checkPermission('inventory', 'create'), async (req, res, next) => {
+router.patch('/:id', checkPermission('warehouses', 'update'), async (req, res, next) => {
   try {
     const patch = {}
     if ('name'        in req.body) patch.name        = req.body.name
@@ -72,7 +72,7 @@ router.patch('/:id', checkPermission('inventory', 'create'), async (req, res, ne
 })
 
 // ── POST /api/warehouses/:id/set-default ──────────────────────────────────
-router.post('/:id/set-default', checkPermission('inventory', 'create'), async (req, res, next) => {
+router.post('/:id/set-default', checkPermission('warehouses', 'update'), async (req, res, next) => {
   try {
     const w = await warehouseService.setDefault({
       tenantId: req.tenant.id,
@@ -83,7 +83,7 @@ router.post('/:id/set-default', checkPermission('inventory', 'create'), async (r
 })
 
 // ── DELETE /api/warehouses/:id ────────────────────────────────────────────
-router.delete('/:id', checkPermission('inventory', 'create'), async (req, res, next) => {
+router.delete('/:id', checkPermission('warehouses', 'delete'), async (req, res, next) => {
   try {
     const r = await warehouseService.remove({
       tenantId: req.tenant.id,

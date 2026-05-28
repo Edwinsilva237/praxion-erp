@@ -11,6 +11,7 @@ import { useEffect } from 'react'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import InventoryLevelsPanel from '@/components/inventario/InventoryLevelsPanel'
+import Can from '@/components/auth/Can'
 import clsx from 'clsx'
 
 // ─── Catálogos ────────────────────────────────────────────────────────────────
@@ -421,9 +422,11 @@ export default function MateriasPrimas() {
           <h1 className="page-title">Materias primas</h1>
           <p className="page-subtitle">{total} materia{total !== 1 ? 's' : ''} prima{total !== 1 ? 's' : ''} registrada{total !== 1 ? 's' : ''}</p>
         </div>
-        <button className="btn-primary" onClick={() => setModal('new')}>
-          <IconPlus /> Nueva materia prima
-        </button>
+        <Can do="raw_materials:create">
+          <button className="btn-primary" onClick={() => setModal('new')}>
+            <IconPlus /> Nueva materia prima
+          </button>
+        </Can>
       </div>
 
       {/* Filtros */}
@@ -515,10 +518,12 @@ export default function MateriasPrimas() {
                         label={r.is_active ? 'Activa' : 'Inactiva'} />
                     </td>
                     <td>
-                      <button onClick={() => openEdit(r)}
-                        className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-brand-300" title="Editar">
-                        <IconEdit />
-                      </button>
+                      <Can do="raw_materials:update">
+                        <button onClick={() => openEdit(r)}
+                          className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-brand-300" title="Editar">
+                          <IconEdit />
+                        </button>
+                      </Can>
                     </td>
                   </tr>
                   )

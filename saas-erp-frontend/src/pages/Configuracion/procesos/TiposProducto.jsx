@@ -266,7 +266,7 @@ export default function TiposProducto() {
   const can = useAuthStore(s => s.can)
   const permissions = useAuthStore(s => s.permissions)
   const isSuperAdmin = permissions?.includes?.('*')
-  const canManage = isSuperAdmin || can?.('settings', 'update')
+  const canManage = isSuperAdmin || can?.('tenant_catalogs', 'update')
 
   const [showInactive, setShowInactive] = useState(false)
   const [editing, setEditing] = useState(null)

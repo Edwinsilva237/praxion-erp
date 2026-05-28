@@ -33,7 +33,7 @@ router.use(requireActiveTenant)
  *   Busca lotes (MP o PT) por número.
  *   Devuelve {rawMaterialLots: [...], productLots: [...]}.
  */
-router.get('/search', checkPermission('production', 'read'), async (req, res, next) => {
+router.get('/search', checkPermission('traceability', 'read'), async (req, res, next) => {
   try {
     const q = String(req.query.q || '').trim()
     const type = req.query.type || 'all'
@@ -90,7 +90,7 @@ router.get('/search', checkPermission('production', 'read'), async (req, res, ne
  * GET /api/traceability/product-lot/:id
  *   Cadena completa de un lote de PT: backward (MP usada) + forward (clientes).
  */
-router.get('/product-lot/:id', checkPermission('production', 'read'), async (req, res, next) => {
+router.get('/product-lot/:id', checkPermission('traceability', 'read'), async (req, res, next) => {
   try {
     const tenantId = req.tenant.id
     const lotId = req.params.id
@@ -166,7 +166,7 @@ router.get('/product-lot/:id', checkPermission('production', 'read'), async (req
  *   Cadena hacia adelante: qué PTs se hicieron con este MP, y a qué clientes
  *   terminaron entregándose. Crítico para recall.
  */
-router.get('/raw-material-lot/:id', checkPermission('production', 'read'), async (req, res, next) => {
+router.get('/raw-material-lot/:id', checkPermission('traceability', 'read'), async (req, res, next) => {
   try {
     const tenantId = req.tenant.id
     const lotId = req.params.id

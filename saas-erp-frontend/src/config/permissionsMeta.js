@@ -23,6 +23,10 @@ export const RESOURCE_LABELS = {
   production:        'Órdenes y turnos de producción',
   scrap:             'Scrap y mermas',
   raw_materials:     'Materias primas',
+  traceability:      'Trazabilidad de lotes (búsqueda y expiraciones)',
+
+  process_config:    'Configuración del Process Template (flags globales)',
+  tenant_catalogs:   'Catálogos del tenant (unidades, mermas, calidades, alérgenos, etc.)',
 
   inventory:         'Inventario y movimientos',
   warehouses:        'Almacenes',
@@ -59,7 +63,7 @@ export const PROCESS_GROUPS = [
     key:   'production',
     label: '🏭 Producción',
     description: 'Manufactura: órdenes, turnos, captura, validación, scrap, MP.',
-    resources: ['production', 'scrap', 'raw_materials'],
+    resources: ['production', 'scrap', 'raw_materials', 'traceability'],
   },
   {
     key:   'inventory',
@@ -78,6 +82,12 @@ export const PROCESS_GROUPS = [
     label: '📊 Reportes',
     description: 'Acceso a cada reporte por separado: Ventas, CxC, CxP, Producción, Contable.',
     resources: ['reports'],
+  },
+  {
+    key:   'process_template',
+    label: '🧬 Configuración del proceso',
+    description: 'Flags globales y catálogos del Process Template (unidades, mermas, alérgenos, etc.).',
+    resources: ['process_config', 'tenant_catalogs'],
   },
   {
     key:   'system',
@@ -160,7 +170,8 @@ export const ROLE_TEMPLATES = [
       (p.resource === 'scrap' && ['read', 'create'].includes(p.action)) ||
       (p.resource === 'inventory' && p.action === 'read') ||
       (p.resource === 'products' && p.action === 'read') ||
-      (p.resource === 'raw_materials' && p.action === 'read'),
+      (p.resource === 'raw_materials' && p.action === 'read') ||
+      (p.resource === 'traceability' && p.action === 'read'),
   },
   {
     key:   'produccion_supervisor',
@@ -172,6 +183,7 @@ export const ROLE_TEMPLATES = [
       (p.resource === 'inventory') ||
       (p.resource === 'products' && p.action === 'read') ||
       (p.resource === 'raw_materials') ||
+      (p.resource === 'traceability') ||
       (p.resource === 'reports' && p.action === 'production'),
   },
   {

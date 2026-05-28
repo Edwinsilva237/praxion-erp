@@ -128,7 +128,7 @@ export default function Flags() {
   const can = useAuthStore(s => s.can)
   const permissions = useAuthStore(s => s.permissions)
   const isSuperAdmin = permissions?.includes?.('*')
-  const canManage = isSuperAdmin || can?.('settings', 'update')
+  const canManage = isSuperAdmin || can?.('process_config', 'update')
 
   const [values, setValues] = useState(null)
   const [dirty, setDirty] = useState(false)

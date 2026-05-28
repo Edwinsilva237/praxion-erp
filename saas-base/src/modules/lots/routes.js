@@ -31,7 +31,7 @@ router.use(requireActiveTenant)
 
 const tid = (req) => req.tenant.id
 
-router.post('/run-expiration-check', checkPermission('production', 'update'), async (req, res, next) => {
+router.post('/run-expiration-check', checkPermission('traceability', 'update'), async (req, res, next) => {
   try {
     const result = await markExpiredLots({ tenantId: tid(req) })
     res.json(result)
@@ -41,7 +41,7 @@ router.post('/run-expiration-check', checkPermission('production', 'update'), as
   }
 })
 
-router.get('/expiring', checkPermission('production', 'read'), async (req, res, next) => {
+router.get('/expiring', checkPermission('traceability', 'read'), async (req, res, next) => {
   try {
     const days = req.query.days ? parseInt(req.query.days) : null
     const dispatch = req.query.dispatch === 'true'

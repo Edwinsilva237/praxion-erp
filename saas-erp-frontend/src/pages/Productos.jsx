@@ -17,6 +17,7 @@ import { PendingImagePicker } from '@/components/productos/PendingImagePicker'
 import { PendingSheetsPicker } from '@/components/productos/PendingSheetsPicker'
 import { PendingInventoryLevel } from '@/components/productos/PendingInventoryLevel'
 import { inventoryApi } from '@/api/inventory'
+import Can from '@/components/auth/Can'
 import clsx from 'clsx'
 
 // ─── Catálogos SAT ────────────────────────────────────────────────────────────
@@ -953,9 +954,11 @@ export default function Productos() {
             )}
             Exportar CSV
           </button>
-          <button className="btn-primary" onClick={() => setModal('new')}>
-            <IconPlus /> Nuevo producto
-          </button>
+          <Can do="products:create">
+            <button className="btn-primary" onClick={() => setModal('new')}>
+              <IconPlus /> Nuevo producto
+            </button>
+          </Can>
         </div>
       </div>
 
@@ -1052,11 +1055,13 @@ export default function Productos() {
                       />
                     </td>
                     <td>
-                      <button onClick={() => openEdit(p)}
-                        className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-brand-300"
-                        title="Editar">
-                        <IconEdit />
-                      </button>
+                      <Can do="products:update">
+                        <button onClick={() => openEdit(p)}
+                          className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-brand-300"
+                          title="Editar">
+                          <IconEdit />
+                        </button>
+                      </Can>
                     </td>
                   </tr>
                 ))}

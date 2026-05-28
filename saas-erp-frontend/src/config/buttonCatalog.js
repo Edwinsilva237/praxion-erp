@@ -20,6 +20,50 @@
  */
 
 export const BUTTON_CATALOG = [
+  // ── Catálogos comerciales ────────────────────────────────────────────────
+  {
+    key:              'products.create',
+    label:            'Nuevo producto',
+    screen:           'Comercial · Productos',
+    accessPermission: 'products:read',
+    permission:       'products:create',
+  },
+  {
+    key:              'products.update',
+    label:            'Editar producto',
+    screen:           'Comercial · Productos',
+    accessPermission: 'products:read',
+    permission:       'products:update',
+  },
+  {
+    key:              'products.delete',
+    label:            'Eliminar producto',
+    screen:           'Comercial · Productos',
+    accessPermission: 'products:read',
+    permission:       'products:delete',
+  },
+  {
+    key:              'partners.create',
+    label:            'Captura completa / rápida de socio',
+    screen:           'Comercial · Clientes y proveedores',
+    accessPermission: 'business_partners:read',
+    permission:       'business_partners:create',
+  },
+  {
+    key:              'partners.update',
+    label:            'Editar socio',
+    screen:           'Comercial · Clientes y proveedores',
+    accessPermission: 'business_partners:read',
+    permission:       'business_partners:update',
+  },
+  {
+    key:              'partners.delete',
+    label:            'Eliminar socio',
+    screen:           'Comercial · Clientes y proveedores',
+    accessPermission: 'business_partners:read',
+    permission:       'business_partners:delete',
+  },
+
   // ── Comercial ────────────────────────────────────────────────────────────
   {
     key:              'sales.new-order',
@@ -94,6 +138,38 @@ export const BUTTON_CATALOG = [
     permission:       'financials:create',
   },
 
+  // ── Almacenes ────────────────────────────────────────────────────────────
+  {
+    key:              'warehouses.create',
+    label:            'Nuevo almacén',
+    screen:           'Inventario · Almacenes',
+    accessPermission: 'warehouses:read',
+    permission:       'warehouses:create',
+  },
+  {
+    key:              'warehouses.update',
+    label:            'Editar almacén / marcar default / activar-desactivar',
+    screen:           'Inventario · Almacenes',
+    accessPermission: 'warehouses:read',
+    permission:       'warehouses:update',
+  },
+  {
+    key:              'warehouses.delete',
+    label:            'Eliminar almacén',
+    screen:           'Inventario · Almacenes',
+    accessPermission: 'warehouses:read',
+    permission:       'warehouses:delete',
+  },
+
+  // ── Trazabilidad ─────────────────────────────────────────────────────────
+  {
+    key:              'traceability.run-expiration-check',
+    label:            'Ejecutar chequeo de vencimientos',
+    screen:           'Trazabilidad · Vencimientos',
+    accessPermission: 'traceability:read',
+    permission:       'traceability:update',
+  },
+
   // ── Inventario ───────────────────────────────────────────────────────────
   {
     key:              'inventory.new-adjustment',
@@ -115,6 +191,29 @@ export const BUTTON_CATALOG = [
     screen:           'Inventario · Conteos físicos',
     accessPermission: 'inventory:read',
     permission:       'inventory:adjust',
+  },
+
+  // ── Materias primas ──────────────────────────────────────────────────────
+  {
+    key:              'raw-materials.create',
+    label:            'Nueva materia prima',
+    screen:           'Producción · Materias primas',
+    accessPermission: 'raw_materials:read',
+    permission:       'raw_materials:create',
+  },
+  {
+    key:              'raw-materials.update',
+    label:            'Editar materia prima',
+    screen:           'Producción · Materias primas',
+    accessPermission: 'raw_materials:read',
+    permission:       'raw_materials:update',
+  },
+  {
+    key:              'raw-materials.delete',
+    label:            'Eliminar materia prima',
+    screen:           'Producción · Materias primas',
+    accessPermission: 'raw_materials:read',
+    permission:       'raw_materials:delete',
   },
 
   // ── Producción ───────────────────────────────────────────────────────────
@@ -177,6 +276,57 @@ export const BUTTON_CATALOG = [
     screen:           'Sistema · Roles y permisos',
     accessPermission: 'roles:read',
     permission:       'roles:create',
+  },
+
+  // ── Configuración del proceso (Process Template) ─────────────────────────
+  {
+    key:              'process-config.update-flags',
+    label:            'Editar banderas globales del proceso',
+    screen:           'Configuración · Proceso (banderas)',
+    accessPermission: 'process_config:read',
+    permission:       'process_config:update',
+  },
+  {
+    key:              'tenant-catalogs.units',
+    label:            'Editar catálogo de Unidades',
+    screen:           'Configuración · Catálogos del proceso',
+    accessPermission: 'tenant_catalogs:read',
+    permission:       'tenant_catalogs:update',
+  },
+  {
+    key:              'tenant-catalogs.product-kinds',
+    label:            'Editar catálogo de Tipos de producto',
+    screen:           'Configuración · Catálogos del proceso',
+    accessPermission: 'tenant_catalogs:read',
+    permission:       'tenant_catalogs:update',
+  },
+  {
+    key:              'tenant-catalogs.scrap-types',
+    label:            'Editar catálogo de Tipos de merma',
+    screen:           'Configuración · Catálogos del proceso',
+    accessPermission: 'tenant_catalogs:read',
+    permission:       'tenant_catalogs:update',
+  },
+  {
+    key:              'tenant-catalogs.quality-grades',
+    label:            'Editar catálogo de Grados de calidad',
+    screen:           'Configuración · Catálogos del proceso',
+    accessPermission: 'tenant_catalogs:read',
+    permission:       'tenant_catalogs:update',
+  },
+  {
+    key:              'tenant-catalogs.shift-roles',
+    label:            'Editar catálogo de Roles de turno',
+    screen:           'Configuración · Catálogos del proceso',
+    accessPermission: 'tenant_catalogs:read',
+    permission:       'tenant_catalogs:update',
+  },
+  {
+    key:              'tenant-catalogs.allergens',
+    label:            'Editar catálogo de Alérgenos',
+    screen:           'Configuración · Catálogos del proceso',
+    accessPermission: 'tenant_catalogs:read',
+    permission:       'tenant_catalogs:update',
   },
 
   // ── Configuración ───────────────────────────────────────────────────────
