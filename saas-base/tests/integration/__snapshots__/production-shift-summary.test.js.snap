@@ -20,6 +20,7 @@ exports[`Golden master: GET /api/production/shifts/:id/summary Devuelve resumen 
     "mpCostTotal": 187.5,
     "nrvLowerGrades": 0,
     "nrvWarning": false,
+    "packagingCost": 0,
     "ptKg": 7.5,
     "reprocessFactor": 20,
     "scrapCapturedKg": 0,

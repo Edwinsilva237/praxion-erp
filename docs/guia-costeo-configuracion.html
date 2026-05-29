@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Guía de configuración de costeo</title>
+<style>
+  :root{
+    --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb; --soft:#f9fafb;
+    --brand:#2563eb; --brand-soft:#eff6ff; --brand-line:#bfdbfe;
+    --warn:#b45309; --warn-soft:#fffbeb; --warn-line:#fde68a;
+    --ok:#047857; --ok-soft:#ecfdf5; --ok-line:#a7f3d0;
+    --tip:#7c3aed; --tip-soft:#f5f3ff; --tip-line:#ddd6fe;
+  }
+  *{box-sizing:border-box;}
+  html{-webkit-print-color-adjust:exact; print-color-adjust:exact;}
+  body{
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink); line-height:1.6; margin:0;
+    background:#fff; font-size:15px;
+  }
+  .page{max-width:880px; margin:0 auto; padding:48px 40px;}
+
+  /* Portada / encabezado */
+  .cover{
+    border:1px solid var(--brand-line); background:var(--brand-soft);
+    border-radius:14px; padding:32px 36px; margin-bottom:36px;
+  }
+  .cover h1{margin:0 0 6px; font-size:30px; color:#1e3a8a; letter-spacing:-.5px;}
+  .cover .sub{color:#1e40af; font-size:15px; margin:0;}
+  .cover .meta{margin-top:14px; font-size:13px; color:#3b82f6;}
+
+  h2{
+    font-size:21px; margin:34px 0 12px; padding-bottom:8px;
+    border-bottom:2px solid var(--line); color:#111827; letter-spacing:-.3px;
+  }
+  h3{font-size:16.5px; margin:22px 0 8px; color:#1f2937;}
+  p{margin:10px 0;}
+  ul{margin:10px 0; padding-left:22px;} li{margin:5px 0;}
+  code{
+    background:#f3f4f6; border:1px solid var(--line); border-radius:5px;
+    padding:1px 6px; font-family:"SF Mono",Consolas,"Courier New",monospace;
+    font-size:13px; color:#be123c;
+  }
+  pre{
+    background:#0f172a; color:#e2e8f0; border-radius:10px; padding:16px 18px;
+    overflow:auto; font-size:13px; line-height:1.55;
+    font-family:"SF Mono",Consolas,"Courier New",monospace;
+  }
+  pre code{background:none; border:none; color:inherit; padding:0;}
+
+  /* Tablas */
+  table{
+    width:100%; border-collapse:collapse; margin:14px 0; font-size:14px;
+    border:1px solid var(--line); border-radius:8px; overflow:hidden;
+  }
+  th{background:#f3f4f6; text-align:left; font-weight:600; color:#374151;}
+  th,td{padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top;}
+  tr:nth-child(even) td{background:var(--soft);}
+  tr:last-child td{border-bottom:none;}
+  td.num,th.num{text-align:right; font-variant-numeric:tabular-nums;}
+  tr.total td{font-weight:700; background:#eef2ff;}
+
+  /* Cajas de nota */
+  .box{border-radius:10px; padding:14px 18px; margin:16px 0; border:1px solid;}
+  .box p:first-child{margin-top:0;} .box p:last-child{margin-bottom:0;}
+  .box.brand{background:var(--brand-soft); border-color:var(--brand-line);}
+  .box.warn {background:var(--warn-soft);  border-color:var(--warn-line);}
+  .box.ok   {background:var(--ok-soft);    border-color:var(--ok-line);}
+  .box.tip  {background:var(--tip-soft);   border-color:var(--tip-line);}
+  .box .tag{font-weight:700; display:block; margin-bottom:4px;}
+  .box.brand .tag{color:#1e40af;} .box.warn .tag{color:var(--warn);}
+  .box.ok .tag{color:var(--ok);}  .box.tip .tag{color:var(--tip);}
+
+  .lead{font-size:17px; color:#374151;
+    border-left:4px solid var(--brand); padding:6px 0 6px 16px; margin:14px 0;
+    font-style:italic;}
+
+  .pill{display:inline-block; font-size:12px; font-weight:600;
+    padding:2px 8px; border-radius:999px; background:#e0e7ff; color:#3730a3;}
+
+  footer{margin-top:48px; padding-top:16px; border-top:1px solid var(--line);
+    font-size:12px; color:var(--muted); text-align:center;}
+
+  /* Impresión / PDF */
+  @page{size:A4; margin:16mm 14mm;}
+  @media print{
+    .page{padding:0; max-width:none;}
+    h2{break-after:avoid;} h3{break-after:avoid;}
+    table,pre,.box,figure{break-inside:avoid;}
+    .cover{break-inside:avoid;}
+    tr{break-inside:avoid;}
+    a{color:inherit; text-decoration:none;}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="cover">
+    <h1>Guía de configuración de costeo</h1>
+    <p class="sub">Cómo el sistema calcula el costo de lo que produces, qué se captura en cada ventana y cómo armar el costeo de tu negocio — con ejemplos reales.</p>
+    <p class="meta">Escrita para que la entienda cualquier persona, sin tecnicismos.</p>
+  </div>
+
+  <!-- 1 -->
+  <h2>1. La idea en una frase</h2>
+  <p class="lead">El costo de cada turno se <strong>estima en el momento</strong> con los datos que tienes, y se <strong>corrige al cierre del mes</strong> cuando ya conoces tus gastos reales.</p>
+  <p>Durante el mes ves un número <em>aproximado</em>. Al final del mes capturas lo que <strong>realmente</strong> pagaste y el sistema reparte ese gasto real entre todos los turnos que hubo. Ese segundo número es el bueno.</p>
+
+  <!-- 2 -->
+  <h2>2. ¿De qué se compone el costo?</h2>
+  <p>Cada pieza/bolsita/kilo que produces carga 4 tipos de costo:</p>
+  <table>
+    <thead><tr><th>Pieza del costo</th><th>Qué es</th><th>Cómo se captura</th></tr></thead>
+    <tbody>
+      <tr><td><strong>1. Materia prima (MP)</strong></td><td>El material que se transforma (maíz, resina, harina…)</td><td>Carga de MP en el turno</td></tr>
+      <tr><td><strong>2. Empaque</strong></td><td>Bolsa, etiqueta, caja, costal</td><td>Se define en la <strong>receta</strong> del producto</td></tr>
+      <tr><td><strong>3. Gastos indirectos</strong></td><td>Luz, gas, renta, mano de obra, mantenimiento…</td><td>Módulo <strong>Costeo</strong></td></tr>
+      <tr><td><strong>4. Merma</strong></td><td>Material desperdiciado</td><td>Se captura aparte (no encarece el turno que la generó — ver §6)</td></tr>
+    </tbody>
+  </table>
+  <p>La fórmula final de cada turno es:</p>
+  <pre><code>Costo total del turno = Materia prima + Empaque + Gastos indirectos
+Costo por unidad      = (Costo total − valor de 2da calidad) ÷ unidades buenas</code></pre>
+
+  <!-- 3 -->
+  <h2>3. Las ventanas donde se captura o configura el costo</h2>
+
+  <h3>3.1 Carga de materia prima (durante el turno)</h3>
+  <p><strong>Dónde:</strong> Producción → Captura → pestaña <strong>“Mat. Primas”</strong> <span class="pill">solo si el tenant usa lotes</span></p>
+  <ul>
+    <li>El operador elige el <strong>material</strong> y escribe los <strong>kilogramos cargados</strong>.</li>
+    <li><strong>No se escribe el costo aquí.</strong> El costo por kg sale solo, del precio configurado del material (o del lote que se consume).</li>
+    <li>Es opcional: si no se declara, el sistema estima el consumo a partir de la receta.</li>
+  </ul>
+  <div class="box tip"><span class="tag">💡 Dónde vive el precio</span>El precio de cada material se configura en su ficha (catálogo de materias primas). Ahí es donde realmente “vive” el costo/kg que usará el costeo.</div>
+
+  <h3>3.2 Captura de merma</h3>
+  <p><strong>Dónde:</strong> Producción → Captura → pestaña <strong>“Merma”</strong></p>
+  <ul>
+    <li>El operador elige el <strong>tipo de merma</strong> y escribe los <strong>kilogramos</strong>.</li>
+    <li>Tampoco se escribe costo. El sistema lo valúa solo (ver §6).</li>
+  </ul>
+
+  <h3>3.3 Configuración de gastos indirectos (módulo Costeo)</h3>
+  <p><strong>Dónde:</strong> Costeo → <strong>“Gastos indirectos”</strong> → botón <strong>“Nuevo gasto”</strong></p>
+  <p>Aquí defines <em>una vez</em> cada gasto fijo del negocio. Por cada gasto capturas:</p>
+  <table>
+    <thead><tr><th>Campo</th><th>Qué pones</th><th>Ejemplo</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Código</strong></td><td>Nombre corto sin espacios (no cambia después)</td><td><code>renta</code>, <code>gas</code>, <code>mano_obra</code></td></tr>
+      <tr><td><strong>Nombre</strong></td><td>Nombre legible</td><td>“Renta del local”</td></tr>
+      <tr><td><strong>Base de prorrateo</strong></td><td>Cómo se reparte entre turnos (ver §4)</td><td>“Por kg”</td></tr>
+      <tr><td><strong>Frecuencia</strong></td><td>Cada cuánto capturarás el monto real (ver §5)</td><td>“Mensual”</td></tr>
+      <tr><td><strong>Monto estimado por período</strong></td><td>Cuánto crees que costará al mes</td><td>$660</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.4 Períodos del mes</h3>
+  <p><strong>Dónde:</strong> Costeo → <strong>“Períodos del mes”</strong></p>
+  <ul>
+    <li>A inicio de mes das clic en <strong>“Crear períodos del mes”</strong>: genera una fila por cada gasto activo, con su estimado.</li>
+    <li>Puedes ajustar el <strong>estimado</strong> de ese mes si sabes que será distinto al de costumbre.</li>
+  </ul>
+
+  <h3>3.5 Cierre de mes (el recosteo real) ⭐</h3>
+  <p><strong>Dónde:</strong> Costeo → <strong>“Cierre de mes”</strong></p>
+  <p>Es un asistente de 4 pasos:</p>
+  <ol>
+    <li>Eliges <strong>mes y año</strong>.</li>
+    <li>Capturas el <strong>monto real</strong> que pagaste de cada gasto.</li>
+    <li>Revisas el resumen: <strong>estimado vs. real vs. varianza</strong>.</li>
+    <li>Confirmas → el sistema <strong>recostea todos los turnos del mes</strong> con los números reales.</li>
+  </ol>
+  <div class="box warn"><span class="tag">⚠ Irreversible</span>El cierre no se puede deshacer. Asegúrate de tener los montos reales antes de confirmar.</div>
+
+  <h3>3.6 Dónde se ve el costo resultante</h3>
+  <p><strong>Dónde:</strong> Producción → Resumen del turno → <strong>“Desglose de costos del turno”</strong></p>
+  <p>Muestra: materia prima estimada, cada gasto fijo, empaque, costo total y <strong>costo por pieza</strong> (o por metro).</p>
+
+  <!-- 4 -->
+  <h2>4. La opción más importante: Base de prorrateo</h2>
+  <p>Es <strong>cómo se reparte un gasto entre los turnos del mes</strong>. Hay 5 formas:</p>
+  <table>
+    <thead><tr><th>Opción</th><th>Cómo reparte</th><th>Úsala para gastos que…</th><th>Ejemplos</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Partes iguales</strong></td><td>Cada turno paga lo mismo</td><td>…no dependen de cuánto produzcas</td><td>Renta, sueldo admin, internet</td></tr>
+      <tr><td><strong>Por turno</strong></td><td>Igual que “partes iguales” (cada turno = 1 parte)</td><td>…igual que arriba</td><td>Vigilancia, seguro</td></tr>
+      <tr><td><strong>Por horas</strong></td><td>Más horas = más gasto</td><td>…se acumulan con el tiempo</td><td>Maquinaria por hora, algunos sueldos</td></tr>
+      <tr><td><strong>Por unidades</strong></td><td>Más piezas = más gasto</td><td>…suben con cada pieza producida</td><td>Destajo por pieza, consumibles por unidad</td></tr>
+      <tr><td><strong>Por kg</strong></td><td>Más kilos = más gasto</td><td>…suben con el volumen procesado</td><td>Luz del molino, gas, agua</td></tr>
+    </tbody>
+  </table>
+  <div class="box brand"><span class="tag">Regla simple</span>Pregúntate: <em>“si produzco el doble, este gasto sube?”</em><br>
+    • <strong>No sube</strong> → “Partes iguales” (renta, admin).<br>
+    • <strong>Sube con las piezas</strong> → “Por unidades”.<br>
+    • <strong>Sube con los kilos</strong> → “Por kg”.<br>
+    • <strong>Sube con las horas</strong> → “Por horas”.</div>
+
+  <!-- 5 -->
+  <h2>5. La otra opción: Frecuencia de captura</h2>
+  <p>Es <strong>cada cuánto vas a capturar el monto real</strong> de ese gasto. No cambia el cálculo del turno; solo organiza tu ritmo de captura.</p>
+  <table>
+    <thead><tr><th>Opción</th><th>Cuándo usarla</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Mensual</strong></td><td>La mayoría: renta, luz, gas, sueldos mensuales</td></tr>
+      <tr><td><strong>Quincenal</strong></td><td>Pagos cada 15 días (nómina quincenal)</td></tr>
+      <tr><td><strong>Anual</strong></td><td>Gastos que pagas 1 vez al año (seguros, licencias)</td></tr>
+      <tr><td><strong>Por evento</strong></td><td>Gastos esporádicos (una reparación, un flete puntual)</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 6 -->
+  <h2>6. La merma: por qué no encarece el turno que la generó</h2>
+  <p>Cuando capturas merma, el sistema <strong>no</strong> se la cobra al turno donde ocurrió. En su lugar:</p>
+  <ol>
+    <li>La merma entra a un almacén de <strong>material reciclado</strong> (regrind).</li>
+    <li>Se guarda valuada un poco <strong>más cara</strong> que la MP virgen: precio normal × (1 + <strong>factor de reproceso</strong>). El factor por defecto es <strong>20%</strong>.</li>
+    <li>El <strong>turno que reutilice</strong> ese material es el que paga ese sobrecosto, porque su costo/kg promedio sube al mezclar reciclado.</li>
+  </ol>
+  <div class="box ok"><span class="tag">👉 La lógica</span>El costo se traslada a <em>quien aprovecha</em> el material, no a quien lo desperdició. Si nunca se reutiliza, queda como inventario reciclado disponible.</div>
+  <div class="box tip"><span class="tag">Empaque y merma</span>El empaque se cobra <strong>por paquete realmente capturado</strong>, nunca por el lote planeado. Si planeabas 250 bolsitas pero solo empacaste 230, se cobran 230 bolsas + 230 etiquetas. El desperdicio no consume empaque.</div>
+
+  <!-- 7 -->
+  <h2>7. Cómo se estima el costo durante el mes</h2>
+  <p>Cuando cierras un turno, el sistema:</p>
+  <ol>
+    <li>Busca los gastos del mes que estén <strong>abiertos</strong> (no cerrados aún).</li>
+    <li>Calcula la “parte” que le toca a ese turno según su <strong>base de prorrateo</strong>: partes iguales → 1 parte; por horas → horas del turno; por unidades → piezas; por kg → kilos.</li>
+    <li>Suma todas las partes y lo guarda como <strong>overhead estimado del turno</strong>.</li>
+  </ol>
+  <div class="box warn"><span class="tag">⚠ El estimado intra-mes es provisional</span>Mientras el mes está abierto, este número es <strong>aproximado y suele salir alto</strong>, porque el sistema todavía no sabe cuántos turnos habrá en total. El número fino llega en el <strong>cierre de mes</strong>. No te alarmes si el costo por unidad se ve elevado a mitad de mes.</div>
+
+  <!-- 8 -->
+  <h2>8. Cómo se corrige al cierre (recosteo real)</h2>
+  <p>En “Cierre de mes” capturas lo que <strong>realmente</strong> pagaste. Entonces el sistema:</p>
+  <ol>
+    <li>Cuenta <strong>todo lo que de verdad pasó</strong> en el mes (turnos, horas, piezas o kilos, según cada gasto).</li>
+    <li>Reparte tu <strong>gasto real</strong> entre los turnos en esa proporción exacta.</li>
+    <li>Reescribe el costo real de cada turno y de cada orden.</li>
+    <li>Te muestra la <strong>varianza</strong>: cuánto te equivocaste al estimar (estimado vs. real).</li>
+  </ol>
+  <p><strong>Ejemplo del reparto:</strong> pagaste <strong>$660 de gas</strong> real. En el mes produjiste <strong>55 kg</strong> en total, en 4 turnos. El gas es “por kg”, así que:</p>
+  <table>
+    <thead><tr><th>Turno</th><th class="num">Kg producidos</th><th class="num">Gas real asignado</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td class="num">20 kg</td><td class="num">$660 × 20/55 = <strong>$240.00</strong></td></tr>
+      <tr><td>2</td><td class="num">15 kg</td><td class="num">$660 × 15/55 = <strong>$180.00</strong></td></tr>
+      <tr><td>3</td><td class="num">12 kg</td><td class="num">$660 × 12/55 = <strong>$144.00</strong></td></tr>
+      <tr><td>4</td><td class="num">8 kg</td><td class="num">$660 × 8/55 = <strong>$96.00</strong></td></tr>
+      <tr class="total"><td>Total</td><td class="num">55 kg</td><td class="num">$660.00</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 9 -->
+  <h2>9. Ejemplos prácticos por tipo de negocio</h2>
+
+  <h3>9.1 Palomitas / frituras (paopops) — se vende por pieza</h3>
+  <p><strong>Gastos indirectos a configurar:</strong></p>
+  <table>
+    <thead><tr><th>Gasto</th><th>Base de prorrateo</th><th>Frecuencia</th><th class="num">Estimado mensual</th><th>Por qué</th></tr></thead>
+    <tbody>
+      <tr><td>Mano de obra (destajo empaque)</td><td><strong>Por unidades</strong></td><td>Quincenal</td><td class="num">$4,400</td><td>$2 por bolsita; sube con cada bolsita</td></tr>
+      <tr><td>Gas</td><td><strong>Por kg</strong></td><td>Mensual</td><td class="num">$660</td><td>Sube con el volumen cocinado</td></tr>
+      <tr><td>Renta</td><td><em>no aplica</em></td><td>—</td><td class="num">—</td><td>Trabajan desde casa</td></tr>
+    </tbody>
+  </table>
+  <p><strong>Empaque (en la receta, no en gastos indirectos):</strong> bolsa $1.00 + etiqueta $0.35 = <strong>$1.35/bolsita</strong>.</p>
+  <p><strong>Costo de un turno</strong> (produjo 600 bolsitas):</p>
+  <pre><code>Materia prima (maíz + saborizante)............  $540.00
+Empaque (600 × $1.35).........................  $810.00
+Mano de obra (600 × $2)*...................... $1,200.00
+Gas (parte del turno)*........................   $180.00
+----------------------------------------------
+Costo total del turno......................... $2,730.00
+Costo por bolsita (÷ 600).....................     $4.55</code></pre>
+  <p style="font-size:13px;color:var(--muted)">* Mano de obra y gas se afinan en el cierre de mes.</p>
+  <div class="box tip"><span class="tag">Nota</span>El <strong>aceite</strong> capturado en litros no entra hoy al costo (tema de densidad, pendiente documentado). Si lo capturas en kg, sí se cuenta.</div>
+
+  <h3>9.2 Reciclado / plástico — se vende por kg</h3>
+  <table>
+    <thead><tr><th>Gasto</th><th>Base de prorrateo</th><th>Frecuencia</th><th>Por qué</th></tr></thead>
+    <tbody>
+      <tr><td>Energía eléctrica (molino)</td><td><strong>Por kg</strong></td><td>Mensual</td><td>El consumo sube con los kilos procesados</td></tr>
+      <tr><td>Renta de la nave</td><td><strong>Partes iguales</strong></td><td>Mensual</td><td>Fija, no depende de la producción</td></tr>
+      <tr><td>Mano de obra directa</td><td><strong>Por horas</strong></td><td>Quincenal</td><td>Se paga por tiempo trabajado</td></tr>
+      <tr><td>Mantenimiento mayor</td><td><strong>Por evento</strong></td><td>Por evento</td><td>Esporádico</td></tr>
+    </tbody>
+  </table>
+  <p><strong>Empaque (receta):</strong> 1 costal por cada 25 kg producidos.</p>
+
+  <h3>9.3 Pastelería — se vende por pieza</h3>
+  <table>
+    <thead><tr><th>Gasto</th><th>Base de prorrateo</th><th>Frecuencia</th><th>Por qué</th></tr></thead>
+    <tbody>
+      <tr><td>Renta del local</td><td><strong>Partes iguales</strong></td><td>Mensual</td><td>Fija</td></tr>
+      <tr><td>Gas del horno</td><td><strong>Por unidades</strong></td><td>Mensual</td><td>Sube con cada pieza horneada</td></tr>
+      <tr><td>Mano de obra</td><td><strong>Por horas</strong></td><td>Quincenal</td><td>Por tiempo</td></tr>
+      <tr><td>Luz</td><td><strong>Por kg</strong> o <strong>Partes iguales</strong></td><td>Mensual</td><td>Según qué tanto dependa del volumen</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 10 -->
+  <h2>10. Recomendaciones rápidas</h2>
+  <ul>
+    <li><strong>Renta, admin, internet, seguros</strong> → “Partes iguales”.</li>
+    <li><strong>Luz / gas / agua de proceso</strong> → “Por kg”.</li>
+    <li><strong>Destajo, consumibles por pieza</strong> → “Por unidades”.</li>
+    <li><strong>Mano de obra por tiempo, maquinaria por hora</strong> → “Por horas”.</li>
+    <li><strong>Empaque</strong> → va en la <strong>receta</strong>, no en gastos indirectos. Se cobra por paquete capturado.</li>
+    <li><strong>Merma</strong> → captúrala; no encarece el turno que la generó, sino al que la reutiliza.</li>
+    <li>El costo <strong>durante el mes es provisional</strong>; el <strong>cierre de mes</strong> da el número real.</li>
+    <li>Cierra el mes <strong>siempre</strong>: si no, los costos se quedan en el estimado (alto y provisional).</li>
+  </ul>
+
+  <!-- 11 -->
+  <h2>11. Errores comunes</h2>
+  <table>
+    <thead><tr><th>Error</th><th>Consecuencia</th><th>Solución</th></tr></thead>
+    <tbody>
+      <tr><td>No cerrar el mes</td><td>El costo se queda en el estimado provisional (sale alto)</td><td>Hacer “Cierre de mes” cada mes</td></tr>
+      <tr><td>Meter el empaque como gasto indirecto</td><td>Se cobra doble o mal repartido</td><td>El empaque va en la <strong>receta</strong> del producto</td></tr>
+      <tr><td>Elegir “Partes iguales” para la luz</td><td>Un turno chico paga lo mismo que uno grande</td><td>Usar “Por kg” para gastos que escalan</td></tr>
+      <tr><td>No capturar el precio del material</td><td>La MP cuesta $0 en el costeo</td><td>Configurar el costo/kg en la ficha del material</td></tr>
+      <tr><td>Capturar líquidos en litros</td><td>No entran al costo (tema de densidad)</td><td>Capturar en kg mientras tanto</td></tr>
+    </tbody>
+  </table>
+
+  <footer>Guía de configuración de costeo · Praxion ERP</footer>
+
+</div>
+</body>
+</html>

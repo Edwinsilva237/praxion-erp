@@ -3733,6 +3733,54 @@ async function forceCloseShift({ tenantId, shiftId, reason, userId, ipAddress, u
 }
 
 
+// ──────────────────────────────────────────────────────────────────────────
+// Costo de empaque del turno
+//
+// El modelo de recetas (mig 127) permite que un componente sea item_kind
+// 'packaging' (bolsa, etiqueta, caja). Hasta ahora ese costo NO llegaba al costo
+// por unidad: sólo entraban MP (kg) y overhead. Esta función cierra ese hueco:
+// por cada orden producida en el turno calcula cuánto empaque se consumió según
+// la receta vigente del producto, escalado por la producción real del turno.
+//
+// Escalado: consumo = (producido / yield_quantity) × component.quantity, donde
+// `producido` se mide en la unidad de rendimiento de la receta (count → piezas;
+// cualquier otra → kg). cost_per_kg en raw_materials se usa como precio por
+// unidad del empaque (convención del sistema para ítems no-kg).
+//
+// Sin receta vigente con componentes de empaque devuelve 0 (compat. legacy).
+// `queryFn` es client.query (transacción) o el query del módulo.
+// ──────────────────────────────────────────────────────────────────────────
+async function computeShiftPackagingCost(queryFn, { shiftId, tenantId }) {
+  const { rows } = await queryFn(
+    `WITH order_prod AS (
+       SELECT sp.production_order_id,
+              po.product_id,
+              SUM(COALESCE(sp.quantity_units, 0)) AS units,
+              SUM(COALESCE(sp.real_weight_kg, 0)) AS kg
+       FROM shift_progress sp
+       JOIN production_orders po ON po.id = sp.production_order_id
+       WHERE sp.shift_id = $1
+       GROUP BY sp.production_order_id, po.product_id
+     )
+     SELECT COALESCE(SUM(
+        (CASE WHEN yu.unit_type = 'count' THEN op.units ELSE op.kg END)
+        / NULLIF(r.yield_quantity, 0)
+        * rc.quantity
+        * COALESCE(rm.cost_per_kg, 0)
+     ), 0) AS packaging_cost
+     FROM order_prod op
+     JOIN recipes r           ON r.product_id = op.product_id
+                             AND r.tenant_id = $2
+                             AND r.valid_until IS NULL
+     JOIN tenant_units yu      ON yu.id = r.yield_unit_id
+     JOIN recipe_components rc ON rc.recipe_id = r.id
+     JOIN raw_materials rm     ON rm.id = rc.raw_material_id
+                             AND rm.item_kind = 'packaging'`,
+    [shiftId, tenantId]
+  )
+  return parseFloat(rows[0]?.packaging_cost || 0)
+}
+
 async function validateShift({ tenantId, shiftId, approved, supervisorNotes, userId, ipAddress, userAgent }) {
   if (!approved) {
     // ─────────────────────────────────────────────────────────────────────
@@ -3858,7 +3906,15 @@ async function validateShift({ tenantId, shiftId, approved, supervisorNotes, use
     // (tenant_overhead_items + tenant_overhead_periods). Para historicidad,
     // shift_cost_snapshot queda como tabla read-only de turnos antiguos.
     const overheadCost = parseFloat(shift.estimated_overhead_total || 0)
-    const totalCost    = mpCost + overheadCost
+
+    // Empaque (bolsa/etiqueta/caja) desde la receta vigente, escalado por la
+    // producción real del turno. 0 si el producto no tiene receta con empaque.
+    const packagingCost = await computeShiftPackagingCost(
+      (text, params) => client.query(text, params),
+      { shiftId, tenantId }
+    )
+
+    const totalCost    = mpCost + overheadCost + packagingCost
 
     // §6c: NRV multi-calidad — calidades inferiores (is_second_quality=true) se
     // valúan a su expected_sale_price × kg; cal-1 absorbe el costo restante.
@@ -3935,7 +3991,7 @@ async function validateShift({ tenantId, shiftId, approved, supervisorNotes, use
     }
 
     await audit({ tenantId, userId, action:'shift.validated', resource:'production_shifts',
-      resourceId: shiftId, payload:{ costPerUnit, totalCost, goodUnits, nrvLowerGrades, nrvWarning }, ipAddress, userAgent })
+      resourceId: shiftId, payload:{ costPerUnit, totalCost, goodUnits, nrvLowerGrades, nrvWarning, packagingCost }, ipAddress, userAgent })
 
     return closed[0]
   })
@@ -4047,7 +4103,12 @@ async function getShiftSummary({ tenantId, shiftId }) {
   // Costos fijos (excluir el factor de reproceso que es config interna)
   const fixedCosts  = costs.filter(c => c.name !== '__scrap_factor__')
   const fixedTotal  = fixedCosts.reduce((s, c) => s + parseFloat(c.amount || 0), 0)
-  const totalCost   = mpCostTotal + fixedTotal
+
+  // Empaque (bolsa/etiqueta/caja) desde la receta vigente, escalado por la
+  // producción real del turno. 0 si el producto no tiene receta con empaque.
+  const packagingCost = await computeShiftPackagingCost(query, { shiftId, tenantId })
+
+  const totalCost   = mpCostTotal + fixedTotal + packagingCost
 
   // §6c: NRV multi-calidad — calidades inferiores valoradas a expected_sale_price × kg
   let nrvLowerGrades = 0
@@ -4187,6 +4248,7 @@ async function getShiftSummary({ tenantId, shiftId }) {
       estimatedMpKg:    parseFloat(totalProducedKg.toFixed(3)),
       estimatedMpCost:  parseFloat(mpCostTotal.toFixed(4)),
       fixedTotal:       parseFloat(fixedTotal.toFixed(4)),
+      packagingCost:    parseFloat(packagingCost.toFixed(4)),
       totalCost:        parseFloat(totalCost.toFixed(4)),
       costPerUnit:      parseFloat(costPerUnit.toFixed(4)),
       costPerMeter:     parseFloat(costPerMeter.toFixed(4)),
@@ -4470,11 +4532,17 @@ async function getRevertContext({ tenantId, shiftId }) {
     })
   }
 
-  // 5) Periodo contable cerrado (overhead aplicado al turno).
-  //    Detectamos por la presencia de filas en production_shift_overhead para el turno.
+  // 5) Periodo contable cerrado: el overhead del turno pertenece a un período
+  //    YA FINALIZADO. Las filas en shift_overhead_application se crean al validar
+  //    cada turno mientras el período sigue abierto (is_finalized=false), así que
+  //    la sola presencia no implica cierre — hay que exigir is_finalized=true.
   if (config.block_revert_if_period_closed) {
     const { rows: ohRows } = await query(
-      `SELECT 1 FROM production_shift_overhead WHERE shift_id = $1 LIMIT 1`,
+      `SELECT 1
+         FROM shift_overhead_application soa
+         JOIN tenant_overhead_periods top ON top.id = soa.period_id
+        WHERE soa.shift_id = $1 AND top.is_finalized = true
+        LIMIT 1`,
       [shiftId]
     )
     if (ohRows.length > 0) {

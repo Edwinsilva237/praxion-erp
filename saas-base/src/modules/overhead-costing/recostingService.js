@@ -214,24 +214,52 @@ async function finalizeAndRecoste(tenantId, year, month, capturedReals, userId) 
       )
       const mpCost = parseFloat(mpRows[0].mp_cost)
 
+      // Costo de empaque de la orden — empaque de la receta vigente del producto
+      // (bolsa/etiqueta/caja), escalado por la producción total de la orden.
+      // Consistente con mpCost: cubre todas las calidades. 0 sin receta de empaque.
+      const { rows: pkgRows } = await client.query(
+        `WITH op AS (
+           SELECT COALESCE(SUM(quantity_units), 0) AS units,
+                  COALESCE(SUM(real_weight_kg), 0) AS kg
+           FROM shift_progress WHERE production_order_id = $1
+         )
+         SELECT COALESCE(SUM(
+            (CASE WHEN yu.unit_type = 'count' THEN op.units ELSE op.kg END)
+            / NULLIF(r.yield_quantity, 0)
+            * rc.quantity
+            * COALESCE(rm.cost_per_kg, 0)
+         ), 0) AS packaging_cost
+         FROM op
+         JOIN recipes r           ON r.product_id = $2
+                                 AND r.tenant_id = $3
+                                 AND r.valid_until IS NULL
+         JOIN tenant_units yu      ON yu.id = r.yield_unit_id
+         JOIN recipe_components rc ON rc.recipe_id = r.id
+         JOIN raw_materials rm     ON rm.id = rc.raw_material_id
+                                 AND rm.item_kind = 'packaging'`,
+        [orderId, order.product_id, tenantId]
+      )
+      const packagingCost = parseFloat(pkgRows[0].packaging_cost)
+
       const totalUnits = parseFloat(order.total_units) || 0
-      const totalCost  = mpCost + overheadCost
+      const totalCost  = mpCost + overheadCost + packagingCost
       const unitCost   = totalUnits > 0 ? totalCost / totalUnits : 0
 
       await client.query(
         `INSERT INTO order_cost_snapshots
-           (order_id, snapshot_type, mp_cost, overhead_cost,
+           (order_id, snapshot_type, mp_cost, overhead_cost, packaging_cost,
             total_cost_to_grade_1, units_grade_1, unit_cost_grade_1)
-         VALUES ($1, 'recosted', $2, $3, $4, $5, $6)
+         VALUES ($1, 'recosted', $2, $3, $4, $5, $6, $7)
          ON CONFLICT (order_id, snapshot_type)
          DO UPDATE SET
            mp_cost               = EXCLUDED.mp_cost,
            overhead_cost         = EXCLUDED.overhead_cost,
+           packaging_cost        = EXCLUDED.packaging_cost,
            total_cost_to_grade_1 = EXCLUDED.total_cost_to_grade_1,
            units_grade_1         = EXCLUDED.units_grade_1,
            unit_cost_grade_1     = EXCLUDED.unit_cost_grade_1,
            created_at            = NOW()`,
-        [orderId, mpCost, overheadCost, totalCost, totalUnits, unitCost]
+        [orderId, mpCost, overheadCost, packagingCost, totalCost, totalUnits, unitCost]
       )
     }
   })
