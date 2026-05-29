@@ -6,6 +6,7 @@ const logger = require('../../config/logger')
 const { getFacturapiForTenant } = require('./facturapiClient')
 const { assertSubscriptionActive, assertCanStampInvoice } = require('../billing/enforcement')
 const { validateAgainstSatCatalogs } = require('./satCatalogValidator')
+const { buildFacturapiTaxes, buildRetentionTaxes } = require('./lineTax')
 
 /**
  * Timbra una factura en borrador usando Facturapi.
@@ -88,6 +89,14 @@ async function stampInvoice({ tenantId, invoiceId, userId, ipAddress, userAgent 
       [invoiceId]
     )
     if (!lines.length) throw createError(400, 'La factura no tiene líneas.')
+
+    // Retenciones de la factura (ISR / IVA retenido). Se anexan como impuestos
+    // withholding a cada concepto objeto de impuesto.
+    const { rows: retentions } = await client.query(
+      `SELECT tax_type, rate FROM invoice_retentions WHERE invoice_id = $1`,
+      [invoiceId]
+    )
+    const retentionTaxes = buildRetentionTaxes(retentions)
 
     // Inicializar Facturapi: el helper elige FACTURAPI_KEY o FACTURAPI_KEY_TEST
     // según si el tenant está marcado como sandbox.
@@ -213,12 +222,13 @@ async function stampInvoice({ tenantId, invoiceId, userId, ipAddress, userAgent 
           unit_name:    line.unit             || 'Pieza',
           price:        parseFloat(line.unit_price),
           tax_included: false,
+          // Respeta el tratamiento fiscal de cada línea (objeto_imp + factor +
+          // tasa). Antes se forzaba IVA Tasa 16% siempre, lo que generaba CFDIs
+          // incorrectos para tasa cero (agro/alimentos), exento o no objeto.
+          // Las retenciones (ISR/IVA) se anexan a los conceptos objeto de impuesto.
           taxes: [
-            {
-              type: 'IVA',
-              rate: parseFloat(line.tax_rate || 16) / 100,
-              factor: 'Tasa',
-            },
+            ...buildFacturapiTaxes(line),
+            ...((line.objeto_imp || '02') === '02' ? retentionTaxes : []),
           ],
         },
         quantity:     parseFloat(line.quantity),

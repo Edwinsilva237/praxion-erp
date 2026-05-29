@@ -30,6 +30,7 @@ async function listProducts({ tenantId, type, resinType, isActive, isProduced, s
             tpk.code AS product_kind_code, tpk.name AS product_kind_name,
             p.units_per_package, p.sale_unit,
             p.sat_product_code, p.sat_unit_code, p.objeto_imp,
+            p.tax_factor, p.tax_rate,
             p.lead_time_days, p.base_price, p.base_currency,
             p.is_active, p.created_at,
             qs.grams_per_linear_meter,
@@ -277,7 +278,7 @@ async function deletePackOption({ tenantId, packOptionId, userId, ipAddress, use
 async function createProduct({
   tenantId, sku, name, type, isProduced, productKindId, resinType,
   lengthMm, widthMm, thicknessMm, unitsPerPackage, saleUnit, description,
-  satProductCode, satUnitCode, objetoImp, leadTimeDays,
+  satProductCode, satUnitCode, objetoImp, taxFactor, taxRate, leadTimeDays,
   basePrice, baseCurrency,
   userId, ipAddress, userAgent,
 }) {
@@ -299,8 +300,8 @@ async function createProduct({
          (tenant_id, sku, name, type, is_produced, product_kind_id, resin_type,
           length_mm, width_mm, thickness_mm, units_per_package, sale_unit, description,
           sat_product_code, sat_unit_code, objeto_imp, lead_time_days,
-          base_price, base_currency)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+          base_price, base_currency, tax_factor, tax_rate)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
        RETURNING *`,
       [
         tenantId,
@@ -322,6 +323,8 @@ async function createProduct({
         leadTimeDays != null ? parseInt(leadTimeDays) : 7,
         basePrice != null && basePrice !== '' ? basePrice : null,
         baseCurrency || 'MXN',
+        taxFactor || 'Tasa',
+        taxRate != null && taxRate !== '' ? taxRate : 16,
       ]
     )
     const product = rows[0]
@@ -347,7 +350,7 @@ async function createProduct({
 
 async function updateProduct({
   tenantId, productId, name, description, saleUnit, isActive,
-  satProductCode, satUnitCode, objetoImp, leadTimeDays,
+  satProductCode, satUnitCode, objetoImp, taxFactor, taxRate, leadTimeDays,
   basePrice, baseCurrency,
   expectedSalePrice,        // §6c: NRV multi-calidad (products.expected_sale_price)
   productKindId,            // §6c: clasificación SaaS v2
@@ -378,7 +381,9 @@ async function updateProduct({
          expected_sale_price   = CASE WHEN $13::boolean THEN $14::numeric          ELSE expected_sale_price   END,
          product_kind_id       = CASE WHEN $15::boolean THEN $16::uuid             ELSE product_kind_id       END,
          default_quality_grade_id = CASE WHEN $17::boolean THEN $18::uuid          ELSE default_quality_grade_id END,
-         is_produced           = COALESCE($19, is_produced)
+         is_produced           = COALESCE($19, is_produced),
+         tax_factor            = COALESCE($22, tax_factor),
+         tax_rate              = COALESCE($23, tax_rate)
        WHERE id = $20 AND tenant_id = $21
        RETURNING *`,
       [
@@ -403,6 +408,8 @@ async function updateProduct({
         isProduced !== undefined ? isProduced : null,
         productId,
         tenantId,
+        taxFactor || null,
+        taxRate != null && taxRate !== '' ? taxRate : null,
       ]
     )
     if (rows.length === 0) return null

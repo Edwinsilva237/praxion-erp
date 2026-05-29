@@ -6,7 +6,7 @@ const codeFormatService = require('../code-formats/codeFormatService')
 
 // ─── Listado y detalle ───────────────────────────────────────────────────────
 
-async function listPartners({ tenantId, type, isActive, search, page = 1, limit = 50 }) {
+async function listPartners({ tenantId, type, isActive, search, includeOccasional = false, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
@@ -17,6 +17,8 @@ async function listPartners({ tenantId, type, isActive, search, page = 1, limit 
     params.push(`%${search}%`)
     filters.push(`(bp.name ILIKE $${params.length} OR bp.rfc ILIKE $${params.length})`)
   }
+  // Los clientes ocasionales se ocultan del catálogo principal salvo opt-in.
+  if (!includeOccasional) filters.push('bp.is_occasional = false')
 
   const where = filters.length ? `AND ${filters.join(' AND ')}` : ''
   params.push(limit, offset)
@@ -24,7 +26,7 @@ async function listPartners({ tenantId, type, isActive, search, page = 1, limit 
   const { rows } = await query(
     `SELECT bp.id, bp.type, bp.person_type, bp.name, bp.rfc, bp.internal_code,
             bp.credit_type, bp.credit_days, bp.credit_limit,
-            bp.city, bp.state, bp.is_active, bp.created_at,
+            bp.city, bp.state, bp.is_active, bp.is_occasional, bp.created_at,
             COUNT(DISTINCT bpc.id) AS contact_count,
             COUNT(DISTINCT da.id)  AS address_count
      FROM business_partners bp

@@ -39,6 +39,13 @@ async function generatePDF({ tenantId, invoiceId }) {
     [invoiceId]
   )
 
+  // Retenciones (ISR / IVA) — para desglosarlas en los totales.
+  const { rows: retentions } = await query(
+    `SELECT tax_type, rate, amount FROM invoice_retentions
+      WHERE invoice_id = $1 ORDER BY tax_type`,
+    [invoiceId]
+  )
+
   // Remisiones origen — para mostrar trazabilidad en el PDF
   let remisionNumbers = []
   if (inv.delivery_note_id) {
@@ -216,10 +223,17 @@ async function generatePDF({ tenantId, invoiceId }) {
 
     const totalesRows = [
       ['Subtotal', fmt(inv.subtotal)],
-      ['IVA (16%)', fmt(inv.tax_transferred)],
+      ['IVA', fmt(inv.tax_transferred)],
     ]
-    if (parseFloat(inv.tax_withheld) > 0) {
-      totalesRows.push(['Ret. IVA', fmt(inv.tax_withheld)])
+    // Retenciones desglosadas por tipo (ISR / IVA). Si por algún motivo no hay
+    // detalle pero sí hay monto retenido, mostramos el agregado.
+    if (retentions.length) {
+      retentions.forEach(r => {
+        const label = `Ret. ${r.tax_type} (${parseFloat(r.rate).toFixed(2)}%)`
+        totalesRows.push([label, `- ${fmt(r.amount)}`])
+      })
+    } else if (parseFloat(inv.tax_withheld) > 0) {
+      totalesRows.push(['Retenciones', `- ${fmt(inv.tax_withheld)}`])
     }
 
     totalesRows.forEach(([label, value]) => {

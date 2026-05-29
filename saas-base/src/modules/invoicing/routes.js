@@ -135,6 +135,29 @@ router.post('/invoices/direct', checkPermission('invoicing', 'create'), async (r
 })
 
 /**
+ * POST /api/invoicing/invoices/occasional
+ * Factura ocasional: cliente y productos NO dados de alta, capturados en el
+ * formulario. El cliente se crea/reusa por debajo (marcado is_occasional).
+ * Body: {
+ *   receptor: { publicoEnGeneral?, rfc?, taxName?, taxRegimeCode?, cfdiUse?, zipCode?, email? },
+ *   lines: [{ description, satProductCode, satUnitCode, unit?, quantity, unitPrice, discountPct?, objetoImp?, taxFactor?, taxRate? }],
+ *   series?, paymentMethod?, paymentForm?, useCfdi?, currency?, poNumber?, notes?
+ * }
+ */
+router.post('/invoices/occasional', checkPermission('invoicing', 'create'), async (req, res, next) => {
+  try {
+    const invoice = await invoiceService.createOccasional({
+      tenantId: req.tenant.id, ...req.body,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.status(201).json({
+      ...invoice,
+      message: 'Factura ocasional generada. CXC creado automáticamente.',
+    })
+  } catch (err) { next(err) }
+})
+
+/**
  * PATCH /api/invoicing/invoices/:id
  * Edita metadatos del CFDI de un borrador.
  * Body: { paymentMethod?, paymentForm?, useCfdi?, exportacion?, poNumber?,

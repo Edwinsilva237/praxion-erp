@@ -69,7 +69,7 @@ router.post('/', checkPermission('products', 'create'), async (req, res, next) =
       resinType,
       lengthMm, widthMm, thicknessMm,
       unitsPerPackage, saleUnit, description,
-      satProductCode, satUnitCode, objetoImp, leadTimeDays,
+      satProductCode, satUnitCode, objetoImp, taxFactor, taxRate, leadTimeDays,
       basePrice, baseCurrency,
     } = req.body
 
@@ -87,7 +87,7 @@ router.post('/', checkPermission('products', 'create'), async (req, res, next) =
       resinType,
       lengthMm, widthMm, thicknessMm,
       unitsPerPackage, saleUnit, description,
-      satProductCode, satUnitCode, objetoImp, leadTimeDays,
+      satProductCode, satUnitCode, objetoImp, taxFactor, taxRate, leadTimeDays,
       basePrice, baseCurrency,
       userId:    req.auth.userId,
       ipAddress: req.ip,
@@ -107,7 +107,7 @@ router.patch('/:id', checkPermission('products', 'update'), async (req, res, nex
   try {
     const {
       name, description, saleUnit, isActive,
-      satProductCode, satUnitCode, objetoImp, leadTimeDays,
+      satProductCode, satUnitCode, objetoImp, taxFactor, taxRate, leadTimeDays,
       basePrice, baseCurrency,
       expectedSalePrice, expected_sale_price,
       productKindId,     product_kind_id,
@@ -119,7 +119,7 @@ router.patch('/:id', checkPermission('products', 'update'), async (req, res, nex
       tenantId:  req.tenant.id,
       productId: req.params.id,
       name, description, saleUnit, isActive,
-      satProductCode, satUnitCode, objetoImp, leadTimeDays,
+      satProductCode, satUnitCode, objetoImp, taxFactor, taxRate, leadTimeDays,
       basePrice, baseCurrency,
       expectedSalePrice:      expectedSalePrice      ?? expected_sale_price,
       productKindId:          productKindId          ?? product_kind_id,

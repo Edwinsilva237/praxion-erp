@@ -6,6 +6,7 @@ import { salesApi } from '@/api/sales'
 import { partnersApi } from '@/api/partners'
 import Spinner from '@/components/ui/Spinner'
 import SatCatalogSelect from '@/components/fiscal/SatCatalogSelect'
+import OccasionalInvoiceSection, { EMPTY_OC_LINE } from '@/components/facturacion/OccasionalInvoiceSection'
 import { fmtMXN, fmtDate } from '@/utils/fmt'
 import clsx from 'clsx'
 
@@ -38,7 +39,15 @@ const CFDI_USE_OPTS = [
 
 export function FacturaFormModal({ onClose, onCreated }) {
   const qc = useQueryClient()
-  const [mode, setMode] = useState('from-remissions')  // 'from-remissions' | 'direct'
+  const [mode, setMode] = useState('from-remissions')  // 'from-remissions' | 'direct' | 'ocasional'
+
+  // Estado del modo "factura ocasional" (cliente + líneas capturados a mano).
+  const [ocPublico, setOcPublico] = useState(false)
+  const [ocReceptor, setOcReceptor] = useState({
+    rfc: '', taxName: '', taxRegimeCode: '', zipCode: '',
+  })
+  const [ocLines, setOcLines] = useState([{ ...EMPTY_OC_LINE }])
+  const [ocRetentions, setOcRetentions] = useState([])
 
   // Selecciones
   const [selectedNoteIds, setSelectedNoteIds] = useState([])
@@ -153,6 +162,14 @@ export function FacturaFormModal({ onClose, onCreated }) {
     setOverrideTouched(false)
     setError(null)
   }, [mode])
+
+  // Defaults fiscales para la factura ocasional (no hay cliente de dónde precargar).
+  useEffect(() => {
+    if (mode !== 'ocasional') return
+    setUseCfdi(prev => prev || (ocPublico ? 'S01' : 'G03'))
+    setPaymentMethod(prev => prev || 'PUE')
+    setPaymentForm(prev => prev || '99')
+  }, [mode, ocPublico])
 
   // Cuando hay exactamente una remisión seleccionada, cargar su detalle para
   // permitir split por líneas.
@@ -273,8 +290,85 @@ export function FacturaFormModal({ onClose, onCreated }) {
     onError: (e) => setError(e.response?.data?.error || e.message || 'Error al crear la factura'),
   })
 
+  // Totales en vivo del modo ocasional (el backend recalcula al guardar).
+  const ocTotals = useMemo(() => {
+    let subtotal = 0, tax = 0, taxableBase = 0
+    for (const l of ocLines) {
+      const qty = parseFloat(l.quantity) || 0
+      const price = parseFloat(l.unitPrice) || 0
+      const disc = parseFloat(l.discountPct) || 0
+      const lineSub = qty * price * (1 - disc / 100)
+      const causes = l.objetoImp !== '01' && l.objetoImp !== '03' && l.taxFactor !== 'Exento'
+      subtotal += lineSub
+      tax += causes ? lineSub * (parseFloat(l.taxRate) || 0) / 100 : 0
+      if (l.objetoImp === '02') taxableBase += lineSub
+    }
+    const withheld = ocRetentions.reduce(
+      (s, r) => s + taxableBase * (parseFloat(r.rate) || 0) / 100, 0)
+    return { subtotal, tax, withheld, total: subtotal + tax - withheld }
+  }, [ocLines, ocRetentions])
+
+  const occasionalMutation = useMutation({
+    mutationFn: () => invoicingApi.occasional({
+      receptor: {
+        publicoEnGeneral: ocPublico,
+        rfc:           ocReceptor.rfc.trim() || undefined,
+        taxName:       ocReceptor.taxName.trim() || undefined,
+        taxRegimeCode: ocReceptor.taxRegimeCode || undefined,
+        zipCode:       ocReceptor.zipCode.trim() || undefined,
+      },
+      lines: ocLines.map(l => ({
+        description: l.description.trim(),
+        satProductCode: l.satProductCode,
+        satUnitCode: l.satUnitCode,
+        unit: l.unit,
+        quantity: parseFloat(l.quantity),
+        unitPrice: parseFloat(l.unitPrice),
+        discountPct: parseFloat(l.discountPct) || 0,
+        objetoImp: l.objetoImp,
+        taxFactor: l.taxFactor,
+        taxRate: l.taxRate,
+      })),
+      retentions: ocRetentions
+        .filter(r => parseFloat(r.rate) > 0)
+        .map(r => ({ taxType: r.taxType, rate: parseFloat(r.rate) })),
+      paymentMethod: paymentMethod || undefined,
+      paymentForm:   paymentForm   || undefined,
+      useCfdi:       useCfdi       || undefined,
+      poNumber:      poNumber.trim() || undefined,
+      notes:         notes.trim()   || undefined,
+    }),
+    onSuccess: (inv) => {
+      qc.invalidateQueries({ queryKey: ['invoices'] })
+      qc.invalidateQueries({ queryKey: ['cxc'] })
+      onCreated?.(inv); onClose()
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al crear la factura ocasional'),
+  })
+
   function handleSubmit(e) {
     e.preventDefault(); setError(null)
+
+    if (mode === 'ocasional') {
+      if (!ocPublico) {
+        if (!ocReceptor.rfc.trim())     { setError('Captura el RFC del receptor o marca "Público en general".'); return }
+        if (!ocReceptor.taxName.trim()) { setError('Captura la razón social del receptor.'); return }
+        if (!ocReceptor.taxRegimeCode)  { setError('Selecciona el régimen fiscal del receptor.'); return }
+        if (!ocReceptor.zipCode.trim()) { setError('Captura el código postal del receptor.'); return }
+      }
+      const validLines = ocLines.filter(l => l.description.trim())
+      if (validLines.length === 0) { setError('Captura al menos un concepto con descripción.'); return }
+      for (const [i, l] of ocLines.entries()) {
+        if (!l.description.trim()) continue
+        if (!(parseFloat(l.quantity) > 0))  { setError(`El concepto ${i + 1} necesita cantidad > 0.`); return }
+        if (!(parseFloat(l.unitPrice) > 0)) { setError(`El concepto ${i + 1} necesita precio > 0.`); return }
+        if (!l.satProductCode) { setError(`El concepto ${i + 1} necesita clave de producto SAT.`); return }
+        if (!l.satUnitCode)    { setError(`El concepto ${i + 1} necesita clave de unidad SAT.`); return }
+      }
+      occasionalMutation.mutate()
+      return
+    }
+
     // Validación de OC obligatoria si el cliente lo requiere
     if (partnerProfile?.requires_po && !poNumber.trim()) {
       setError('Este cliente requiere número de OC. Captúralo antes de generar la factura.')
@@ -298,7 +392,7 @@ export function FacturaFormModal({ onClose, onCreated }) {
     setSelectedNoteIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
 
-  const pending = fromRemissionsMutation.isPending || directMutation.isPending
+  const pending = fromRemissionsMutation.isPending || directMutation.isPending || occasionalMutation.isPending
 
   // Agrupar remisiones elegibles por cliente para mejor visual
   const groupedNotes = useMemo(() => {
@@ -338,10 +432,11 @@ export function FacturaFormModal({ onClose, onCreated }) {
         </div>
 
         {/* Selector de modo */}
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           {[
             { value: 'from-remissions', label: 'Desde remisión(es)', desc: 'Una o varias del mismo cliente' },
             { value: 'direct',          label: 'Factura directa',     desc: 'Pedido con direct_invoice' },
+            { value: 'ocasional',       label: 'Factura ocasional',   desc: 'Cliente y productos a mano' },
           ].map(opt => (
             <button key={opt.value} type="button"
               onClick={() => setMode(opt.value)}
@@ -358,7 +453,14 @@ export function FacturaFormModal({ onClose, onCreated }) {
         </div>
 
         {/* Selección de documento origen */}
-        {mode === 'from-remissions' ? (
+        {mode === 'ocasional' ? (
+          <OccasionalInvoiceSection
+            publico={ocPublico} setPublico={setOcPublico}
+            receptor={ocReceptor} setReceptor={setOcReceptor}
+            lines={ocLines} setLines={setOcLines}
+            retentions={ocRetentions} setRetentions={setOcRetentions}
+          />
+        ) : mode === 'from-remissions' ? (
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="label mb-0">Remisiones a facturar <span className="text-status-danger">*</span></label>
@@ -609,7 +711,10 @@ export function FacturaFormModal({ onClose, onCreated }) {
               <label className="label">Uso CFDI</label>
               <SatCatalogSelect
                 endpoint="uso-cfdi"
-                params={partnerProfile?.tax_regime_code ? { regimen: partnerProfile.tax_regime_code } : {}}
+                params={(() => {
+                  const reg = mode === 'ocasional' ? ocReceptor.taxRegimeCode : partnerProfile?.tax_regime_code
+                  return reg ? { regimen: reg } : {}
+                })()}
                 value={useCfdi}
                 onChange={code => { setUseCfdi(code); setOverrideTouched(true) }}
                 placeholder="Buscar por código o nombre…"
@@ -663,6 +768,25 @@ export function FacturaFormModal({ onClose, onCreated }) {
           </div>
         </div>
 
+        {mode === 'ocasional' && ocTotals.total > 0 && (
+          <div className="bg-teal-500/10 border border-teal-500/40 rounded-lg px-3 py-2 flex flex-col gap-0.5">
+            <div className="flex items-center justify-between text-xs text-ink-secondary">
+              <span>Subtotal</span><span className="font-mono">{fmtMXN(ocTotals.subtotal, 'MXN')}</span>
+            </div>
+            <div className="flex items-center justify-between text-xs text-ink-secondary">
+              <span>IVA</span><span className="font-mono">{fmtMXN(ocTotals.tax, 'MXN')}</span>
+            </div>
+            {ocTotals.withheld > 0 && (
+              <div className="flex items-center justify-between text-xs text-status-warning">
+                <span>Retenciones</span><span className="font-mono">- {fmtMXN(ocTotals.withheld, 'MXN')}</span>
+              </div>
+            )}
+            <div className="flex items-center justify-between text-sm font-bold text-teal-300 border-t border-teal-500/30 pt-1 mt-0.5">
+              <span>Total</span><span className="font-mono">{fmtMXN(ocTotals.total, 'MXN')}</span>
+            </div>
+          </div>
+        )}
+
         {error && <p className="field-error">{error}</p>}
 
         <div className="flex gap-2 pt-1">
@@ -671,7 +795,9 @@ export function FacturaFormModal({ onClose, onCreated }) {
           </button>
           <button type="submit" className="btn-primary flex-1"
             disabled={pending || mixedClients || mixedCurrency ||
-              (mode === 'from-remissions' ? selectedNoteIds.length === 0 : !salesOrderId)}>
+              (mode === 'from-remissions' ? selectedNoteIds.length === 0
+                : mode === 'direct' ? !salesOrderId
+                : ocTotals.total <= 0)}>
             {pending ? <Spinner size="sm" /> : (
               mode === 'from-remissions' && selectedNoteIds.length > 1
                 ? `Crear factura consolidada (${selectedNoteIds.length})`

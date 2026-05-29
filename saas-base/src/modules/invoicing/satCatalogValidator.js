@@ -32,7 +32,7 @@ function personaTypeFromRFC(rfc) {
   return null
 }
 
-async function validateAgainstSatCatalogs(inv) {
+async function validateAgainstSatCatalogs(inv, lines = null) {
   const errors = []
 
   // 1) Régimen fiscal del emisor.
@@ -185,6 +185,60 @@ async function validateAgainstSatCatalogs(inv) {
         code:  'SAT_TIPO_COMPROBANTE_NOT_FOUND',
         message: `Tipo de comprobante "${inv.cfdi_type}" no existe en c_TipoDeComprobante del SAT.`,
       })
+    }
+  }
+
+  // 7) Tratamiento fiscal por línea (objeto de impuesto + tipo de factor + tasa).
+  //    Si no se pasan las líneas, se cargan de la factura (cuando hay id).
+  let invLines = lines
+  if (invLines == null && inv.id) {
+    const { rows } = await query(
+      `SELECT line_number, objeto_imp, tax_factor, tax_rate
+         FROM invoice_lines WHERE invoice_id = $1 ORDER BY line_number`,
+      [inv.id]
+    )
+    invLines = rows
+  }
+  if (Array.isArray(invLines) && invLines.length) {
+    // Cachear catálogos chicos una sola vez.
+    const { rows: objetos } = await query(`SELECT code FROM sat_objeto_imp WHERE is_active = true`)
+    const { rows: factores } = await query(`SELECT code FROM sat_tipo_factor WHERE is_active = true`)
+    const validObjetos = new Set(objetos.map(r => r.code))
+    const validFactores = new Set(factores.map(r => r.code))
+    const VALID_IVA_RATES = new Set([0, 8, 16]) // tasa cero, frontera, general
+
+    for (const line of invLines) {
+      const ln = line.line_number != null ? `línea ${line.line_number}` : 'una línea'
+      const objeto = String(line.objeto_imp || '02')
+      const factor = line.tax_factor || 'Tasa'
+
+      if (!validObjetos.has(objeto)) {
+        errors.push({
+          field: 'objeto_imp',
+          code:  'SAT_OBJETO_IMP_NOT_FOUND',
+          message: `Objeto de impuesto "${objeto}" (${ln}) no existe en c_ObjetoImp del SAT.`,
+        })
+      }
+      // El factor solo aplica cuando la línea sí es objeto del impuesto y se desglosa.
+      if (objeto !== '01' && objeto !== '03') {
+        if (!validFactores.has(factor)) {
+          errors.push({
+            field: 'tax_factor',
+            code:  'SAT_TIPO_FACTOR_NOT_FOUND',
+            message: `Tipo de factor "${factor}" (${ln}) no existe en c_TipoFactor del SAT.`,
+          })
+        }
+        if (factor === 'Tasa') {
+          const rate = parseFloat(line.tax_rate)
+          if (!VALID_IVA_RATES.has(rate)) {
+            errors.push({
+              field: 'tax_rate',
+              code:  'SAT_TASA_INVALIDA',
+              message: `Tasa de IVA ${line.tax_rate}% (${ln}) no es válida. Usa 16, 8 (frontera), 0 (tasa cero) o marca la línea como Exento / No objeto.`,
+            })
+          }
+        }
+      }
     }
   }
 

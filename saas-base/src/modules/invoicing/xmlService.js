@@ -1,6 +1,7 @@
 'use strict'
 
 const { query } = require('../../db')
+const { normalizeLineTax } = require('./lineTax')
 
 /**
  * Genera el XML de un CFDI 4.0 sin timbre (para pruebas y vista previa).
@@ -34,13 +35,39 @@ async function generateXML({ tenantId, invoiceId }) {
     [invoiceId]
   )
 
+  // Retenciones (ISR / IVA) de la factura. Código SAT: ISR=001, IVA=002.
+  const { rows: retentionRows } = await query(
+    `SELECT tax_type, rate, amount FROM invoice_retentions WHERE invoice_id = $1`,
+    [invoiceId]
+  )
+  const SAT_IMPUESTO = { ISR: '001', IVA: '002' }
+  // Base gravable: subtotal de líneas objeto de impuesto ('02').
+  const taxableBase = lines.reduce((s, l) =>
+    s + (String(l.objeto_imp || '02') === '02' ? parseFloat(l.subtotal) : 0), 0)
+
   const fecha = new Date(inv.issue_date).toISOString().replace('Z', '').split('.')[0]
   const subtotal  = parseFloat(inv.subtotal).toFixed(2)
   const total     = parseFloat(inv.total).toFixed(2)
-  const iva       = parseFloat(inv.tax_transferred).toFixed(2)
+
+  // Agregado global de IVA trasladado, agrupado por tasa. Las líneas exentas y
+  // las "no objeto" no entran al agregado (CFDI 4.0). Se calcula desde las
+  // líneas para reflejar tasa cero / 8% / exento en vez de forzar 16%.
+  const taxGroups = new Map() // tasa(6) → { base, importe }
+  for (const line of lines) {
+    const { objetoImp, factor, ratePct } = normalizeLineTax(line)
+    if (objetoImp === '01' || objetoImp === '03' || factor === 'Exento') continue
+    const tasa = (ratePct / 100).toFixed(6)
+    const g = taxGroups.get(tasa) || { base: 0, importe: 0 }
+    g.base    += parseFloat(line.subtotal)
+    g.importe += parseFloat(line.tax_amount)
+    taxGroups.set(tasa, g)
+  }
+  const totalTrasladado = [...taxGroups.values()].reduce((s, g) => s + g.importe, 0)
+  const iva = totalTrasladado.toFixed(2)
 
   // Generar conceptos
   const conceptos = lines.map(line => {
+    const { objetoImp, factor, ratePct } = normalizeLineTax(line)
     const cantidad   = parseFloat(line.quantity).toFixed(4)
     const precio     = parseFloat(line.unit_price).toFixed(4)
     const importe    = parseFloat(line.subtotal).toFixed(2)
@@ -50,7 +77,33 @@ async function generateXML({ tenantId, invoiceId }) {
       ? `\n        Descuento="${(parseFloat(importe) * parseFloat(line.discount_pct) / 100).toFixed(2)}"`
       : ''
 
-    return `    <cfdi:Concepto
+    // Bloque de impuestos del concepto según su tratamiento fiscal.
+    //   - objeto 01/03 → sin nodo de impuestos (concepto auto-cerrado).
+    //   - Exento       → Traslado TipoFactor Exento, sin tasa ni importe.
+    //   - Tasa         → Traslado con la tasa real de la línea.
+    //   - Retenciones  → en líneas objeto de impuesto, una por cada retención.
+    let impuestosNode = ''
+    if (objetoImp !== '01' && objetoImp !== '03') {
+      const traslado = factor === 'Exento'
+        ? `          <cfdi:Traslado Base="${base}" Impuesto="002" TipoFactor="Exento"/>`
+        : `          <cfdi:Traslado Base="${base}" Impuesto="002" TipoFactor="Tasa" TasaOCuota="${(ratePct / 100).toFixed(6)}" Importe="${impuesto}"/>`
+      const retNode = retentionRows.length
+        ? `
+        <cfdi:Retenciones>
+${retentionRows.map(r =>
+          `          <cfdi:Retencion Base="${base}" Impuesto="${SAT_IMPUESTO[r.tax_type]}" TipoFactor="Tasa" TasaOCuota="${(parseFloat(r.rate) / 100).toFixed(6)}" Importe="${(parseFloat(base) * parseFloat(r.rate) / 100).toFixed(2)}"/>`
+        ).join('\n')}
+        </cfdi:Retenciones>`
+        : ''
+      impuestosNode = `
+      <cfdi:Impuestos>
+        <cfdi:Traslados>
+${traslado}
+        </cfdi:Traslados>${retNode}
+      </cfdi:Impuestos>`
+    }
+
+    const conceptoOpen = `    <cfdi:Concepto
         ClaveProdServ="${line.sat_product_code || '10111402'}"
         ClaveUnidad="${line.sat_unit_code || 'H87'}"
         Unidad="${line.unit}"
@@ -58,19 +111,42 @@ async function generateXML({ tenantId, invoiceId }) {
         Descripcion="${escapeXML(line.description)}"
         ValorUnitario="${precio}"
         Importe="${importe}"
-        ObjetoImp="${line.objeto_imp || '02'}"${descuento}>
-      <cfdi:Impuestos>
-        <cfdi:Traslados>
-          <cfdi:Traslado
-            Base="${base}"
-            Impuesto="002"
-            TipoFactor="Tasa"
-            TasaOCuota="0.160000"
-            Importe="${impuesto}"/>
-        </cfdi:Traslados>
-      </cfdi:Impuestos>
-    </cfdi:Concepto>`
+        ObjetoImp="${objetoImp}"${descuento}`
+
+    return impuestosNode
+      ? `${conceptoOpen}>${impuestosNode}\n    </cfdi:Concepto>`
+      : `${conceptoOpen}/>`
   }).join('\n')
+
+  // Nodo global de impuestos: retenciones (agregadas por impuesto) + traslados
+  // (uno por tasa). Se omite solo si no hay ni traslados ni retenciones.
+  const totalRetenido = retentionRows.reduce((s, r) => s + parseFloat(r.amount), 0)
+  const retencionesNode = retentionRows.length
+    ? `    <cfdi:Retenciones>
+${retentionRows.map(r =>
+      `      <cfdi:Retencion Impuesto="${SAT_IMPUESTO[r.tax_type]}" Importe="${parseFloat(r.amount).toFixed(2)}"/>`
+    ).join('\n')}
+    </cfdi:Retenciones>
+`
+    : ''
+  const trasladosNode = taxGroups.size > 0
+    ? `    <cfdi:Traslados>
+${[...taxGroups.entries()].map(([tasa, g]) =>
+      `      <cfdi:Traslado Base="${g.base.toFixed(2)}" Impuesto="002" TipoFactor="Tasa" TasaOCuota="${tasa}" Importe="${g.importe.toFixed(2)}"/>`
+    ).join('\n')}
+    </cfdi:Traslados>
+`
+    : ''
+  const impuestosAttrs = [
+    totalRetenido > 0 ? `TotalImpuestosRetenidos="${totalRetenido.toFixed(2)}"` : '',
+    taxGroups.size > 0 ? `TotalImpuestosTrasladados="${iva}"` : '',
+  ].filter(Boolean).join(' ')
+  const impuestosGlobal = (taxGroups.size > 0 || retentionRows.length)
+    ? `
+
+  <cfdi:Impuestos ${impuestosAttrs}>
+${retencionesNode}${trasladosNode}  </cfdi:Impuestos>`
+    : ''
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <cfdi:Comprobante
@@ -104,18 +180,7 @@ async function generateXML({ tenantId, invoiceId }) {
 
   <cfdi:Conceptos>
 ${conceptos}
-  </cfdi:Conceptos>
-
-  <cfdi:Impuestos TotalImpuestosTrasladados="${iva}">
-    <cfdi:Traslados>
-      <cfdi:Traslado
-        Base="${subtotal}"
-        Impuesto="002"
-        TipoFactor="Tasa"
-        TasaOCuota="0.160000"
-        Importe="${iva}"/>
-    </cfdi:Traslados>
-  </cfdi:Impuestos>
+  </cfdi:Conceptos>${impuestosGlobal}
 
 </cfdi:Comprobante>`
 

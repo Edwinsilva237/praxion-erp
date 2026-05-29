@@ -11,6 +11,7 @@ export const invoicingApi = {
   fromRemission:  (body) => api.post(`${B}/invoices/from-remission`,  body).then(r => r.data),
   fromRemissions: (body) => api.post(`${B}/invoices/from-remissions`, body).then(r => r.data),
   direct:         (body) => api.post(`${B}/invoices/direct`,           body).then(r => r.data),
+  occasional:     (body) => api.post(`${B}/invoices/occasional`,       body).then(r => r.data),
 
   // Editar metadatos de un borrador (no toca las líneas de producto)
   update:        (id, body) => api.patch(`${B}/invoices/${id}`, body).then(r => r.data),

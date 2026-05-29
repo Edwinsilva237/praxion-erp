@@ -20,13 +20,8 @@ import { inventoryApi } from '@/api/inventory'
 import Can from '@/components/auth/Can'
 import SatUnitCombobox from '@/components/productos/SatUnitCombobox'
 import SatProductCodeCombobox from '@/components/productos/SatProductCodeCombobox'
+import IvaTreatmentSelect from '@/components/fiscal/IvaTreatmentSelect'
 import clsx from 'clsx'
-
-const OBJETO_IMP = [
-  { code: '02', label: '02 — Sí objeto de impuesto' },
-  { code: '01', label: '01 — No objeto de impuesto' },
-  { code: '03', label: '03 — Sí objeto, no desglose' },
-]
 
 const SALE_UNITS = ['pieza', 'paquete', 'millar', 'rollo', 'caja', 'metro', 'kilogramo']
 
@@ -60,6 +55,8 @@ const schema = z.object({
   satProductCode:  z.string().min(1, 'Requerido'),
   satUnitCode:     z.string().min(1, 'Requerido'),
   objetoImp:       z.string().min(1, 'Requerido'),
+  taxFactor:       z.string().optional(),
+  taxRate:         z.coerce.number().min(0).max(100).optional(),
   isActive:        z.boolean().optional(),
   leadTimeDays:    z.coerce.number().min(0).max(365).optional(),
   basePrice:       z.union([z.coerce.number().positive('Debe ser > 0'), z.literal('')]).optional(),
@@ -178,6 +175,8 @@ function ProductModal({ product: initialProduct, onClose }) {
       satProductCode:  product?.sat_product_code || '44102305',
       satUnitCode:     product?.sat_unit_code    || 'H87',
       objetoImp:       product?.objeto_imp       || '02',
+      taxFactor:       product?.tax_factor       || 'Tasa',
+      taxRate:         product?.tax_rate != null ? Number(product.tax_rate) : 16,
       isActive:        product?.is_active        ?? true,
       leadTimeDays:    product?.lead_time_days   ?? 7,
       basePrice:       product?.base_price != null ? Number(product.base_price) : '',
@@ -589,10 +588,19 @@ function ProductModal({ product: initialProduct, onClose }) {
                   error={!!errors.satUnitCode}
                 />
               </Field>
-              <Field label="Objeto de impuesto" required error={errors.objetoImp?.message}>
-                <select {...register('objetoImp')} className={clsx('select', errors.objetoImp && 'input-error')}>
-                  {OBJETO_IMP.map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
-                </select>
+              <Field label="Tratamiento de IVA" required error={errors.objetoImp?.message}
+                hint="Define el IVA que llevará este producto al facturarse. Productos del campo (aguacate, caña) suelen ser 0%.">
+                <IvaTreatmentSelect
+                  objetoImp={watch('objetoImp')}
+                  taxFactor={watch('taxFactor')}
+                  taxRate={watch('taxRate')}
+                  onChange={({ objetoImp, taxFactor, taxRate }) => {
+                    setValue('objetoImp', objetoImp, { shouldDirty: true })
+                    setValue('taxFactor', taxFactor, { shouldDirty: true })
+                    setValue('taxRate',   taxRate,   { shouldDirty: true })
+                  }}
+                  error={!!errors.objetoImp}
+                />
               </Field>
             </div>
           </Section>

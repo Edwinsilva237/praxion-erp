@@ -1291,15 +1291,17 @@ function TableSkeleton() {
 export default function Socios() {
   const [search, setSearch]         = useState('')
   const [typeFilter, setTypeFilter] = useState('')
+  const [showOccasional, setShowOccasional] = useState(false)
   const [page, setPage]             = useState(1)
   const [modal, setModal]           = useState(null)
   const [searchParams, setSearchParams] = useSearchParams()
 
   const { data, isLoading } = useQuery({
-    queryKey: ['partners', { search, type: typeFilter, page }],
+    queryKey: ['partners', { search, type: typeFilter, includeOccasional: showOccasional, page }],
     queryFn: () => partnersApi.list({
       search: search || undefined,
       type:   typeFilter || undefined,
+      includeOccasional: showOccasional || undefined,
       page,
       limit: 20,
     }),
@@ -1359,6 +1361,12 @@ export default function Socios() {
           <option value="supplier">Proveedores</option>
           <option value="both">Ambos</option>
         </select>
+        <label className="flex items-center gap-2 text-xs text-ink-secondary cursor-pointer sm:w-44 shrink-0"
+          title="Clientes creados al vuelo desde facturas ocasionales">
+          <input type="checkbox" className="w-4 h-4 accent-teal-600 rounded"
+            checked={showOccasional} onChange={e => { setShowOccasional(e.target.checked); setPage(1) }} />
+          Ver clientes ocasionales
+        </label>
       </div>
 
       <div className="card p-0 overflow-hidden">

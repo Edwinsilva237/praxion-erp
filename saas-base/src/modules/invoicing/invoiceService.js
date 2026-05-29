@@ -4,6 +4,7 @@ const { query, withTransaction } = require('../../db')
 const { audit }                  = require('../../utils/audit')
 const { getRateForDate }         = require('../exchange-rates/exchangeRateService')
 const invoiceSeriesService       = require('../invoice-series/invoiceSeriesService')
+const { normalizeLineTax, lineCausesTax } = require('./lineTax')
 
 /**
  * Carga sat_unit_code para un conjunto de pack_option_id.
@@ -115,10 +116,15 @@ async function revalueLines(client, tenantId, lines, targetCurrency, todayDate) 
 async function nextInvoiceNumber(client, tenantId, opts = {}) {
   let fiscalProfileId = opts.fiscalProfileId
   if (!fiscalProfileId) {
+    // La mig 092 dejó un solo perfil fiscal activo por tenant y eliminó la
+    // columna is_default. Ordenamos por created_at para elegir el más antiguo
+    // de forma estable (antes había un `ORDER BY is_default DESC` que tronaba
+    // contra la columna eliminada — rompía createDirect/createFromRemissions
+    // también, no solo la factura ocasional).
     const { rows } = await client.query(
       `SELECT id FROM tenant_fiscal_profiles
         WHERE tenant_id = $1 AND is_active = TRUE
-        ORDER BY is_default DESC, created_at ASC LIMIT 1`,
+        ORDER BY created_at ASC LIMIT 1`,
       [tenantId]
     )
     fiscalProfileId = rows[0]?.id || null
@@ -272,7 +278,14 @@ async function getInvoice({ tenantId, invoiceId }) {
     [tenantId, invoiceId]
   )
 
-  return { ...rows[0], lines, contacts, creditNotes, paymentComplements }
+  // Retenciones (ISR / IVA) de la factura.
+  const { rows: retentions } = await query(
+    `SELECT id, tax_type, rate, amount FROM invoice_retentions
+      WHERE invoice_id = $1 ORDER BY tax_type`,
+    [invoiceId]
+  )
+
+  return { ...rows[0], lines, contacts, creditNotes, paymentComplements, retentions }
 }
 
 /**
@@ -1283,6 +1296,245 @@ async function revertInvoiceArOnCancel(client, { tenantId, invoice }) {
   }
 }
 
+// RFC genérico nacional para "Público en general" (CFDI 4.0).
+const RFC_PUBLICO_GENERAL = 'XAXX010101000'
+
+/**
+ * Resuelve el cliente de una factura ocasional dentro de la transacción.
+ * - Si el RFC ya existe en el tenant → lo reusa (no duplica).
+ * - Si no existe → crea un business_partner marcado is_occasional=true, para
+ *   que cobranza/complementos/cancelación sigan amarrados a un cliente sin
+ *   ensuciar el catálogo principal.
+ *
+ * @returns {Promise<{ partnerId: string, created: boolean }>}
+ */
+async function resolveOccasionalPartner(client, tenantId, receptor, emisorZip) {
+  const isPublico = receptor.publicoEnGeneral === true
+  const rfc = (isPublico ? RFC_PUBLICO_GENERAL : (receptor.rfc || '')).toUpperCase().trim()
+  if (!rfc) throw createError(400, 'Captura el RFC del receptor o marca "Público en general".')
+
+  // Reusar si ya existe (catálogo o creado en una ocasional previa).
+  const { rows: existing } = await client.query(
+    `SELECT id FROM business_partners WHERE tenant_id = $1 AND rfc = $2`,
+    [tenantId, rfc]
+  )
+  if (existing[0]) return { partnerId: existing[0].id, created: false }
+
+  // Datos por defecto para público en general (el domicilio del receptor debe
+  // coincidir con el lugar de expedición del emisor).
+  const taxName = isPublico
+    ? 'PÚBLICO EN GENERAL'
+    : (receptor.taxName || receptor.name || '').trim()
+  if (!isPublico && !taxName) {
+    throw createError(400, 'Captura la razón social del receptor.')
+  }
+  const personType = rfc.length === 13 ? 'fisica' : 'moral'
+  const regimeCode = isPublico ? '616' : (receptor.taxRegimeCode || '').trim() || null
+  const cfdiUse    = isPublico ? 'S01' : (receptor.cfdiUse || 'G03')
+  const zipCode    = isPublico ? (emisorZip || null) : ((receptor.zipCode || '').trim() || null)
+
+  const { rows: created } = await client.query(
+    `INSERT INTO business_partners
+       (tenant_id, type, person_type, name, rfc, tax_name, tax_regime_code,
+        credit_type, cfdi_use, payment_method, payment_form, preferred_currency,
+        zip_code, is_occasional)
+     VALUES ($1,'customer',$2,$3,$4,$5,$6,'cash',$7,'PUE','99','MXN',$8,true)
+     RETURNING id`,
+    [tenantId, personType, taxName, rfc, taxName, regimeCode, cfdiUse, zipCode]
+  )
+  return { partnerId: created[0].id, created: true }
+}
+
+/**
+ * Crea una factura "ocasional" en borrador: el cliente y los productos NO
+ * están dados de alta — se capturan directo en el formulario de la factura.
+ *
+ * El cliente se crea/reusa por debajo (resolveOccasionalPartner) para sostener
+ * cobranza y complementos. Cada línea trae su clave SAT, unidad y tratamiento
+ * de IVA (objeto_imp + tax_factor + tax_rate), respetados al timbrar.
+ *
+ * @param {object} opts
+ * @param {object} opts.receptor   - { publicoEnGeneral, rfc, taxName, taxRegimeCode, cfdiUse, zipCode }
+ * @param {Array}  opts.lines      - [{ description, satProductCode, satUnitCode, unit, quantity, unitPrice, discountPct, objetoImp, taxFactor, taxRate }]
+ * @param {Array}  opts.retentions - [{ taxType: 'ISR'|'IVA', rate }] retenciones sobre la base gravable.
+ */
+async function createOccasional({
+  tenantId, receptor = {}, lines = [], retentions = [], series,
+  paymentMethod, paymentForm, useCfdi, currency = 'MXN', poNumber, notes,
+  userId, ipAddress, userAgent,
+}) {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    throw createError(400, 'Captura al menos una línea (concepto) para la factura.')
+  }
+  for (const [i, l] of lines.entries()) {
+    if (!l.description || !String(l.description).trim()) {
+      throw createError(400, `La línea ${i + 1} necesita descripción.`)
+    }
+    if (!(parseFloat(l.quantity) > 0)) throw createError(400, `La línea ${i + 1} necesita cantidad > 0.`)
+    if (!(parseFloat(l.unitPrice) > 0)) throw createError(400, `La línea ${i + 1} necesita precio > 0.`)
+    if (!l.satProductCode) throw createError(400, `La línea ${i + 1} necesita clave de producto SAT.`)
+    if (!l.satUnitCode)    throw createError(400, `La línea ${i + 1} necesita clave de unidad SAT.`)
+  }
+
+  return withTransaction(async (client) => {
+    const today = new Date().toISOString().split('T')[0]
+
+    // Datos fiscales del emisor (para lugar de expedición + serie default).
+    const { rows: fiscalRows } = await client.query(
+      `SELECT zip_code, serie_default FROM tenant_fiscal_info WHERE tenant_id = $1`,
+      [tenantId]
+    )
+    const fiscal = fiscalRows[0] || {}
+
+    // Cliente: crear o reusar por RFC.
+    const { partnerId } = await resolveOccasionalPartner(client, tenantId, receptor, fiscal.zip_code)
+
+    // Datos fiscales del receptor (ya en el partner, recién creado o reusado).
+    const { rows: bpRows } = await client.query(
+      `SELECT tax_regime_code, zip_code, cfdi_use, payment_method, payment_form
+         FROM business_partners WHERE id = $1`,
+      [partnerId]
+    )
+    const bp = bpRows[0] || {}
+
+    // Totales respetando el tratamiento fiscal de cada línea.
+    let subtotal = 0
+    let taxTotal = 0
+    let taxableBase = 0   // base de líneas objeto de impuesto (para retenciones)
+    const computedLines = lines.map((l, i) => {
+      const { objetoImp, factor, ratePct } = normalizeLineTax({
+        objeto_imp: l.objetoImp, tax_factor: l.taxFactor, tax_rate: l.taxRate,
+      })
+      const qty   = parseFloat(l.quantity)
+      const price = parseFloat(l.unitPrice)
+      const disc  = parseFloat(l.discountPct || 0)
+      const lineSubtotal = qty * price * (1 - disc / 100)
+      const causes = lineCausesTax({ objeto_imp: objetoImp, tax_factor: factor, tax_rate: ratePct })
+      // tax_rate persistido: 0 si no causa impuesto (exento / tasa cero / no objeto).
+      const storedRate = causes ? ratePct : 0
+      const lineTax = lineSubtotal * storedRate / 100
+      subtotal += lineSubtotal
+      taxTotal += lineTax
+      if (objetoImp === '02') taxableBase += lineSubtotal
+      return {
+        lineNumber: i + 1,
+        description: String(l.description).trim(),
+        quantity: qty,
+        unit: (l.unit || 'pieza').trim(),
+        unitPrice: price,
+        discountPct: disc,
+        objetoImp,
+        taxFactor: factor,
+        storedRate,
+        satProductCode: String(l.satProductCode).trim(),
+        satUnitCode: String(l.satUnitCode).trim(),
+      }
+    })
+    subtotal = parseFloat(subtotal.toFixed(2))
+    taxTotal = parseFloat(taxTotal.toFixed(2))
+
+    // Retenciones (ISR / IVA) sobre la base gravable.
+    const computedRetentions = (retentions || [])
+      .map(r => ({
+        taxType: r.taxType === 'ISR' ? 'ISR' : 'IVA',
+        rate: parseFloat(r.rate) || 0,
+      }))
+      .filter(r => r.rate > 0)
+      .map(r => ({ ...r, amount: parseFloat((taxableBase * r.rate / 100).toFixed(2)) }))
+    const withheldTotal = parseFloat(
+      computedRetentions.reduce((s, r) => s + r.amount, 0).toFixed(2)
+    )
+
+    const total = parseFloat((subtotal + taxTotal - withheldTotal).toFixed(2))
+
+    // Moneda / tipo de cambio.
+    let exchangeRateId = null
+    let exchangeRateValue = 1
+    let totalMxn = total
+    if (currency === 'USD') {
+      const rate = await getRateForDate({ tenantId, date: today, currency: 'USD' })
+      if (rate) {
+        exchangeRateId = rate.id
+        exchangeRateValue = parseFloat(rate.rate_mxn)
+      }
+      totalMxn = parseFloat((total * exchangeRateValue).toFixed(2))
+    }
+
+    const { docNumber, series: resolvedSeries, folio: resolvedFolio, fiscalProfileId } =
+      await nextInvoiceNumber(client, tenantId, { seriesCode: series, cfdiType: 'I' })
+
+    const { rows: invRows } = await client.query(
+      `INSERT INTO invoices
+         (tenant_id, type, cfdi_type, series, folio, document_number, fiscal_profile_id,
+          partner_id,
+          currency, exchange_rate_id, exchange_rate_value,
+          subtotal, tax_transferred, tax_withheld, total, total_mxn,
+          payment_method, payment_form, use_cfdi,
+          exportacion, lugar_expedicion,
+          receptor_tax_regime, receptor_zip_code,
+          po_number,
+          status, issue_date, notes, created_by)
+       VALUES ($1,'issued','I',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'01',$18,$19,$20,$21,'draft',$22,$23,$24)
+       RETURNING *`,
+      [tenantId, resolvedSeries || series || fiscal.serie_default || null, resolvedFolio, docNumber, fiscalProfileId,
+       partnerId,
+       currency, exchangeRateId, exchangeRateValue,
+       subtotal, taxTotal, withheldTotal, total, totalMxn,
+       paymentMethod || bp.payment_method || 'PUE',
+       paymentForm   || bp.payment_form   || '99',
+       useCfdi || bp.cfdi_use || 'G03',
+       fiscal.zip_code || null,
+       bp.tax_regime_code || null,
+       bp.zip_code || null,
+       (poNumber || '').trim() || null,
+       today, (notes || '').trim() || null, userId]
+    )
+    const invoice = invRows[0]
+
+    // Guardar las retenciones de la factura (se mandan a Facturapi al timbrar).
+    for (const r of computedRetentions) {
+      await client.query(
+        `INSERT INTO invoice_retentions (invoice_id, tax_type, rate, amount)
+         VALUES ($1, $2, $3, $4)`,
+        [invoice.id, r.taxType, r.rate, r.amount]
+      )
+    }
+
+    for (const cl of computedLines) {
+      await client.query(
+        `INSERT INTO invoice_lines
+           (invoice_id, product_id, description, quantity, unit,
+            unit_price, discount_pct, tax_rate, tax_factor, objeto_imp,
+            sat_product_code, sat_unit_code, line_number)
+         VALUES ($1,NULL,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [invoice.id, cl.description, cl.quantity, cl.unit,
+         cl.unitPrice, cl.discountPct, cl.storedRate, cl.taxFactor, cl.objetoImp,
+         cl.satProductCode, cl.satUnitCode, cl.lineNumber]
+      )
+    }
+
+    // Cobranza (CXC). Ocasional = contado por default → vence el mismo día.
+    await client.query(
+      `INSERT INTO accounts_receivable
+         (tenant_id, partner_id, document_type, document_id, document_number,
+          currency, exchange_rate, amount_total, issue_date, due_date, created_by)
+       VALUES ($1,$2,'invoice',$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (tenant_id, document_type, document_id) DO NOTHING`,
+      [tenantId, partnerId, invoice.id, docNumber,
+       currency, exchangeRateValue, totalMxn, today, today, userId]
+    )
+
+    await audit({
+      tenantId, userId, action: 'invoice.created_occasional',
+      resource: 'invoices', resourceId: invoice.id,
+      payload: { docNumber, partnerId, total: totalMxn, lines: computedLines.length },
+      ipAddress, userAgent,
+    })
+
+    return invoice
+  })
+}
+
 function createError(status, message) {
   const err = new Error(message)
   err.status = status
@@ -1291,7 +1543,7 @@ function createError(status, message) {
 
 module.exports = {
   listInvoices, getInvoice,
-  createFromRemission, createFromRemissions, createDirect,
+  createFromRemission, createFromRemissions, createDirect, createOccasional,
   updateInvoice,
   cancelInvoice,
   revertInvoiceArOnCancel,
