@@ -61,7 +61,7 @@ async function generateQuotationPDF({ tenantId, quotationId }) {
 
     const W = doc.page.width - 80
     const gris     = '#F5F5F5'
-    const azul     = quot.brand_color_primary   || '#1A3A5C'
+    const azul     = quot.brand_color_primary   || '#5E9F32'
     const acento   = quot.brand_color_secondary || azul
     const negro    = '#222222'
     const grisText = '#666666'

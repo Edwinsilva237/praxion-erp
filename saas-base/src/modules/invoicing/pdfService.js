@@ -103,7 +103,7 @@ async function generatePDF({ tenantId, invoiceId }) {
 
     const W = doc.page.width - 80  // ancho útil
     const gris     = '#F5F5F5'
-    const azul     = inv.brand_color_primary   || '#1A3A5C'
+    const azul     = inv.brand_color_primary   || '#5E9F32'
     const acento   = inv.brand_color_secondary || azul
     const negro    = '#222222'
     const grisText = '#666666'

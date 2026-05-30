@@ -83,7 +83,7 @@ async function generatePaymentReceiptPDF({ tenantId, paymentId }) {
 
     const W = doc.page.width - 80
     const gris     = '#F5F5F5'
-    const azul     = p.brand_color_primary   || '#1A3A5C'
+    const azul     = p.brand_color_primary   || '#5E9F32'
     const verde    = p.brand_color_secondary || '#2C7A4A'
     const negro    = '#222222'
     const grisText = '#666666'
