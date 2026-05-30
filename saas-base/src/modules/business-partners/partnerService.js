@@ -382,13 +382,23 @@ async function listCustomerPrices({ partnerId, tenantId, onlyActive = true }) {
     ? `AND cp.valid_from <= CURRENT_DATE AND (cp.valid_until IS NULL OR cp.valid_until >= CURRENT_DATE)`
     : ''
 
+  // DISTINCT ON (product_id) deja UNA fila por producto: la versión vigente
+  // (mayor valid_from). Sin esto, editar un precio creado otro día dejaba dos
+  // filas activas para el mismo producto y aparecía duplicado en la tabla.
   const { rows } = await query(
-    `SELECT cp.*, p.sku, p.name AS product_name, p.type AS product_type,
-            p.base_price, p.base_currency
-     FROM customer_prices cp
-     JOIN products p ON p.id = cp.product_id
-     WHERE cp.tenant_id = $1 AND cp.business_partner_id = $2 ${activeClause}
-     ORDER BY p.sku, cp.valid_from DESC`,
+    `SELECT * FROM (
+       SELECT DISTINCT ON (cp.product_id)
+              cp.id, cp.tenant_id, cp.business_partner_id, cp.product_id,
+              cp.currency, cp.unit_price, cp.valid_from, cp.valid_until,
+              cp.notes, cp.created_at,
+              p.sku, p.name AS product_name, p.type AS product_type,
+              p.base_price, p.base_currency
+       FROM customer_prices cp
+       JOIN products p ON p.id = cp.product_id
+       WHERE cp.tenant_id = $1 AND cp.business_partner_id = $2 ${activeClause}
+       ORDER BY cp.product_id, cp.valid_from DESC, cp.created_at DESC
+     ) t
+     ORDER BY t.sku`,
     [tenantId, partnerId]
   )
   return rows
@@ -458,6 +468,81 @@ async function setCustomerPrice({
   return after
 }
 
+/**
+ * Actualiza UNA fila de precio por su id (no upsert por valid_from). Esto evita
+ * el bug donde editar un precio creado otro día creaba una versión nueva en vez
+ * de modificar la existente. Sólo toca los campos provistos (undefined = sin
+ * cambio). Registra auditoría customer_price.updated con antes/después.
+ */
+async function updateCustomerPrice({
+  priceId, tenantId, currency, unitPrice,
+  validFrom, validUntil, notes, userId, ipAddress, userAgent,
+}) {
+  const { rows: prevRows } = await query(
+    `SELECT * FROM customer_prices WHERE id = $1 AND tenant_id = $2`,
+    [priceId, tenantId]
+  )
+  if (prevRows.length === 0) return null
+  const before = prevRows[0]
+
+  // Merge: undefined = conservar; '' en fechas/notas = limpiar a NULL.
+  const nextUnitPrice  = unitPrice  !== undefined ? unitPrice  : before.unit_price
+  const nextCurrency   = currency   !== undefined ? currency   : before.currency
+  const nextValidFrom  = validFrom  !== undefined ? (validFrom || before.valid_from) : before.valid_from
+  const nextValidUntil = validUntil !== undefined ? (validUntil || null) : before.valid_until
+  const nextNotes      = notes      !== undefined ? (notes || null) : before.notes
+
+  if (nextUnitPrice == null || Number(nextUnitPrice) <= 0) {
+    throw createError(400, 'El precio debe ser mayor a 0.')
+  }
+
+  let after
+  try {
+    const { rows } = await query(
+      `UPDATE customer_prices
+          SET unit_price = $1, currency = $2, valid_from = $3,
+              valid_until = $4, notes = $5
+        WHERE id = $6 AND tenant_id = $7
+        RETURNING *`,
+      [nextUnitPrice, nextCurrency, nextValidFrom, nextValidUntil, nextNotes, priceId, tenantId]
+    )
+    after = rows[0]
+  } catch (err) {
+    if (err.code === '23505') {
+      throw createError(409, 'Ya existe un precio para ese producto con esa fecha de inicio de vigencia.')
+    }
+    throw err
+  }
+
+  await audit({
+    tenantId, userId,
+    action:     'customer_price.updated',
+    resource:   'customer_prices',
+    resourceId: after.id,
+    payload: {
+      partnerId: after.business_partner_id,
+      productId: after.product_id,
+      before: {
+        unitPrice:  Number(before.unit_price),
+        currency:   before.currency,
+        validFrom:  before.valid_from,
+        validUntil: before.valid_until,
+        notes:      before.notes,
+      },
+      after: {
+        unitPrice:  Number(after.unit_price),
+        currency:   after.currency,
+        validFrom:  after.valid_from,
+        validUntil: after.valid_until,
+        notes:      after.notes,
+      },
+    },
+    ipAddress, userAgent,
+  })
+
+  return after
+}
+
 async function deleteCustomerPrice({ priceId, tenantId, userId, ipAddress, userAgent }) {
   const { rows } = await query(
     `DELETE FROM customer_prices WHERE id = $1 AND tenant_id = $2
@@ -485,26 +570,8 @@ async function deleteCustomerPrice({ priceId, tenantId, userId, ipAddress, userA
   return true
 }
 
-async function listRecentPriceChanges({ tenantId, limit = 10 }) {
-  const { rows } = await query(
-    `SELECT al.id, al.action, al.created_at, al.payload,
-            u.full_name        AS user_name,
-            bp.id              AS partner_id,
-            bp.name            AS partner_name,
-            p.id               AS product_id,
-            p.sku              AS product_sku,
-            p.name             AS product_name
-       FROM audit_logs al
-       LEFT JOIN users             u  ON u.id  = al.user_id
-       LEFT JOIN business_partners bp ON bp.id = (al.payload->>'partnerId')::uuid
-       LEFT JOIN products          p  ON p.id  = (al.payload->>'productId')::uuid
-      WHERE al.tenant_id = $1
-        AND al.resource  = 'customer_prices'
-      ORDER BY al.created_at DESC
-      LIMIT $2`,
-    [tenantId, limit]
-  )
-  return rows.map(r => ({
+function mapPriceChangeRow(r) {
+  return {
     id:           r.id,
     action:       r.action,
     createdAt:    r.created_at,
@@ -518,7 +585,54 @@ async function listRecentPriceChanges({ tenantId, limit = 10 }) {
     after:        r.payload?.after  || null,
     unitPrice:    r.payload?.unitPrice != null ? Number(r.payload.unitPrice) : null,
     currency:     r.payload?.currency || null,
-  }))
+  }
+}
+
+/**
+ * Historial de cambios de precios desde audit_logs, con filtros opcionales y
+ * paginación. Sirve para el panel "por cliente" (partnerId) y la vista completa
+ * (filtros + páginas). Devuelve { rows, total }.
+ */
+async function listPriceChanges({
+  tenantId, partnerId = null, productId = null, action = null,
+  from = null, to = null, limit = 10, offset = 0,
+}) {
+  const params = [tenantId]
+  const where  = [`al.tenant_id = $1`, `al.resource = 'customer_prices'`]
+
+  if (partnerId) { params.push(partnerId); where.push(`(al.payload->>'partnerId')::uuid = $${params.length}`) }
+  if (productId) { params.push(productId); where.push(`(al.payload->>'productId')::uuid = $${params.length}`) }
+  if (action)    { params.push(action);    where.push(`al.action = $${params.length}`) }
+  if (from)      { params.push(from);       where.push(`al.created_at >= $${params.length}::date`) }
+  if (to)        { params.push(to);         where.push(`al.created_at < ($${params.length}::date + 1)`) }
+  const whereSql = where.join(' AND ')
+
+  const { rows: countRows } = await query(
+    `SELECT COUNT(*)::int AS total FROM audit_logs al WHERE ${whereSql}`,
+    params
+  )
+  const total = countRows[0]?.total || 0
+
+  params.push(limit);  const limIdx = params.length
+  params.push(offset); const offIdx = params.length
+  const { rows } = await query(
+    `SELECT al.id, al.action, al.created_at, al.payload,
+            u.full_name        AS user_name,
+            bp.id              AS partner_id,
+            bp.name            AS partner_name,
+            p.id               AS product_id,
+            p.sku              AS product_sku,
+            p.name             AS product_name
+       FROM audit_logs al
+       LEFT JOIN users             u  ON u.id  = al.user_id
+       LEFT JOIN business_partners bp ON bp.id = (al.payload->>'partnerId')::uuid
+       LEFT JOIN products          p  ON p.id  = (al.payload->>'productId')::uuid
+      WHERE ${whereSql}
+      ORDER BY al.created_at DESC
+      LIMIT $${limIdx} OFFSET $${offIdx}`,
+    params
+  )
+  return { rows: rows.map(mapPriceChangeRow), total }
 }
 
 async function getCustomerPricesSummary({ tenantId }) {
@@ -607,7 +721,7 @@ module.exports = {
   listPartners, getPartner, createPartner, updatePartner,
   addContact, deleteContact,
   listDeliveryAddresses, addDeliveryAddress, updateDeliveryAddress,
-  listCustomerPrices, setCustomerPrice, deleteCustomerPrice,
-  getCustomerPricesSummary, listRecentPriceChanges,
+  listCustomerPrices, setCustomerPrice, updateCustomerPrice, deleteCustomerPrice,
+  getCustomerPricesSummary, listPriceChanges,
   listSupplierMaterials, setSupplierMaterial,
 }

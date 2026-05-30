@@ -52,9 +52,18 @@ router.get('/prices-summary', checkPermission('business_partners', 'read'), asyn
 
 router.get('/prices-history', checkPermission('business_partners', 'read'), async (req, res, next) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit || 10, 10), 50)
-    const rows = await partnerService.listRecentPriceChanges({ tenantId: req.tenant.id, limit })
-    res.json(rows)
+    const limit  = Math.min(parseInt(req.query.limit || 10, 10), 100)
+    const offset = Math.max(parseInt(req.query.offset || 0, 10), 0)
+    const result = await partnerService.listPriceChanges({
+      tenantId:  req.tenant.id,
+      partnerId: req.query.partnerId || null,
+      productId: req.query.productId || null,
+      action:    req.query.action    || null,
+      from:      req.query.from       || null,
+      to:        req.query.to         || null,
+      limit, offset,
+    })
+    res.json(result)
   } catch (err) { next(err) }
 })
 
@@ -212,6 +221,21 @@ router.post('/:id/prices', checkPermission('business_partners', 'update'), async
     })
     res.status(201).json(price)
   } catch (err) { next(err) }
+})
+
+router.patch('/:id/prices/:priceId', checkPermission('business_partners', 'update'), async (req, res, next) => {
+  try {
+    const updated = await partnerService.updateCustomerPrice({
+      priceId: req.params.priceId, tenantId: req.tenant.id,
+      ...req.body,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    if (!updated) return res.status(404).json({ error: 'Precio no encontrado.' })
+    res.json(updated)
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
 })
 
 router.delete('/:id/prices/:priceId', checkPermission('business_partners', 'update'), async (req, res, next) => {

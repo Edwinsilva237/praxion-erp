@@ -46,12 +46,18 @@ export const partnersApi = {
   setPrice: (id, body) =>
     api.post(`/business-partners/${id}/prices`, body).then((r) => r.data),
 
+  // Edita una fila de precio por su id (precio, moneda, vigencia, notas).
+  updatePrice: (id, priceId, body) =>
+    api.patch(`/business-partners/${id}/prices/${priceId}`, body).then((r) => r.data),
+
   deletePrice: (id, priceId) =>
     api.delete(`/business-partners/${id}/prices/${priceId}`).then((r) => r.data),
 
   pricesSummary: () =>
     api.get('/business-partners/prices-summary').then((r) => r.data),
 
-  pricesHistory: (limit = 10) =>
-    api.get('/business-partners/prices-history', { params: { limit } }).then((r) => r.data),
+  // Historial de cambios de precios. Devuelve { rows, total }. Filtros
+  // opcionales: { limit, offset, partnerId, productId, action, from, to }.
+  pricesHistory: (params = {}) =>
+    api.get('/business-partners/prices-history', { params }).then((r) => r.data),
 }
