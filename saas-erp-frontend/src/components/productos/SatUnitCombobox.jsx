@@ -1,7 +1,9 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/axios'
 import clsx from 'clsx'
+import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 
 const UNIT_PATTERN = /^[A-Z0-9]{1,3}$/
 
@@ -12,6 +14,9 @@ const UNIT_PATTERN = /^[A-Z0-9]{1,3}$/
  * consulta /api/sat/unit-codes con debounce en vez de tener el catálogo
  * embebido. Las 164 unidades más comunes (mig 168) tienen descripción legible;
  * las demás muestran solo el código hasta que se cargue el Excel oficial.
+ *
+ * El menú se renderiza en un PORTAL anclado al input (useAnchoredMenu) para
+ * que el `overflow-hidden` de las secciones colapsables no lo recorte.
  *
  * Props:
  *   - value     : string. Código actual (ej. "KGM").
@@ -24,7 +29,12 @@ export default function SatUnitCombobox({ value, onChange, className, error, dis
   const [open, setOpen]     = useState(false)
   const [query, setQuery]   = useState('')
   const [debounced, setDeb] = useState('')
-  const rootRef = useRef(null)
+  const tryCommitRef = useRef(null)
+  // Al hacer click fuera, primero intenta comprometer lo tecleado, luego cierra.
+  const { anchorRef, menuRef, menuPos } = useAnchoredMenu(
+    open,
+    () => { tryCommitRef.current?.(); setOpen(false) },
+  )
 
   // Sincronizar value externo con la query mostrada.
   useEffect(() => {
@@ -36,20 +46,6 @@ export default function SatUnitCombobox({ value, onChange, className, error, dis
     const t = setTimeout(() => setDeb(query.trim()), 200)
     return () => clearTimeout(t)
   }, [query])
-
-  // Cerrar al hacer click fuera. Antes intenta hacer commit de lo tecleado.
-  useEffect(() => {
-    function onDoc(e) {
-      if (rootRef.current && !rootRef.current.contains(e.target)) {
-        tryCommitRef.current?.()
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [])
-
-  const tryCommitRef = useRef(null)
 
   // Sugerencias del backend.
   const { data: suggestions = [], isLoading } = useQuery({
@@ -118,8 +114,9 @@ export default function SatUnitCombobox({ value, onChange, className, error, dis
   const showResolved = resolved && resolved.name && resolved.name !== resolved.code
 
   return (
-    <div ref={rootRef} className="relative">
+    <div className="relative">
       <input
+        ref={anchorRef}
         type="text"
         value={query}
         onChange={e => { setQuery(e.target.value); setOpen(true) }}
@@ -138,8 +135,12 @@ export default function SatUnitCombobox({ value, onChange, className, error, dis
         </p>
       )}
 
-      {open && !disabled && (
-        <div className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto rounded-lg border border-line-subtle bg-surface-primary shadow-card">
+      {open && !disabled && menuPos && createPortal(
+        <div
+          ref={menuRef}
+          style={{ position: 'fixed', zIndex: 10000, ...menuPos }}
+          className="overflow-y-auto rounded-lg border border-line-subtle bg-surface-primary shadow-card"
+        >
           {isLoading && (
             <div className="px-3 py-2 text-xs text-ink-muted">Buscando…</div>
           )}
@@ -174,7 +175,8 @@ export default function SatUnitCombobox({ value, onChange, className, error, dis
               <span className="text-brand-300">Usar este código del SAT</span>
             </button>
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )

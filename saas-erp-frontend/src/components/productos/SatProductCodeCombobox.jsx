@@ -1,7 +1,9 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/axios'
 import clsx from 'clsx'
+import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 
 /**
  * Combobox con búsqueda para la Clave SAT del producto (c_ClaveProdServ
@@ -16,6 +18,9 @@ import clsx from 'clsx'
  *  - Cuando el valor actual matchea una entrada en BD, se muestra la
  *    descripción al lado del input.
  *
+ * El menú se renderiza en un PORTAL anclado al input (useAnchoredMenu) para
+ * que el `overflow-hidden` de las secciones colapsables no lo recorte.
+ *
  * Props:
  *   - value     : string. Código actual (8 dígitos).
  *   - onChange  : (newCode: string) => void
@@ -26,7 +31,7 @@ export default function SatProductCodeCombobox({ value, onChange, error, disable
   const [open, setOpen]     = useState(false)
   const [query, setQuery]   = useState('')
   const [debounced, setDeb] = useState('')
-  const rootRef = useRef(null)
+  const { anchorRef, menuRef, menuPos } = useAnchoredMenu(open, () => setOpen(false), { maxHeight: 288 })
 
   // Si el value externo cambia (reset del form), sincronizamos el input.
   useEffect(() => {
@@ -38,15 +43,6 @@ export default function SatProductCodeCombobox({ value, onChange, error, disable
     const t = setTimeout(() => setDeb(query.trim()), 250)
     return () => clearTimeout(t)
   }, [query])
-
-  // Cerrar al hacer click fuera.
-  useEffect(() => {
-    function onDoc(e) {
-      if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [])
 
   // Lookup de sugerencias.
   const { data: suggestions = [], isLoading } = useQuery({
@@ -108,8 +104,9 @@ export default function SatProductCodeCombobox({ value, onChange, error, disable
   }
 
   return (
-    <div ref={rootRef} className="relative">
+    <div className="relative">
       <input
+        ref={anchorRef}
         type="text"
         value={query}
         onChange={e => { setQuery(e.target.value); setOpen(true) }}
@@ -134,8 +131,12 @@ export default function SatProductCodeCombobox({ value, onChange, error, disable
         </p>
       )}
 
-      {open && !disabled && (
-        <div className="absolute z-20 mt-1 w-full max-h-72 overflow-y-auto rounded-lg border border-line-subtle bg-surface-primary shadow-card">
+      {open && !disabled && menuPos && createPortal(
+        <div
+          ref={menuRef}
+          style={{ position: 'fixed', zIndex: 10000, ...menuPos }}
+          className="overflow-y-auto rounded-lg border border-line-subtle bg-surface-primary shadow-card"
+        >
           {isLoading && (
             <div className="px-3 py-2 text-xs text-ink-muted">Buscando…</div>
           )}
@@ -168,7 +169,8 @@ export default function SatProductCodeCombobox({ value, onChange, error, disable
               <span className="text-brand-300">Usar este código del SAT</span>
             </button>
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )

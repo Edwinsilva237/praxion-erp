@@ -1,8 +1,15 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import clsx from 'clsx'
+import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 
 /**
  * Autocomplete genérico.
+ *
+ * El menú de resultados se renderiza en un PORTAL con posición fixed anclada
+ * al input (useAnchoredMenu): sin esto, el `overflow-hidden` de las secciones
+ * colapsables o el scroll de los modales recortaban el desplegable.
+ *
  * Props:
  *   value        — objeto seleccionado { id, label, sub? }
  *   onChange     — (item) => void
@@ -17,18 +24,7 @@ export default function Autocomplete({ value, onChange, onSearch, placeholder = 
   const [open,     setOpen]     = useState(false)
   const [loading,  setLoading]  = useState(false)
   const debounce   = useRef(null)
-  const containerRef = useRef(null)
-
-  // Cerrar al hacer clic fuera
-  useEffect(() => {
-    function handleClick(e) {
-      if (containerRef.current && !containerRef.current.contains(e.target)) {
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [])
+  const { anchorRef, menuRef, menuPos } = useAnchoredMenu(open, () => setOpen(false), { maxHeight: 208 })
 
   // Buscar con debounce
   function handleInput(e) {
@@ -78,12 +74,15 @@ export default function Autocomplete({ value, onChange, onSearch, placeholder = 
   const displayValue = value ? value.label : query
 
   return (
-    <div ref={containerRef} className="relative">
-      <div className={clsx(
-        'flex items-center gap-2 input pr-2',
-        error && 'border-status-danger/40 focus-within:ring-status-danger/40',
-        disabled && 'opacity-50 cursor-not-allowed'
-      )}>
+    <div className="relative">
+      <div
+        ref={anchorRef}
+        className={clsx(
+          'flex items-center gap-2 input pr-2',
+          error && 'border-status-danger/40 focus-within:ring-status-danger/40',
+          disabled && 'opacity-50 cursor-not-allowed'
+        )}
+      >
         <input
           type="text"
           className="flex-1 bg-transparent outline-none text-sm"
@@ -109,8 +108,12 @@ export default function Autocomplete({ value, onChange, onSearch, placeholder = 
         )}
       </div>
 
-      {open && results.length > 0 && (
-        <ul className="absolute z-50 mt-1 w-full bg-surface-primary border border-line-subtle rounded-xl shadow-card max-h-52 overflow-y-auto">
+      {open && results.length > 0 && menuPos && createPortal(
+        <ul
+          ref={menuRef}
+          style={{ position: 'fixed', zIndex: 10000, ...menuPos }}
+          className="bg-surface-primary border border-line-subtle rounded-xl shadow-card overflow-y-auto"
+        >
           {results.map(item => (
             <li
               key={item.id}
@@ -121,13 +124,19 @@ export default function Autocomplete({ value, onChange, onSearch, placeholder = 
               {item.sub && <p className="text-xs text-ink-muted">{item.sub}</p>}
             </li>
           ))}
-        </ul>
+        </ul>,
+        document.body
       )}
 
-      {open && !loading && query && results.length === 0 && (
-        <div className="absolute z-50 mt-1 w-full bg-surface-primary border border-line-subtle rounded-xl shadow-card px-3 py-2">
+      {open && !loading && query && results.length === 0 && menuPos && createPortal(
+        <div
+          ref={menuRef}
+          style={{ position: 'fixed', zIndex: 10000, ...menuPos }}
+          className="bg-surface-primary border border-line-subtle rounded-xl shadow-card px-3 py-2"
+        >
           <p className="text-sm text-ink-muted">Sin resultados para "{query}"</p>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )

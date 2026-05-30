@@ -1,7 +1,9 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/axios'
 import clsx from 'clsx'
+import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 
 /**
  * Dropdown con búsqueda para catálogos SAT pequeños (régimen fiscal, uso CFDI,
@@ -10,6 +12,11 @@ import clsx from 'clsx'
  * Carga el catálogo al montar el componente y filtra en cliente — bueno
  * para listas < 500 entradas. Para catálogos grandes (productos, unidades)
  * usar los componentes específicos con debounce backend.
+ *
+ * El menú se renderiza en un PORTAL con posición fixed anclada al input
+ * (ver useAnchoredMenu): sin esto, el `overflow-hidden` de las secciones
+ * colapsables recortaba el desplegable y los campos del fondo de cada sección
+ * quedaban tapados por la sección siguiente.
  *
  * Props:
  *   - endpoint   : string. Ruta del backend bajo /sat (ej. 'regimen-fiscal').
@@ -28,7 +35,7 @@ export default function SatCatalogSelect({
 }) {
   const [open, setOpen]   = useState(false)
   const [query, setQuery] = useState('')
-  const rootRef = useRef(null)
+  const { anchorRef, menuRef, menuPos } = useAnchoredMenu(open, () => setOpen(false))
 
   const { data: items = [], isLoading } = useQuery({
     queryKey: ['sat-catalog', endpoint, params],
@@ -43,15 +50,6 @@ export default function SatCatalogSelect({
       setQuery(selected ? (showCode ? `${selected.code} — ${selected.name}` : selected.name) : (value || ''))
     }
   }, [value, open, items, showCode])
-
-  // Cerrar al hacer click fuera.
-  useEffect(() => {
-    function onDoc(e) {
-      if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [])
 
   // Filtro por código o nombre — case insensitive.
   const filtered = useMemo(() => {
@@ -68,8 +66,9 @@ export default function SatCatalogSelect({
   }
 
   return (
-    <div ref={rootRef} className="relative">
+    <div className="relative">
       <input
+        ref={anchorRef}
         type="text"
         value={query}
         onChange={e => { setQuery(e.target.value); setOpen(true) }}
@@ -79,8 +78,12 @@ export default function SatCatalogSelect({
         className={clsx('input', error && 'input-error')}
         autoComplete="off"
       />
-      {open && !disabled && (
-        <div className="absolute z-30 mt-1 w-full max-h-64 overflow-y-auto rounded-lg border border-line-subtle bg-surface-primary shadow-card">
+      {open && !disabled && menuPos && createPortal(
+        <div
+          ref={menuRef}
+          style={{ position: 'fixed', zIndex: 10000, ...menuPos }}
+          className="overflow-y-auto rounded-lg border border-line-subtle bg-surface-primary shadow-card"
+        >
           {filtered.length === 0 ? (
             <div className="px-3 py-2 text-xs text-ink-muted">Sin coincidencias.</div>
           ) : (
@@ -99,7 +102,8 @@ export default function SatCatalogSelect({
               </button>
             ))
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )
