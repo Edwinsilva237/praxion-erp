@@ -194,7 +194,10 @@ export const ROLE_TEMPLATES = [
     key:   'solo_lectura',
     label: '👁 Solo lectura',
     description: 'Consulta todo el sistema pero no modifica nada. Incluye todos los reportes.',
-    matches: (p) => p.action === 'read' || p.resource === 'reports',
+    matches: (p) =>
+      p.action === 'read' ||
+      (p.resource === 'production' && ['read_schedule', 'read_history'].includes(p.action)) ||
+      p.resource === 'reports',
   },
 ]
 

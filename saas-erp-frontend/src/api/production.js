@@ -69,11 +69,15 @@ export const productionApi = {
   // Turnos programados
   listScheduledShifts:  (params) => api.get(`${BASE}/scheduled-shifts`, { params }).then(r => r.data),
   getMyTodayShifts:     ()       => api.get(`${BASE}/scheduled-shifts/my-today`).then(r => r.data),
+  // Mis turnos (solo los del usuario logueado) en un rango de fechas.
+  getMyShifts:          (params) => api.get(`${BASE}/scheduled-shifts/mine`, { params }).then(r => r.data),
   getOperatorHours:     (params) => api.get(`${BASE}/scheduled-shifts/operator-hours`, { params }).then(r => r.data),
   setShiftActiveOrder:  (shiftId, orderId) => api.patch(`${BASE}/shifts/${shiftId}/active-order`, { orderId }).then(r => r.data),
   scheduleShift:        (body)   => api.post(`${BASE}/scheduled-shifts`, body).then(r => r.data),
   updateScheduledShift: (id, body) => api.patch(`${BASE}/scheduled-shifts/${id}`, body).then(r => r.data),
   confirmPresence:      (id)     => api.post(`${BASE}/scheduled-shifts/${id}/confirm`).then(r => r.data),
+  // Micro pyme: iniciar turno directo sin programación (requiere flag).
+  selfStartShift:       ()       => api.post(`${BASE}/shifts/self-start`).then(r => r.data),
 
   // Runtime: miembros del turno activo y reasignación del responsable del handover
   listShiftMembers:     (shiftId) => api.get(`${BASE}/shifts/${shiftId}/members`).then(r => r.data),

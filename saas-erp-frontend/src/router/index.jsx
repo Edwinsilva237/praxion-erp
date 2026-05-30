@@ -20,6 +20,7 @@ const TrazabilidadLotes          = lazy(() => import('@/pages/Trazabilidad/Lotes
 const ProduccionResumen       = lazy(() => import('@/pages/Produccion/ProduccionResumen'))
 const ProduccionHistorico     = lazy(() => import('@/pages/Produccion/ProduccionHistorico'))
 const ProduccionProgramacion  = lazy(() => import('@/pages/Produccion/ProduccionProgramacion'))
+const MisTurnos               = lazy(() => import('@/pages/Produccion/MisTurnos'))
 const Inventario              = lazy(() => import('@/pages/Inventario'))
 const ConteosLista            = lazy(() => import('@/pages/Inventario/ConteosLista'))
 const ConteoDetalle           = lazy(() => import('@/pages/Inventario/ConteoDetalle'))
@@ -170,6 +171,7 @@ const router = createBrowserRouter([
       { path: '/produccion/recetas',           element: <ProduccionRecetas /> },
       { path: '/produccion/especificaciones',  element: <ProduccionEspecificaciones /> },
       { path: '/produccion/turno/:id/resumen', element: <ProduccionResumen /> },
+      { path: '/produccion/mis-turnos',        element: <MisTurnos /> },
       { path: '/produccion/historico',         element: <ProduccionHistorico /> },
       { path: '/produccion/programacion',    element: <ProduccionProgramacion /> },
       { path: '/ventas',              element: <VentasPedidos /> },

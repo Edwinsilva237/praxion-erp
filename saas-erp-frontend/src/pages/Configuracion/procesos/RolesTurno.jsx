@@ -127,6 +127,22 @@ export default function RolesTurno() {
     onError: (err) => setServerError(err.response?.data?.error || err.message),
   })
 
+  // Flag de proceso: inicio de turno directo (micro pyme).
+  const { data: cfg } = useQuery({
+    queryKey: ['tenant-process-config'],
+    queryFn:  processConfigApi.getConfig,
+    staleTime: 300000,
+  })
+  const selfStartMut = useMutation({
+    mutationFn: (v) => processConfigApi.updateConfig({ allow_self_start_shift: v }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tenant-process-config'] })
+      setSuccessMsg('Modo de inicio de turno actualizado.')
+      setTimeout(() => setSuccessMsg(null), 2500)
+    },
+    onError: (err) => setServerError(err.response?.data?.error || err.message),
+  })
+
   function handleSaved() {
     qc.invalidateQueries({ queryKey: ['process-config-shift-roles'] })
     setEditing(null)
@@ -165,6 +181,27 @@ export default function RolesTurno() {
           <span>{serverError}</span><button onClick={() => setServerError(null)}>✕</button>
         </div>
       )}
+
+      {/* Modo de inicio de turno (micro pyme) */}
+      <div className="card p-4 flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold text-ink-primary">Inicio de turno directo (micro pyme)</p>
+          <p className="text-xs text-ink-muted mt-1 max-w-2xl leading-relaxed">
+            Si lo activas, el capturista puede <strong>iniciar su turno desde la pantalla de Captura</strong> sin
+            que un supervisor lo programe — ideal para una sola línea que siempre hace lo mismo
+            ("inicia sesión y ejecuta"). Si lo dejas apagado, los turnos se planean en Programación.
+          </p>
+        </div>
+        <label className={clsx('flex items-center gap-2 text-sm shrink-0', canManage ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed')}>
+          <input type="checkbox" className="w-5 h-5 accent-brand-600"
+            checked={!!cfg?.allow_self_start_shift}
+            disabled={!canManage || selfStartMut.isPending}
+            onChange={e => selfStartMut.mutate(e.target.checked)} />
+          <span className="font-medium text-ink-secondary">
+            {cfg?.allow_self_start_shift ? 'Activado' : 'Desactivado'}
+          </span>
+        </label>
+      </div>
 
       <div className="flex items-center gap-4">
         <label className="flex items-center gap-2 text-sm text-ink-secondary cursor-pointer">

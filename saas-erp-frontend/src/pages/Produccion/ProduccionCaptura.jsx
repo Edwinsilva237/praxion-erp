@@ -147,6 +147,7 @@ function PantallaSeleccion({
   shiftClosed, closedShiftId, closedAt,
   confirmMutation, reopenMutation,
   onSelectShift, onShiftClosed,
+  allowSelfStart, selfStartMutation,
 }) {
   const scheduledShifts = myTodayShifts.filter(s => s.status === 'scheduled')
 
@@ -175,10 +176,26 @@ function PantallaSeleccion({
           onExit={() => onShiftClosed(false)}
         />
       ) : activeShifts.length === 0 && scheduledShifts.length === 0 ? (
-        <div className="empty-state">
-          <p className="font-medium text-ink-secondary">Sin turnos asignados hoy</p>
-          <p className="text-sm text-ink-muted">Consulta con tu supervisor.</p>
-        </div>
+        allowSelfStart ? (
+          <div className="empty-state flex flex-col items-center gap-3">
+            <p className="font-medium text-ink-secondary">Listo para empezar</p>
+            <p className="text-sm text-ink-muted text-center">
+              Inicia tu turno y captura tu producción del día.
+            </p>
+            <button
+              onClick={() => selfStartMutation.mutate()}
+              disabled={selfStartMutation.isPending}
+              className="btn-primary w-full max-w-xs justify-center h-14 text-base font-bold"
+            >
+              {selfStartMutation.isPending ? <Spinner className="w-5 h-5" /> : '▶  Iniciar turno'}
+            </button>
+          </div>
+        ) : (
+          <div className="empty-state">
+            <p className="font-medium text-ink-secondary">Sin turnos asignados hoy</p>
+            <p className="text-sm text-ink-muted">Consulta con tu supervisor.</p>
+          </div>
+        )
       ) : (
         <>
           {/* Turno programado pendiente de confirmar */}
@@ -533,6 +550,20 @@ export default function ProduccionCaptura() {
     onError: (e) => showFeedback('error', e?.response?.data?.error || 'Error al confirmar'),
   })
 
+  // Micro pyme: iniciar turno directo (sin programación). Solo visible si el
+  // tenant tiene allow_self_start_shift. Tras crear el turno, abre la cola.
+  const selfStartMutation = useMutation({
+    mutationFn: () => productionApi.selfStartShift(),
+    onSuccess: (shift) => {
+      setSelectedShift(shift.id)
+      queryClient.invalidateQueries({ queryKey: ['active-shifts'] })
+      queryClient.invalidateQueries({ queryKey: ['my-today-shifts'] })
+      setWaitingHandover(false)
+      setViewMode('cola')
+    },
+    onError: (e) => showFeedback('error', e?.response?.data?.error || 'No se pudo iniciar el turno'),
+  })
+
   const captureMutation = useMutation({
     mutationFn: (body) => productionApi.capturePackage(selectedShift, body),
     onSuccess: (data) => {
@@ -730,6 +761,8 @@ export default function ProduccionCaptura() {
         reopenMutation={reopenMutation}
         onSelectShift={handleSelectShift}
         onShiftClosed={setShiftClosed}
+        allowSelfStart={tenantConfig?.allow_self_start_shift}
+        selfStartMutation={selfStartMutation}
       />
     )
   }

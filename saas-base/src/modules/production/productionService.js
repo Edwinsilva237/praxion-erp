@@ -976,6 +976,76 @@ async function openShift({
   })
 }
 
+// Micro pyme: el capturista inicia su propio turno SIN programación previa.
+// Requiere el flag tenant_process_config.allow_self_start_shift. Crea el
+// production_shift activo con el usuario como operador (y miembro capturista),
+// fecha local de operación, sin orden (la elige de la cola al capturar).
+// Idempotente: si el usuario ya tiene un turno activo, lo devuelve.
+async function selfStartShift({ tenantId, userId, ipAddress, userAgent }) {
+  const { rows: cfg } = await query(
+    `SELECT allow_self_start_shift FROM tenant_process_config WHERE tenant_id = $1`,
+    [tenantId]
+  )
+  if (!cfg[0]?.allow_self_start_shift) {
+    throw createError(403, 'El inicio de turno directo no está habilitado para esta empresa.')
+  }
+
+  // ¿Ya tiene un turno activo? → devolverlo (no duplicar).
+  const { rows: existing } = await query(
+    `SELECT * FROM production_shifts
+      WHERE tenant_id = $1 AND operator_id = $2 AND status = 'active'
+      ORDER BY started_at DESC LIMIT 1`,
+    [tenantId, userId]
+  )
+  if (existing[0]) return existing[0]
+
+  // Turno configurado (el primero del tenant) y fecha LOCAL de operación.
+  const { rows: sc } = await query(
+    `SELECT shift_number FROM tenant_shift_config
+      WHERE tenant_id = $1 ORDER BY shift_number LIMIT 1`,
+    [tenantId]
+  )
+  const shiftNumber = sc[0]?.shift_number != null ? String(sc[0].shift_number) : '1'
+  const { rows: dr } = await query(
+    `SELECT (NOW() AT TIME ZONE 'America/Mexico_City')::date::text AS today`
+  )
+  const shiftDate = dr[0].today
+
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `INSERT INTO production_shifts
+         (tenant_id, line_id, shift_number, shift_date,
+          operator_id, supervisor_id, status, started_at)
+       VALUES ($1, 1, $2, $3, $4, $4, 'active', NOW())
+       RETURNING *`,
+      [tenantId, shiftNumber, shiftDate, userId]
+    )
+    const shift = rows[0]
+
+    // Miembro capturista (si el catálogo lo tiene) para que el runtime
+    // dinámico opere sin depender solo del fallback legacy de operator_id.
+    const { rows: role } = await client.query(
+      `SELECT id FROM tenant_shift_roles
+        WHERE tenant_id = $1 AND code = 'capturista' AND is_active = true LIMIT 1`,
+      [tenantId]
+    )
+    if (role[0]) {
+      await client.query(
+        `INSERT INTO production_shift_members (shift_id, user_id, role_id)
+         VALUES ($1, $2, $3)`,
+        [shift.id, userId, role[0].id]
+      )
+    }
+
+    await audit({
+      tenantId, userId, action: 'shift.self_started', resource: 'production_shifts',
+      resourceId: shift.id, payload: { shiftNumber, shiftDate },
+      ipAddress, userAgent,
+    })
+    return shift
+  })
+}
+
 async function capturePackage({
   tenantId, shiftId, productionOrderId,
   quantityUnits, realWeightKg, theoreticalWeightKg,
@@ -4757,7 +4827,7 @@ async function revertValidation({
 module.exports = {
   getOrdersQueue, listOrders, getOrder, createOrder, updateOrder, cancelOrder,
   releaseOrder, updateOrderPriority, reorderQueue, getOrderStockAvailability,
-  getActiveShifts, getShift, getShiftSummary, listShiftsHistory, reopenShift, openShift, capturePackage,
+  getActiveShifts, getShift, getShiftSummary, listShiftsHistory, reopenShift, openShift, selfStartShift, capturePackage,
   loadMp, recordScrap, reportIncident, closeShift: closeShiftWithOverhead, forceCloseShift, validateShift,
   getHandoverSummary, acceptHandover, getClosedShiftSummary,
   previewStockForNewOrder,

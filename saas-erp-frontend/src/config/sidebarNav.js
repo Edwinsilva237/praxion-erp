@@ -51,8 +51,9 @@ export const NAV_SECTIONS = [
       { label: 'Especificaciones', to: '/produccion/especificaciones', iconKey: 'card', permission: 'products:read',     module: 'production' },
       { label: 'Captura',         to: '/produccion/captura',      iconKey: 'pencil',   permission: 'production:create',  module: 'production' },
       { label: 'Validación',      to: '/produccion/validacion',   iconKey: 'check',    permission: 'production:approve', module: 'production' },
-      { label: 'Programación',    to: '/produccion/programacion', iconKey: 'calendar', permission: 'production:read',    module: 'production' },
-      { label: 'Histórico',       to: '/produccion/historico',    iconKey: 'history',  permission: 'production:read',    module: 'production' },
+      { label: 'Mis turnos',      to: '/produccion/mis-turnos',   iconKey: 'calendar', permission: 'production:read',          module: 'production' },
+      { label: 'Programación',    to: '/produccion/programacion', iconKey: 'calendar', permission: 'production:read_schedule', module: 'production' },
+      { label: 'Histórico',       to: '/produccion/historico',    iconKey: 'history',  permission: 'production:read_history',  module: 'production' },
     ],
   },
   {

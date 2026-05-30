@@ -213,7 +213,7 @@ router.post('/orders/reorder', checkPermission('production','update'), async (re
 
 // ── Turnos ────────────────────────────────────────────────────────────────────
 
-router.get('/shifts/history', checkPermission('production','read'), async (req,res,next) => {
+router.get('/shifts/history', checkPermission('production','read_history'), async (req,res,next) => {
   try {
     const { dateFrom, dateTo, operatorId, status, page, limit } = req.query
     res.json(await svc.listShiftsHistory({
@@ -307,6 +307,18 @@ router.post('/shifts', checkPermission('production','create'), async (req,res,ne
     }))
   } catch(err){
     if(err.code==='23505') return res.status(409).json({error:'Ya existe un turno para esa línea, fecha y número.'})
+    next(err)
+  }
+})
+// Micro pyme: el capturista inicia su propio turno sin programación previa.
+// Requiere el flag allow_self_start_shift (se valida en el service).
+router.post('/shifts/self-start', checkPermission('production','create'), async (req,res,next) => {
+  try {
+    res.status(201).json(await svc.selfStartShift({
+      tenantId:tid(req), userId:uid(req), ipAddress:ip(req), userAgent:ua(req)
+    }))
+  } catch(err){
+    if(err.status) return res.status(err.status).json({ error: err.message })
     next(err)
   }
 })
@@ -551,7 +563,7 @@ router.post('/orders/:id/reopen', checkPermission('production','update'), async 
 })
 
 // ── Turnos programados ────────────────────────────────────────────────────────
-router.get('/scheduled-shifts', checkPermission('production','read'), async (req,res,next) => {
+router.get('/scheduled-shifts', checkPermission('production','read_schedule'), async (req,res,next) => {
   try {
     const { operatorId,dateFrom,dateTo,status } = req.query
     res.json(await svcSched.listScheduledShifts({ tenantId:tid(req), operatorId,dateFrom,dateTo,status }))
@@ -561,7 +573,18 @@ router.get('/scheduled-shifts/my-today', async (req,res,next) => {
   try { res.json(await svcSched.getTodayShiftsForOperator({ tenantId:tid(req), operatorId:uid(req) })) }
   catch(err){next(err)}
 })
-router.get('/scheduled-shifts/operator-hours', checkPermission('production','read'), async (req,res,next) => {
+// Mis turnos: SOLO los del usuario logueado (miembro o operator legacy) en un
+// rango de fechas. Self-scoped — no requiere production:read_schedule, así el
+// capturista ve los suyos sin poder ver los de toda la planta.
+router.get('/scheduled-shifts/mine', async (req,res,next) => {
+  try {
+    const { dateFrom, dateTo } = req.query
+    res.json(await svcSched.listScheduledShifts({
+      tenantId: tid(req), operatorId: uid(req), dateFrom, dateTo,
+    }))
+  } catch(err){next(err)}
+})
+router.get('/scheduled-shifts/operator-hours', checkPermission('production','read_schedule'), async (req,res,next) => {
   try {
     const { operatorId, date } = req.query
     if (!operatorId || !date) return res.status(400).json({ error: 'operatorId y date son requeridos.' })
