@@ -132,8 +132,10 @@ export default function IdentidadMarca() {
         <p className="eyebrow">CONFIGURACIÓN</p>
         <h1 className="text-xl font-semibold text-ink-primary mt-1">Identidad de marca</h1>
         <p className="text-sm text-ink-muted mt-1">
-          Personaliza el logo, nombre comercial y colores que verá tu equipo en el panel
-          y aparecerán en las facturas que emitas.
+          Personaliza el logo, nombre comercial y colores. Al pulsar <strong>Guardar
+          cambios</strong> se aplican en el panel y en todos los PDFs del sistema
+          (cotización, remisión, factura impresa, recibo, orden de compra). Para el
+          CFDI timbrado oficial, además sincroniza con Facturapi.
         </p>
       </div>
 
@@ -145,8 +147,10 @@ export default function IdentidadMarca() {
         <div>
           <h2 className="text-base font-semibold text-ink-primary">Logo</h2>
           <p className="text-xs text-ink-muted mt-1">
-            Aparece en el menú lateral, en el dashboard y en el PDF de tus facturas (cuando lo sincronices con Facturapi).
-            PNG, JPG, WebP o SVG, hasta 2 MB.
+            Aparece en el menú lateral, el dashboard y en los PDFs del sistema
+            (cotización, remisión, factura, recibo, orden de compra). Para el CFDI
+            timbrado, sincronízalo con Facturapi. Usa <strong>PNG o JPG</strong> — SVG
+            y WebP no se dibujan en los PDFs internos. Hasta 2 MB.
           </p>
         </div>
 
@@ -230,7 +234,9 @@ export default function IdentidadMarca() {
         <div>
           <h2 className="text-base font-semibold text-ink-primary">Nombre y colores</h2>
           <p className="text-xs text-ink-muted mt-1">
-            Define cómo se llama tu empresa dentro del panel y los colores corporativos que se usarán en las facturas.
+            Define el nombre comercial y los colores corporativos. Tras <strong>Guardar
+            cambios</strong> se aplican a todos los PDFs del sistema. El CFDI timbrado
+            los toma al sincronizar con Facturapi.
           </p>
         </div>
 
@@ -254,7 +260,7 @@ export default function IdentidadMarca() {
             value={primary}
             disabled={!canEdit}
             onChange={(v) => { setPrimary(v); setTouched(true) }}
-            description="Banner superior y encabezados de tabla en el PDF del CFDI."
+            description="Banner superior y encabezados de los PDFs (cotización, remisión, factura, recibo, OC)."
           />
           <ColorPicker
             label="Color secundario"
@@ -376,7 +382,8 @@ function InvoicePreview({ logo, name, primary, secondary }) {
         </div>
       </div>
       <p className="text-[10px] text-ink-muted mt-2">
-        Así se verá el banner y los detalles del PDF cuando timbres. La estructura final la define Facturapi.
+        Vista previa del banner y los detalles. Tras Guardar, así salen los PDFs del
+        sistema. El CFDI timbrado toma estos colores al sincronizar con Facturapi.
       </p>
     </div>
   )
