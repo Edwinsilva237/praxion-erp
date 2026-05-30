@@ -19,7 +19,7 @@ const ALLOWED_FIELDS = {
 }
 
 const VALID_ALLOCATION_BASES   = ['shifts', 'hours', 'units', 'weight', 'equal']
-const VALID_CAPTURE_FREQUENCIES = ['monthly', 'biweekly', 'annual', 'event']
+const VALID_CAPTURE_FREQUENCIES = ['monthly', 'biweekly', 'weekly', 'annual', 'event']
 
 /**
  * Valida y lanza error 400 con mensaje en español si algo falla.

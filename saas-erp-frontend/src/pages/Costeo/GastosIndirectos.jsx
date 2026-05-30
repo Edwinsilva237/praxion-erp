@@ -17,8 +17,9 @@ const BASE_LABELS = {
   equal:  'Partes iguales',
 }
 const FREQ_LABELS = {
-  monthly:   'Mensual',
+  weekly:    'Semanal',
   biweekly:  'Quincenal',
+  monthly:   'Mensual',
   annual:    'Anual',
   event:     'Por evento',
 }
@@ -37,8 +38,9 @@ const HELP_FREQ = {
   title: '¿Cuándo elegir cada frecuencia?',
   body: 'Determina cada cuánto vas a capturar el monto real.',
   examples: [
-    { label: 'Mensual',    value: 'Renta, luz, sueldos (lo más común)' },
+    { label: 'Semanal',    value: 'Raya semanal (nómina cada 7 días), consumibles' },
     { label: 'Quincenal',  value: 'Nómina pagada cada 15 días' },
+    { label: 'Mensual',    value: 'Renta, luz, sueldos (lo más común)' },
     { label: 'Anual',      value: 'Predial, seguro, licencias' },
     { label: 'Por evento', value: 'Reparación grande, gasto esporádico' },
   ],
