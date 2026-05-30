@@ -433,6 +433,11 @@ function GlobalSummary({ summary, loading, error, recentChanges = [], onSelectPa
         </div>
       </div>
 
+      {/* Hint siempre visible (arriba de la tabla: con muchos registros no se vería al fondo). */}
+      <p className="text-xs text-ink-muted text-center py-1">
+        Usa el buscador de arriba para elegir un cliente y agregar o gestionar sus precios especiales.
+      </p>
+
       {/* Últimos cambios */}
       <div className="card overflow-hidden">
         <div className="px-4 py-3 border-b border-line-subtle flex items-center justify-between">
@@ -475,12 +480,6 @@ function GlobalSummary({ summary, loading, error, recentChanges = [], onSelectPa
             </tbody>
           </table>
         )}
-      </div>
-
-      <div className="text-center py-2">
-        <p className="text-xs text-ink-muted">
-          Usa el buscador de arriba para elegir un cliente y gestionar sus precios especiales.
-        </p>
       </div>
     </div>
   )
