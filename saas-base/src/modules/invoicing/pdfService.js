@@ -3,6 +3,7 @@
 const PDFDocument = require('pdfkit')
 const { query }   = require('../../db')
 const { addPraxionFooterPDF } = require('../../utils/praxionWitnessMark')
+const { loadTenantLogo, headerTextX, drawHeaderLogo } = require('../../utils/pdfBranding')
 
 /**
  * Genera la representación impresa (PDF) de una factura.
@@ -18,7 +19,7 @@ async function generatePDF({ tenantId, invoiceId }) {
             bp.zip_code AS partner_zip_code,
             tfi.rfc AS emisor_rfc, tfi.razon_social AS emisor_nombre,
             tfi.tax_regime AS emisor_regime, tfi.zip_code AS emisor_zip,
-            t.brand_color_primary, t.brand_color_secondary
+            t.brand_color_primary, t.brand_color_secondary, t.logo_storage_path
      FROM invoices inv
      JOIN business_partners bp ON bp.id = inv.partner_id
      LEFT JOIN tenant_fiscal_info tfi ON tfi.tenant_id = inv.tenant_id
@@ -91,6 +92,8 @@ async function generatePDF({ tenantId, invoiceId }) {
     }
   }
 
+  const logoBuffer = await loadTenantLogo(inv.logo_storage_path)
+
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 40, size: 'LETTER' })
     const buffers = []
@@ -106,14 +109,16 @@ async function generatePDF({ tenantId, invoiceId }) {
     const grisText = '#666666'
 
     // ─── ENCABEZADO ────────────────────────────────────────────────
+    const htx = headerTextX(!!logoBuffer)
     doc.rect(40, 40, W, 70).fill(azul)
+    drawHeaderLogo(doc, logoBuffer)
 
     doc.fillColor('white').fontSize(18).font('Helvetica-Bold')
-       .text(inv.emisor_nombre || 'EMISOR', 55, 52, { width: W * 0.6 })
+       .text(inv.emisor_nombre || 'EMISOR', htx, 52, { width: W * 0.6 - (htx - 55) })
 
     doc.fontSize(9).font('Helvetica')
-       .text(`RFC: ${inv.emisor_rfc || ''}`, 55, 74)
-       .text(`Régimen: ${inv.emisor_regime || ''}  |  CP: ${inv.emisor_zip || inv.lugar_expedicion || ''}`, 55, 86)
+       .text(`RFC: ${inv.emisor_rfc || ''}`, htx, 74)
+       .text(`Régimen: ${inv.emisor_regime || ''}  |  CP: ${inv.emisor_zip || inv.lugar_expedicion || ''}`, htx, 86)
 
     // Número de factura (derecha)
     doc.fontSize(22).font('Helvetica-Bold')

@@ -3,6 +3,7 @@
 const PDFDocument = require('pdfkit')
 const { query }   = require('../../db')
 const { addPraxionFooterPDF } = require('../../utils/praxionWitnessMark')
+const { loadTenantLogo, headerTextX, drawHeaderLogo } = require('../../utils/pdfBranding')
 
 /**
  * Genera el PDF de una cotización (representación impresa, NO fiscal).
@@ -23,7 +24,7 @@ async function generateQuotationPDF({ tenantId, quotationId }) {
             tfi.rfc AS emisor_rfc, tfi.razon_social AS emisor_nombre,
             tfi.tax_regime AS emisor_regime, tfi.zip_code AS emisor_zip,
             t.name AS tenant_name,
-            t.brand_color_primary, t.brand_color_secondary,
+            t.brand_color_primary, t.brand_color_secondary, t.logo_storage_path,
             so.order_number AS converted_order_number
        FROM quotations q
        JOIN business_partners bp ON bp.id = q.partner_id
@@ -49,6 +50,8 @@ async function generateQuotationPDF({ tenantId, quotationId }) {
     ? parseFloat(quot.exchange_rate_value)
     : null
 
+  const logoBuffer = await loadTenantLogo(quot.logo_storage_path)
+
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 40, size: 'LETTER' })
     const buffers = []
@@ -67,23 +70,25 @@ async function generateQuotationPDF({ tenantId, quotationId }) {
     // Header dinámico: si el nombre del emisor se desborda (razón social
     // larga), crecemos el rect azul y desplazamos los subsiguientes Y.
     // Sin esto, el wrap a 2+ líneas se encimaba con RFC/Régimen.
+    const htx = headerTextX(!!logoBuffer)
     const emisorName = quot.emisor_nombre || quot.tenant_name || 'EMISOR'
-    const emisorNameWidth = W * 0.6
+    const emisorNameWidth = W * 0.6 - (htx - 55)
     doc.fontSize(18).font('Helvetica-Bold')
     const emisorNameHeight = doc.heightOfString(emisorName, { width: emisorNameWidth })
     const headerExtra = Math.max(0, emisorNameHeight - 22)   // 22 = altura típica 1 línea fontSize 18
     const headerH = 70 + headerExtra
 
     doc.rect(40, 40, W, headerH).fill(azul)
+    drawHeaderLogo(doc, logoBuffer)
     doc.fillColor('white').fontSize(18).font('Helvetica-Bold')
-       .text(emisorName, 55, 52, { width: emisorNameWidth })
+       .text(emisorName, htx, 52, { width: emisorNameWidth })
 
     const rfcY     = 52 + emisorNameHeight + 4
     const regimeY  = rfcY + 12
     doc.fontSize(9).font('Helvetica')
     if (quot.emisor_rfc) {
-      doc.text(`RFC: ${quot.emisor_rfc}`, 55, rfcY)
-         .text(`Régimen: ${quot.emisor_regime || '-'}  |  CP: ${quot.emisor_zip || '-'}`, 55, regimeY)
+      doc.text(`RFC: ${quot.emisor_rfc}`, htx, rfcY)
+         .text(`Régimen: ${quot.emisor_regime || '-'}  |  CP: ${quot.emisor_zip || '-'}`, htx, regimeY)
     }
 
     doc.fontSize(20).font('Helvetica-Bold')

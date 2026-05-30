@@ -6,6 +6,7 @@ const PDFDocument = require('pdfkit')
 const { query }   = require('../../db')
 const config      = require('../../config')
 const { addPraxionFooterPDF } = require('../../utils/praxionWitnessMark')
+const { loadTenantLogo, headerTextX, drawHeaderLogo } = require('../../utils/pdfBranding')
 
 /**
  * Genera el PDF de una remisión (representación impresa, NO fiscal).
@@ -27,7 +28,7 @@ async function generateRemisionPDF({ tenantId, noteId }) {
             tfi.rfc AS emisor_rfc, tfi.razon_social AS emisor_nombre,
             tfi.tax_regime AS emisor_regime, tfi.zip_code AS emisor_zip,
             t.name AS tenant_name,
-            t.brand_color_primary, t.brand_color_secondary
+            t.brand_color_primary, t.brand_color_secondary, t.logo_storage_path
      FROM delivery_notes dn
      JOIN business_partners bp ON bp.id = dn.partner_id
      LEFT JOIN sales_orders so      ON so.id = dn.sales_order_id
@@ -68,6 +69,8 @@ async function generateRemisionPDF({ tenantId, noteId }) {
     if (fs.existsSync(candidate)) photoFullPath = candidate
   }
 
+  const logoBuffer = await loadTenantLogo(note.logo_storage_path)
+
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 40, size: 'LETTER' })
     const buffers = []
@@ -83,14 +86,16 @@ async function generateRemisionPDF({ tenantId, noteId }) {
     const grisText = '#666666'
 
     // ─── ENCABEZADO ────────────────────────────────────────────────
+    const htx = headerTextX(!!logoBuffer)
     doc.rect(40, 40, W, 70).fill(azul)
+    drawHeaderLogo(doc, logoBuffer)
     doc.fillColor('white').fontSize(18).font('Helvetica-Bold')
-       .text(note.emisor_nombre || note.tenant_name || 'EMISOR', 55, 52, { width: W * 0.6 })
+       .text(note.emisor_nombre || note.tenant_name || 'EMISOR', htx, 52, { width: W * 0.6 - (htx - 55) })
 
     doc.fontSize(9).font('Helvetica')
     if (note.emisor_rfc) {
-      doc.text(`RFC: ${note.emisor_rfc}`, 55, 74)
-         .text(`Régimen: ${note.emisor_regime || '-'}  |  CP: ${note.emisor_zip || '-'}`, 55, 86)
+      doc.text(`RFC: ${note.emisor_rfc}`, htx, 74)
+         .text(`Régimen: ${note.emisor_regime || '-'}  |  CP: ${note.emisor_zip || '-'}`, htx, 86)
     }
 
     doc.fontSize(20).font('Helvetica-Bold')

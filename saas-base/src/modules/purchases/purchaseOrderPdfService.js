@@ -3,6 +3,7 @@
 const PDFDocument = require('pdfkit')
 const { query }   = require('../../db')
 const { addPraxionFooterPDF } = require('../../utils/praxionWitnessMark')
+const { loadTenantLogo, headerTextX, drawHeaderLogo } = require('../../utils/pdfBranding')
 
 /**
  * Genera el PDF de una Orden de Compra (representación impresa, NO fiscal).
@@ -43,7 +44,7 @@ async function generatePurchaseOrderPDF({ tenantId, orderId }) {
             tfi.tax_regime     AS emisor_regime,
             tfi.zip_code       AS emisor_zip,
             t.name             AS tenant_name,
-            t.brand_color_primary, t.brand_color_secondary
+            t.brand_color_primary, t.brand_color_secondary, t.logo_storage_path
        FROM purchase_orders po
        JOIN business_partners bp        ON bp.id = po.partner_id
        LEFT JOIN users u                ON u.id  = po.created_by
@@ -77,6 +78,8 @@ async function generatePurchaseOrderPDF({ tenantId, orderId }) {
   const primaryWarehouse = warehouses.length === 1 ? warehouses[0] : (warehouses[0] || '—')
   const multipleWarehouses = warehouses.length > 1
 
+  const logoBuffer = await loadTenantLogo(po.logo_storage_path)
+
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 40, size: 'LETTER' })
     const buffers = []
@@ -92,16 +95,18 @@ async function generatePurchaseOrderPDF({ tenantId, orderId }) {
     const grisText = '#666666'
 
     // ─── ENCABEZADO ─────────────────────────────────────────────
+    const htx = headerTextX(!!logoBuffer)
     doc.rect(40, 40, W, 70).fill(azul)
+    drawHeaderLogo(doc, logoBuffer)
     // Nombre del emisor a 13pt con ellipsis en una sola línea — antes
     // se rompía a 2 líneas con razones sociales largas y pisaba el RFC.
     doc.fillColor('white').fontSize(13).font('Helvetica-Bold')
-       .text(po.emisor_nombre || po.tenant_name || 'EMISOR', 55, 54,
-             { width: W * 0.42, ellipsis: true, height: 16, lineBreak: false })
+       .text(po.emisor_nombre || po.tenant_name || 'EMISOR', htx, 54,
+             { width: W * 0.42 - (htx - 55), ellipsis: true, height: 16, lineBreak: false })
     doc.fontSize(9).font('Helvetica')
-       .text(`RFC: ${po.emisor_rfc || ''}`, 55, 76, { width: W * 0.42 })
+       .text(`RFC: ${po.emisor_rfc || ''}`, htx, 76, { width: W * 0.42 - (htx - 55) })
        .text(`Régimen: ${po.emisor_regime || ''}  |  CP: ${po.emisor_zip || ''}`,
-             55, 88, { width: W * 0.42 })
+             htx, 88, { width: W * 0.42 - (htx - 55) })
 
     const padR    = 15
     const rightW  = 220

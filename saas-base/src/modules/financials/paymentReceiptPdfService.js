@@ -3,6 +3,7 @@
 const PDFDocument = require('pdfkit')
 const { query }   = require('../../db')
 const { addPraxionFooterPDF } = require('../../utils/praxionWitnessMark')
+const { loadTenantLogo, headerTextX, drawHeaderLogo } = require('../../utils/pdfBranding')
 
 /**
  * Genera el PDF de un recibo de pago (representación impresa, NO fiscal).
@@ -35,7 +36,7 @@ async function generatePaymentReceiptPDF({ tenantId, paymentId }) {
             tfi.tax_regime AS emisor_regime,
             tfi.zip_code AS emisor_zip,
             t.name AS tenant_name,
-            t.brand_color_primary, t.brand_color_secondary
+            t.brand_color_primary, t.brand_color_secondary, t.logo_storage_path
        FROM ar_payments arp
        JOIN accounts_receivable ar ON ar.id = arp.ar_id
        JOIN business_partners bp   ON bp.id = ar.partner_id
@@ -71,6 +72,8 @@ async function generatePaymentReceiptPDF({ tenantId, paymentId }) {
   const ym = `${dt.getFullYear()}${String(dt.getMonth() + 1).padStart(2, '0')}`
   const folio = `RP-${ym}-${p.id.slice(-6).toUpperCase()}`
 
+  const logoBuffer = await loadTenantLogo(p.logo_storage_path)
+
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 40, size: 'LETTER' })
     const buffers = []
@@ -86,15 +89,17 @@ async function generatePaymentReceiptPDF({ tenantId, paymentId }) {
     const grisText = '#666666'
 
     // ─── ENCABEZADO ──────────────────────────────────────────────
+    const htx = headerTextX(!!logoBuffer)
     doc.rect(40, 40, W, 70).fill(azul)
+    drawHeaderLogo(doc, logoBuffer)
     // Izquierda: nombre + datos fiscales del emisor. Ancho 0.42W para
     // no chocar con el título "RECIBO DE PAGO" de la derecha.
     doc.fillColor('white').fontSize(15).font('Helvetica-Bold')
-       .text(p.emisor_nombre || p.tenant_name || 'EMISOR', 55, 52, { width: W * 0.42 })
+       .text(p.emisor_nombre || p.tenant_name || 'EMISOR', htx, 52, { width: W * 0.42 - (htx - 55) })
     doc.fontSize(9).font('Helvetica')
-       .text(`RFC: ${p.emisor_rfc || ''}`, 55, 76, { width: W * 0.42 })
+       .text(`RFC: ${p.emisor_rfc || ''}`, htx, 76, { width: W * 0.42 - (htx - 55) })
        .text(`Régimen: ${p.emisor_regime || ''}  |  CP: ${p.emisor_zip || ''}`,
-             55, 88, { width: W * 0.42 })
+             htx, 88, { width: W * 0.42 - (htx - 55) })
 
     // Posicionamos la columna derecha con margen interior de 15pt al borde
     // del rect azul (en lugar de calcular con porcentajes que se desfasaban
