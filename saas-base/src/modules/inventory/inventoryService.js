@@ -350,7 +350,7 @@ async function recordProductionValidation(client, { tenantId, shift, userId }) {
 
   const ref = { referenceType: 'production_shift', referenceId: shift.id }
 
-  if (ptGoesToWipFirst) {
+  // Grupos de PT producido en el turno (producto × calidad) con su costo unitario.
   const { rows: pkgGroups } = await client.query(
     `SELECT
        CASE
@@ -372,45 +372,100 @@ async function recordProductionValidation(client, { tenantId, shift, userId }) {
     [shift.id]
   )
 
-  for (const grp of pkgGroups) {
-    if (!grp.product_id || !grp.total_units) continue
-    const units    = parseFloat(grp.total_units)
-    const costUnit = parseFloat(grp.cost_per_unit || 0)
-    const isSecond = grp.is_second_quality
-    const label    = isSecond ? 'Calidad 2' : 'Calidad 1'
-    const ptStatus = isSecond ? 'blocked' : 'available'
+  if (ptGoesToWipFirst) {
+    for (const grp of pkgGroups) {
+      if (!grp.product_id || !grp.total_units) continue
+      const units    = parseFloat(grp.total_units)
+      const costUnit = parseFloat(grp.cost_per_unit || 0)
+      const isSecond = grp.is_second_quality
+      const label    = isSecond ? 'Calidad 2' : 'Calidad 1'
+      const ptStatus = isSecond ? 'blocked' : 'available'
 
-    await recordMovement(client, {
-      tenantId,
-      warehouseId: warehouseWIP,
-      itemType:    'product',
-      itemId:      grp.product_id,
-      movementType:'production_wip_to_pt',
-      quantity:    -units,
-      unit:        'pza',
-      unitCost:    costUnit,
-      statusTo:    'wip',
-      ...ref,
-      notes:     `WIP→PT turno #${shift.shift_number} (${label})`,
-      createdBy: userId,
-    })
+      await recordMovement(client, {
+        tenantId,
+        warehouseId: warehouseWIP,
+        itemType:    'product',
+        itemId:      grp.product_id,
+        movementType:'production_wip_to_pt',
+        quantity:    -units,
+        unit:        'pza',
+        unitCost:    costUnit,
+        statusTo:    'wip',
+        ...ref,
+        notes:     `WIP→PT turno #${shift.shift_number} (${label})`,
+        createdBy: userId,
+      })
 
-    await recordMovement(client, {
-      tenantId,
-      warehouseId: warehousePT,
-      itemType:    'product',
-      itemId:      grp.product_id,
-      movementType:'production_pt_entry',
-      quantity:    units,
-      unit:        'pza',
-      unitCost:    costUnit,
-      statusTo:    ptStatus,
-      ...ref,
-      notes:     `Entrada PT turno #${shift.shift_number} (${label})${isSecond ? ' — bloqueada para venta' : ''}`,
-      createdBy: userId,
-    })
-  }
-  } // end if (ptGoesToWipFirst) — §6d
+      await recordMovement(client, {
+        tenantId,
+        warehouseId: warehousePT,
+        itemType:    'product',
+        itemId:      grp.product_id,
+        movementType:'production_pt_entry',
+        quantity:    units,
+        unit:        'pza',
+        unitCost:    costUnit,
+        statusTo:    ptStatus,
+        ...ref,
+        notes:     `Entrada PT turno #${shift.shift_number} (${label})${isSecond ? ' — bloqueada para venta' : ''}`,
+        createdBy: userId,
+      })
+    }
+  } else {
+    // §6d fix (2026-05-29): flujo directo (pt_goes_to_wip_first=false). El PT ya
+    // entró al almacén de producto terminado en la captura con costo 0 (el costo
+    // del turno aún no se conocía). Ahora que validamos y tenemos cost_per_unit,
+    // lo aplicamos. ANTES este caso se saltaba por completo → los lotes de PT
+    // quedaban con costo 0 al validar.
+    //
+    // Idempotente: solo revalúa los movimientos de captura que siguen en costo 0,
+    // así re-validar después de un revert no vuelve a inyectar el costo.
+    // Nota: si parte del PT se vendió ANTES de validar (caso raro en este flujo),
+    // el promedio resultante puede quedar ligeramente alto sobre el remanente.
+    for (const grp of pkgGroups) {
+      if (!grp.product_id || !grp.total_units) continue
+      const costUnit = parseFloat(grp.cost_per_unit || 0)
+      if (costUnit <= 0) continue
+      const ptStatus = grp.is_second_quality ? 'blocked' : 'available'
+
+      const { rows: zeroMovs } = await client.query(
+        `SELECT COALESCE(SUM(quantity), 0)::numeric AS units
+           FROM inventory_movements
+          WHERE tenant_id = $1 AND warehouse_id = $2 AND item_type = 'product'
+            AND item_id = $3 AND movement_type = 'production_pt_entry'
+            AND status_to = $4 AND unit_cost = 0
+            AND reference_type = 'shift_progress'
+            AND reference_id IN (SELECT id FROM shift_progress WHERE shift_id = $5)`,
+        [tenantId, warehousePT, grp.product_id, ptStatus, shift.id]
+      )
+      const unitsToRevalue = parseFloat(zeroMovs[0].units || 0)
+      if (unitsToRevalue <= 0) continue
+
+      // Inyecta el valor que faltó (entró a 0) sobre la cantidad actual del stock.
+      await client.query(
+        `UPDATE inventory_stock
+            SET avg_cost = CASE WHEN quantity > 0
+                 THEN ((quantity * avg_cost) + ($1::numeric * $2::numeric)) / quantity
+                 ELSE $2::numeric END,
+                updated_at = NOW()
+          WHERE tenant_id = $3 AND warehouse_id = $4 AND item_type = 'product'
+            AND item_id = $5 AND status = $6`,
+        [unitsToRevalue, costUnit, tenantId, warehousePT, grp.product_id, ptStatus]
+      )
+
+      // Pone el costo real en esos movimientos de captura (valor del kardex).
+      await client.query(
+        `UPDATE inventory_movements
+            SET unit_cost = $1::numeric
+          WHERE tenant_id = $2 AND warehouse_id = $3 AND item_type = 'product'
+            AND item_id = $4 AND movement_type = 'production_pt_entry'
+            AND status_to = $5 AND unit_cost = 0
+            AND reference_type = 'shift_progress'
+            AND reference_id IN (SELECT id FROM shift_progress WHERE shift_id = $6)`,
+        [costUnit, tenantId, warehousePT, grp.product_id, ptStatus, shift.id]
+      )
+    }
+  } // end if/else (ptGoesToWipFirst) — §6d
 
   const { rows: wipMp } = await client.query(
     `SELECT item_id, quantity, avg_cost
