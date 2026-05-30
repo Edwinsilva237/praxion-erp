@@ -309,9 +309,34 @@ async function getInvoice({ tenantId, invoiceId }) {
  *     se reduce el `amount_total` del AR-remisión. Si el AR-remisión queda
  *     en 0 se cancela.
  */
+// ── Retenciones (ISR/IVA) compartidas por todos los flujos de factura ────────
+// computeRetentions: calcula montos sobre la base gravable (pura, sin DB).
+// saveRetentions: persiste invoice_retentions + setea tax_withheld. El `total`
+// de cada flujo ya se ajusta restando withheldTotal ANTES de crear la factura y
+// su cuenta por cobrar, para que el cliente deba el neto.
+function computeRetentions(retentions, taxableBase) {
+  const computed = (retentions || [])
+    .map(r => ({ taxType: r.taxType === 'ISR' ? 'ISR' : 'IVA', rate: parseFloat(r.rate) || 0 }))
+    .filter(r => r.rate > 0)
+    .map(r => ({ ...r, amount: parseFloat((taxableBase * r.rate / 100).toFixed(2)) }))
+  const withheldTotal = parseFloat(computed.reduce((s, r) => s + r.amount, 0).toFixed(2))
+  return { computedRetentions: computed, withheldTotal }
+}
+async function saveRetentions(client, invoiceId, computedRetentions) {
+  if (!computedRetentions || computedRetentions.length === 0) return
+  for (const r of computedRetentions) {
+    await client.query(
+      `INSERT INTO invoice_retentions (invoice_id, tax_type, rate, amount) VALUES ($1,$2,$3,$4)`,
+      [invoiceId, r.taxType, r.rate, r.amount]
+    )
+  }
+  const withheld = parseFloat(computedRetentions.reduce((s, r) => s + r.amount, 0).toFixed(2))
+  await client.query(`UPDATE invoices SET tax_withheld = $1 WHERE id = $2`, [withheld, invoiceId])
+}
+
 async function createFromRemission({
   tenantId, deliveryNoteId, deliveryNoteLineIds,
-  series, paymentMethod, paymentForm, useCfdi, poNumber, notes,
+  series, paymentMethod, paymentForm, useCfdi, poNumber, notes, retentions = [],
   userId, ipAddress, userAgent,
 }) {
   return withTransaction(async (client) => {
@@ -412,7 +437,8 @@ async function createFromRemission({
       subtotal += lineSubtotal
     }
     const tax   = subtotal * 0.16
-    const total = subtotal + tax
+    const { computedRetentions, withheldTotal } = computeRetentions(retentions, subtotal)
+    const total = subtotal + tax - withheldTotal
 
     // TC del documento si la factura sigue siendo USD (caso legacy sin
     // original_*). Mantiene el comportamiento de revaluación previo a 072.
@@ -480,6 +506,7 @@ async function createFromRemission({
        issueDate, notes || null, userId]
     )
     const invoice = invRows[0]
+    await saveRetentions(client, invoice.id, computedRetentions)
 
     // Pre-cargar sat_unit_code por pack_option_id (si lo hay) para el CFDI
     const packIds1 = [...new Set(revaluedLines.map(l => l.pack_option_id).filter(Boolean))]
@@ -605,7 +632,7 @@ async function createFromRemission({
  */
 async function createFromRemissions({
   tenantId, deliveryNoteIds = [], deliveryNoteLineIds,
-  series, paymentMethod, paymentForm, useCfdi, poNumber, notes,
+  series, paymentMethod, paymentForm, useCfdi, poNumber, notes, retentions = [],
   userId, ipAddress, userAgent,
 }) {
   if (!Array.isArray(deliveryNoteIds) || deliveryNoteIds.length === 0) {
@@ -616,7 +643,7 @@ async function createFromRemissions({
     // y soporta split por líneas).
     return createFromRemission({
       tenantId, deliveryNoteId: deliveryNoteIds[0], deliveryNoteLineIds,
-      series, paymentMethod, paymentForm, useCfdi, poNumber, notes,
+      series, paymentMethod, paymentForm, useCfdi, poNumber, notes, retentions,
       userId, ipAddress, userAgent,
     })
   }
@@ -717,7 +744,8 @@ async function createFromRemissions({
       subtotal += lineSubtotal
     }
     const tax   = subtotal * 0.16
-    const total = subtotal + tax
+    const { computedRetentions, withheldTotal } = computeRetentions(retentions, subtotal)
+    const total = subtotal + tax - withheldTotal
 
     // TC para total_mxn cuando la factura sigue siendo USD (legacy sin original_*)
     let exchangeRateId    = note0.exchange_rate_id
@@ -787,6 +815,7 @@ async function createFromRemissions({
        issueDate, notes || null, userId]
     )
     const invoice = invRows[0]
+    await saveRetentions(client, invoice.id, computedRetentions)
 
     // Pre-cargar sat_unit_code por pack_option_id
     const packIds2 = [...new Set(revaluedLines.map(l => l.pack_option_id).filter(Boolean))]
@@ -871,7 +900,7 @@ async function createFromRemissions({
  * Solo para pedidos con direct_invoice = true.
  */
 async function createDirect({
-  tenantId, salesOrderId, series, paymentMethod, paymentForm, useCfdi, poNumber, notes,
+  tenantId, salesOrderId, series, paymentMethod, paymentForm, useCfdi, poNumber, notes, retentions = [],
   userId, ipAddress, userAgent,
 }) {
   return withTransaction(async (client) => {
@@ -923,7 +952,8 @@ async function createDirect({
       subtotal += lineSubtotal
     }
     const tax   = subtotal * 0.16
-    const total = subtotal + tax
+    const { computedRetentions, withheldTotal } = computeRetentions(retentions, subtotal)
+    const total = subtotal + tax - withheldTotal
 
     let exchangeRateId    = order.exchange_rate_id
     let exchangeRateValue = parseFloat(order.exchange_rate_value || 1)
@@ -999,6 +1029,7 @@ async function createDirect({
        issueDate, notes || null, userId]
     )
     const invoice = invRows[0]
+    await saveRetentions(client, invoice.id, computedRetentions)
 
     // Pre-cargar sat_unit_code por pack_option_id
     const packIds3 = [...new Set(revaluedLines.map(l => l.pack_option_id).filter(Boolean))]

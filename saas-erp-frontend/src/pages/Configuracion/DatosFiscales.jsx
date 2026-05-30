@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { fiscalProfilesApi } from '@/api/fiscalProfiles'
+import { processConfigApi } from '@/api/processConfig'
 import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
 import { fmtDate } from '@/utils/fmt'
@@ -301,6 +302,22 @@ export default function DatosFiscales() {
     onError: (e) => setError(e.response?.data?.error || e.message || 'Error al re-vincular'),
   })
 
+  // Flag de facturación: retenciones en todas las modalidades (no solo ocasional).
+  const { data: procCfg } = useQuery({
+    queryKey: ['tenant-process-config'],
+    queryFn:  processConfigApi.getConfig,
+    staleTime: 300000,
+    retry: false,
+  })
+  const retentionsMutation = useMutation({
+    mutationFn: (v) => processConfigApi.updateConfig({ enable_retentions: v }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tenant-process-config'] })
+      setMsg('Preferencia de retenciones actualizada.'); setError(null)
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al guardar la preferencia'),
+  })
+
   // ── Wizard inicial (no hay profile todavía) ────────────────────────────
   if (!isLoading && !profile) {
     return (
@@ -347,6 +364,29 @@ export default function DatosFiscales() {
           <button onClick={() => setMsg(null)} className="text-status-success">✕</button>
         </div>
       )}
+
+      {/* Preferencia: retenciones en todas las modalidades de factura */}
+      <Can do="process_config:update">
+        <div className="card p-5 flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-ink-primary">Retenciones en todas las facturas</p>
+            <p className="text-xs text-ink-muted mt-1 max-w-xl leading-relaxed">
+              Si lo activas, el editor de <strong>retenciones (ISR / IVA)</strong> aparece también en la factura
+              <strong> directa</strong> y <strong>desde remisión</strong>, no solo en la ocasional. Útil para
+              servicios (honorarios, fletes, arrendamiento). La venta de bienes normalmente no lleva retención.
+            </p>
+          </div>
+          <label className="flex items-center gap-2 text-sm shrink-0 cursor-pointer">
+            <input type="checkbox" className="w-5 h-5 accent-brand-600"
+              checked={!!procCfg?.enable_retentions}
+              disabled={retentionsMutation.isPending}
+              onChange={e => retentionsMutation.mutate(e.target.checked)} />
+            <span className="font-medium text-ink-secondary">
+              {procCfg?.enable_retentions ? 'Activado' : 'Desactivado'}
+            </span>
+          </label>
+        </div>
+      </Can>
 
       {/* Card principal: datos fiscales */}
       <div className="card p-5">

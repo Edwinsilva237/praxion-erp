@@ -55,6 +55,8 @@ const ALLOWED_UPDATES = [
   'require_revert_dual_approval',
   // Micro pyme: iniciar turno directo sin programación (mig 176)
   'allow_self_start_shift',
+  // Facturación: retenciones en todas las modalidades (mig 177)
+  'enable_retentions',
 ]
 
 // Conjuntos de valores enum válidos. Duplican los CHECK constraints en SQL,

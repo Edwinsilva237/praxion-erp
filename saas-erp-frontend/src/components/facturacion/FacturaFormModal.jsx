@@ -7,6 +7,8 @@ import { partnersApi } from '@/api/partners'
 import Spinner from '@/components/ui/Spinner'
 import SatCatalogSelect from '@/components/fiscal/SatCatalogSelect'
 import OccasionalInvoiceSection, { EMPTY_OC_LINE } from '@/components/facturacion/OccasionalInvoiceSection'
+import RetentionsEditor from '@/components/facturacion/RetentionsEditor'
+import { processConfigApi } from '@/api/processConfig'
 import { fmtMXN, fmtDate } from '@/utils/fmt'
 import clsx from 'clsx'
 
@@ -48,6 +50,18 @@ export function FacturaFormModal({ onClose, onCreated }) {
   })
   const [ocLines, setOcLines] = useState([{ ...EMPTY_OC_LINE }])
   const [ocRetentions, setOcRetentions] = useState([])
+
+  // Flag del tenant: ¿mostrar retenciones en factura directa y desde remisión?
+  // (la factura ocasional siempre las permite). Default false.
+  const { data: procCfg } = useQuery({
+    queryKey: ['tenant-process-config'],
+    queryFn:  processConfigApi.getConfig,
+    staleTime: 300000,
+  })
+  const enableRetentions = procCfg?.enable_retentions ?? false
+  const buildRetentions = () => ocRetentions
+    .filter(r => parseFloat(r.rate) > 0)
+    .map(r => ({ taxType: r.taxType, rate: parseFloat(r.rate) }))
 
   // Selecciones
   const [selectedNoteIds, setSelectedNoteIds] = useState([])
@@ -262,6 +276,7 @@ export function FacturaFormModal({ onClose, onCreated }) {
       useCfdi:         useCfdi       || undefined,
       poNumber:        poNumber.trim() || undefined,
       notes:           notes.trim()   || undefined,
+      retentions:      enableRetentions ? buildRetentions() : undefined,
     }),
     onSuccess: (inv) => {
       qc.invalidateQueries({ queryKey: ['invoices'] })
@@ -280,6 +295,7 @@ export function FacturaFormModal({ onClose, onCreated }) {
       useCfdi:       useCfdi       || undefined,
       poNumber:      poNumber.trim() || undefined,
       notes:         notes.trim()   || undefined,
+      retentions:    enableRetentions ? buildRetentions() : undefined,
     }),
     onSuccess: (inv) => {
       qc.invalidateQueries({ queryKey: ['invoices'] })
@@ -680,6 +696,14 @@ export function FacturaFormModal({ onClose, onCreated }) {
                 </p>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Retenciones — disponibles en directa/remisión si el tenant las habilitó.
+            La factura ocasional ya las trae en su propia sección. */}
+        {enableRetentions && mode !== 'ocasional' && (
+          <div className="bg-surface-elevated/60 border border-line-subtle rounded-xl p-4">
+            <RetentionsEditor retentions={ocRetentions} setRetentions={setOcRetentions} />
           </div>
         )}
 
