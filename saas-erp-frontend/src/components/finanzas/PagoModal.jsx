@@ -213,7 +213,7 @@ export function PagoModal({ onClose, onSaved, prefilledPartnerId = null, prefill
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
       <form onSubmit={handleSubmit}
-        className="card w-full max-w-3xl p-6 max-h-[92vh] overflow-y-auto flex flex-col gap-5">
+        className="card w-full max-w-4xl p-6 max-h-[92vh] overflow-y-auto flex flex-col gap-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-status-success/15 flex items-center justify-center shrink-0">
@@ -389,11 +389,10 @@ export function PagoModal({ onClose, onSaved, prefilledPartnerId = null, prefill
                   <thead>
                     <tr>
                       <th>Documento</th>
-                      <th>F. emisión</th>
                       <th>Vence</th>
                       <th>Estado</th>
                       <th className="text-right">Pendiente</th>
-                      <th className="text-right w-32">A aplicar</th>
+                      <th className="text-right w-44">A aplicar</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -410,14 +409,14 @@ export function PagoModal({ onClose, onSaved, prefilledPartnerId = null, prefill
                               <span className="font-mono text-brand-300">{d.document_number}</span>
                               {ppd && <span className="ml-1.5 badge-amber text-[10px]">PPD</span>}
                             </p>
+                            <p className="text-[10px] text-ink-muted mt-0.5">Emitida {fmtDate(d.issue_date)}</p>
                             {ppd && applied > 0 && (
                               <p className="text-[10px] text-teal-300 mt-0.5">
                                 Al guardar se emitirá un complemento de pago (CFDI tipo P).
                               </p>
                             )}
                           </td>
-                          <td className="text-ink-secondary">{fmtDate(d.issue_date)}</td>
-                          <td className={clsx(d.is_overdue ? 'text-status-danger font-semibold' : 'text-ink-secondary')}>
+                          <td className={clsx('whitespace-nowrap', d.is_overdue ? 'text-status-danger font-semibold' : 'text-ink-secondary')}>
                             {fmtDate(d.due_date)}
                           </td>
                           <td><Badge status={d.is_overdue ? 'overdue' : d.status} /></td>
@@ -428,7 +427,7 @@ export function PagoModal({ onClose, onSaved, prefilledPartnerId = null, prefill
                             <input type="number" step="0.01" min="0" inputMode="decimal"
                               value={appByArId[d.id] ?? ''}
                               onChange={e => updateApp(d.id, e.target.value)}
-                              className={clsx('input text-right text-sm h-8 py-0',
+                              className={clsx('input w-full text-right font-mono tabular-nums text-sm h-9',
                                 excess && 'border-status-danger/40 bg-status-danger/10')}
                               placeholder="0.00" />
                           </td>
