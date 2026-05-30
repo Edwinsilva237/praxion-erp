@@ -361,12 +361,17 @@ async function listScheduledShifts({ tenantId, operatorId, dateFrom, dateTo, sta
 }
 
 // ─── Turno del operador para hoy ─────────────────────────────────────────────
-// IMPORTANTE: usamos CURRENT_DATE de PostgreSQL (configurado con la timezone
-// del servidor, típicamente la del tenant), no `new Date().toISOString()` de
-// Node que siempre devuelve UTC. Esto evita que "hoy" cambie a la medianoche
-// UTC en lugar de la medianoche local del usuario.
+// "Hoy" debe ser el día LOCAL de operación, no el del servidor. En producción
+// Postgres corre en UTC (Render no fija timezone), así que CURRENT_DATE salta a
+// "mañana" a partir de las 18:00 de México (medianoche UTC) y ocultaba los
+// turnos del día — el operador no podía confirmar su presencia por la tarde.
+// Convertimos NOW() a la zona de operación y tomamos esa fecha.
+// TODO: cuando exista timezone por tenant, reemplazar la constante.
+const OPS_TIMEZONE = 'America/Mexico_City'
 async function getTodayShiftsForOperator({ tenantId, operatorId }) {
-  const { rows: dateRow } = await query(`SELECT CURRENT_DATE::text AS today`)
+  const { rows: dateRow } = await query(
+    `SELECT (NOW() AT TIME ZONE $1)::date::text AS today`, [OPS_TIMEZONE]
+  )
   const today = dateRow[0].today
   return listScheduledShifts({
     tenantId,
