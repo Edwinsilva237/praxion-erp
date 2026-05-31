@@ -134,10 +134,23 @@ export default function RolesTurno() {
     staleTime: 300000,
   })
   const selfStartMut = useMutation({
-    mutationFn: (v) => processConfigApi.updateConfig({ allow_self_start_shift: v }),
+    mutationFn: (v) => processConfigApi.updateConfig({
+      allow_self_start_shift: v,
+      // Al apagar el inicio directo, el inicio rápido deja de tener sentido.
+      ...(v ? {} : { allow_quick_order: false }),
+    }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tenant-process-config'] })
       setSuccessMsg('Modo de inicio de turno actualizado.')
+      setTimeout(() => setSuccessMsg(null), 2500)
+    },
+    onError: (err) => setServerError(err.response?.data?.error || err.message),
+  })
+  const quickOrderMut = useMutation({
+    mutationFn: (v) => processConfigApi.updateConfig({ allow_quick_order: v }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tenant-process-config'] })
+      setSuccessMsg('Inicio rápido actualizado.')
       setTimeout(() => setSuccessMsg(null), 2500)
     },
     onError: (err) => setServerError(err.response?.data?.error || err.message),
@@ -152,6 +165,42 @@ export default function RolesTurno() {
 
   const Dot = ({ on }) => (
     <span className={clsx('inline-block w-2 h-2 rounded-full', on ? 'bg-status-success' : 'bg-line-base')} />
+  )
+
+  // Selector de 2+ tarjetas tipo radio. Unifica el look de "modo de turno" y
+  // "modo de orden": una sola tarjeta resaltada por grupo, sin ambigüedad.
+  const OptionCards = ({ value, options, onSelect, disabled }) => (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {options.map((opt) => {
+        const active = value === opt.val
+        return (
+          <button
+            key={String(opt.val)}
+            type="button"
+            disabled={disabled}
+            onClick={() => { if (!active) onSelect(opt.val) }}
+            className={clsx(
+              'text-left rounded-xl border-2 p-3 transition-colors flex flex-col gap-1',
+              active ? 'border-brand-500 bg-brand-500/10' : 'border-line-base hover:border-line-strong',
+              disabled && 'opacity-60 cursor-not-allowed',
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-sm text-ink-primary flex items-center gap-2">
+                <Dot on={active} />
+                {opt.title}
+              </span>
+              {opt.badge && (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-status-success/15 text-status-success shrink-0">
+                  {opt.badge}
+                </span>
+              )}
+            </div>
+            <span className="text-[11px] text-ink-muted leading-relaxed">{opt.desc}</span>
+          </button>
+        )
+      })}
+    </div>
   )
 
   return (
@@ -182,25 +231,64 @@ export default function RolesTurno() {
         </div>
       )}
 
-      {/* Modo de inicio de turno (micro pyme) */}
-      <div className="card p-4 flex items-start justify-between gap-4">
+      {/* Modo de inicio de turno (micro pyme). Dos selectores tipo tarjeta
+          unificados: el de turno y, anidado, el de orden. */}
+      <div className="card p-4 flex flex-col gap-4">
         <div>
-          <p className="text-sm font-semibold text-ink-primary">Inicio de turno directo (micro pyme)</p>
-          <p className="text-xs text-ink-muted mt-1 max-w-2xl leading-relaxed">
-            Si lo activas, el capturista puede <strong>iniciar su turno desde la pantalla de Captura</strong> sin
-            que un supervisor lo programe — ideal para una sola línea que siempre hace lo mismo
-            ("inicia sesión y ejecuta"). Si lo dejas apagado, los turnos se planean en Programación.
+          <p className="text-sm font-semibold text-ink-primary">¿Cómo inician los turnos?</p>
+          <p className="text-xs text-ink-muted mt-0.5 mb-3 max-w-2xl leading-relaxed">
+            Define si un supervisor planea los turnos o si el operador arranca solo desde Captura.
           </p>
-        </div>
-        <label className={clsx('flex items-center gap-2 text-sm shrink-0', canManage ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed')}>
-          <input type="checkbox" className="w-5 h-5 accent-brand-600"
-            checked={!!cfg?.allow_self_start_shift}
+          <OptionCards
+            value={!!cfg?.allow_self_start_shift}
             disabled={!canManage || selfStartMut.isPending}
-            onChange={e => selfStartMut.mutate(e.target.checked)} />
-          <span className="font-medium text-ink-secondary">
-            {cfg?.allow_self_start_shift ? 'Activado' : 'Desactivado'}
-          </span>
-        </label>
+            onSelect={(v) => selfStartMut.mutate(v)}
+            options={[
+              {
+                val: false,
+                title: 'Turnos programados',
+                badge: null,
+                desc: 'Un supervisor planea los turnos en Programación. El operador solo ve los suyos asignados.',
+              },
+              {
+                val: true,
+                title: 'Inicio directo (micro pyme)',
+                badge: null,
+                desc: 'El operador inicia su turno solo desde Captura, sin programación. Ideal para una línea que siempre hace lo mismo.',
+              },
+            ]}
+          />
+        </div>
+
+        {/* Sub-opción: inicio rápido (crear la orden al vuelo). Solo aplica si el
+            inicio directo está activo. */}
+        {cfg?.allow_self_start_shift && (
+          <div className="border-t border-line-base pt-4">
+            <p className="text-sm font-semibold text-ink-primary">¿Cómo elige el operador qué producir?</p>
+            <p className="text-xs text-ink-muted mt-0.5 mb-3 max-w-2xl leading-relaxed">
+              El turno siempre necesita una orden (carga la receta, costea e inventaría). Elige quién la crea.
+            </p>
+            <OptionCards
+              value={!!cfg?.allow_quick_order}
+              disabled={!canManage || quickOrderMut.isPending}
+              onSelect={(v) => quickOrderMut.mutate(v)}
+              options={[
+                {
+                  val: false,
+                  title: 'Solo órdenes existentes',
+                  badge: 'Recomendado',
+                  desc: 'El operador solo toma una orden que tú ya creaste. Tú decides qué se fabrica.',
+                },
+                {
+                  val: true,
+                  title: 'Inicio rápido',
+                  badge: null,
+                  desc: 'Además de tomar órdenes, el operador puede crear la orden él mismo (producto + cantidad). Útil si el dueño es quien produce.',
+                },
+              ]}
+            />
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-4">

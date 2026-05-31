@@ -12,6 +12,7 @@ const { resolveLotPattern } = require('./productLotResolver')  // §5g
 const { resolveScrapType, legacyScrapTypeFor, legacyDestinationFor,
         DESTINATION_LEGACY_MAP } = require('./scrapTypeResolver')  // §6b
 const { evaluateAbnormal } = require('./abnormalScrapEvaluator')  // §6b
+const { fetchAndComputeScrapProductCost } = require('./scrapCosting')  // costeo de merma por tipo
 const { resolveQualityGrade } = require('./qualityGradeResolver')  // §6f
 const { userCanActOnShift, listShiftMembers, getHandoverResponsibleUserId } = require('./shiftAuthService')
 
@@ -1044,6 +1045,54 @@ async function selfStartShift({ tenantId, userId, ipAddress, userAgent }) {
     })
     return shift
   })
+}
+
+// Micro pyme — "Inicio rápido": crea una orden mínima (producto + cantidad), la
+// libera, inicia el turno y la deja como orden activa, todo en una llamada. Para
+// producir al vuelo sin crear la orden por separado. Reusa createOrder /
+// releaseOrder / selfStartShift / setShiftActiveOrder, así el costeo y el
+// inventario funcionan igual que con una orden normal.
+async function selfQuickStart({ tenantId, userId, productId, quantityPackages, lengthMm, ipAddress, userAgent }) {
+  const { rows: cfg } = await query(
+    `SELECT allow_self_start_shift, allow_quick_order FROM tenant_process_config WHERE tenant_id = $1`, [tenantId]
+  )
+  if (!cfg[0]?.allow_self_start_shift) {
+    throw createError(403, 'El inicio de turno directo no está habilitado para esta empresa.')
+  }
+  if (!cfg[0]?.allow_quick_order) {
+    throw createError(403, 'El inicio rápido no está habilitado. El operador debe elegir una orden ya creada.')
+  }
+  if (!productId) throw createError(400, 'Selecciona un producto.')
+  const qty = parseInt(quantityPackages, 10)
+  if (!qty || qty <= 0) throw createError(400, 'La cantidad de paquetes debe ser mayor a 0.')
+
+  // Receta vigente del producto — necesaria para que el costeo salga bien.
+  const { rows: rec } = await query(
+    `SELECT id FROM recipes WHERE tenant_id = $1 AND product_id = $2 AND valid_until IS NULL
+      ORDER BY created_at DESC LIMIT 1`,
+    [tenantId, productId]
+  )
+  const recipeId = rec[0]?.id || null
+  if (!recipeId) {
+    throw createError(400, 'El producto no tiene una receta vigente. Configúrala antes de usar el inicio rápido.')
+  }
+
+  // 1) Crear la orden (queda en 'draft').
+  const order = await createOrder({
+    tenantId, productId, quantityPackages: qty, lengthMm: lengthMm || null, recipeId,
+    notes: 'Inicio rápido (micro pyme)', userId, ipAddress, userAgent,
+  })
+  // 2) Liberarla. En micro pyme no bloqueamos el arranque por inventario; si
+  //    falta MP, el cierre/validación lo reflejará.
+  await releaseOrder({
+    tenantId, orderId: order.id, userId, ipAddress, userAgent,
+    lowStockOverrideReason: 'Inicio rápido (micro pyme)',
+  })
+  // 3) Iniciar el turno y 4) dejar la orden activa (released → in_progress).
+  const shift = await selfStartShift({ tenantId, userId, ipAddress, userAgent })
+  await setShiftActiveOrder({ tenantId, shiftId: shift.id, orderId: order.id, userId })
+
+  return { shift, order }
 }
 
 async function capturePackage({
@@ -3900,6 +3949,38 @@ async function validateShift({ tenantId, shiftId, approved, supervisorNotes, use
     return rows[0]
   }
 
+  // SaaS v2 §Fase3 (fix 2026-05-30): re-aplicar overhead al VALIDAR.
+  //
+  // El overhead se aplica al CERRAR (closeShiftWithOverhead), tomando una "foto"
+  // de los períodos de costo que existían en ese instante. Pero el costeo real
+  // (cost_per_unit) se calcula aquí, al validar — que suele ocurrir después.
+  //
+  // Si el dueño captura los montos de gastos indirectos DESPUÉS de cerrar pero
+  // ANTES de validar (flujo natural en micro pyme: "cierro, luego capturo costos,
+  // luego valido"), el cierre ya había tomado la foto vacía y el turno quedaba
+  // sin overhead. Re-aplicarlo aquí refresca estimated_overhead_total con los
+  // períodos vigentes para que el costo del turno SÍ los incluya.
+  //
+  // Idempotente (upsert en shift_overhead_application). No bloquea la validación.
+  try {
+    const { rows: pre } = await query(
+      `SELECT started_at, closed_at, mp_real_kg, pt_units_produced
+       FROM production_shifts WHERE id=$1 AND tenant_id=$2`,
+      [shiftId, tenantId]
+    )
+    if (pre[0]) {
+      const { applyOverheadToShift } = require('../overhead-costing/overheadApplicationService')
+      await applyOverheadToShift(shiftId, tenantId, {
+        startedAt:          pre[0].started_at,
+        endedAt:            pre[0].closed_at || new Date(),
+        totalKgProduced:    parseFloat(pre[0].mp_real_kg || 0),
+        totalUnitsProduced: parseInt(pre[0].pt_units_produced || 0),
+      })
+    }
+  } catch (err) {
+    console.warn('[overhead] re-aplicación al validar falló (no bloquea):', err.message)
+  }
+
   return withTransaction(async (client) => {
     const { rows: shiftRows } = await client.query(
       `SELECT ps.* FROM production_shifts ps WHERE ps.id=$1 AND ps.tenant_id=$2`,
@@ -3958,17 +4039,28 @@ async function validateShift({ tenantId, shiftId, approved, supervisorNotes, use
     )
     const avgCostPerKg = parseFloat(avgCostRows[0]?.avg_cost_per_kg || 0)
 
-    // Modelo D — Costo MP del turno generador:
+    // Costo MP del turno generador:
     //  • Peso PT producido al 100% del costo de la MP virgen.
-    //  • La merma capturada NO carga al costo del turno generador (cambio vs Modelo B).
-    //  • La merma entró al almacén REGRIND con costo embebido (avg × 1.20).
-    //    Cuando se reuse en otro turno, ESE turno absorbe el costo del reproceso
-    //    a través del avg_cost más alto de la merma reciclada.
+    //  • Merma: ya NO es 0 fijo — se costea por TIPO según tenant_scrap_types
+    //    (is_normal / recovery_value_pct) + shift_scrap.is_abnormal + flag
+    //    treat_abnormal_scrap_as_loss. Merma normal desechada carga al producto
+    //    (corrige sub-costeo en alimentos); anormal va a pérdida del período;
+    //    recuperable descuenta su % (plástico puede poner recovery=100 → 0).
     //  • La descontamos del almacén MP virgen (en recordProductionValidation) por
     //    peso_PT + merma, reflejando el consumo físico real.
     const mpCostPT      = totalProducedKg * avgCostPerKg
-    const mpCostScrap   = 0  // Modelo D: 0 — el costo se transfiere al turno que reuse la merma
-    const mpCost        = mpCostPT
+
+    const { rows: scrapCfgRows } = await client.query(
+      `SELECT treat_abnormal_scrap_as_loss FROM tenant_process_config WHERE tenant_id = $1`,
+      [tenantId]
+    )
+    const treatAbnormalAsLoss = scrapCfgRows[0]?.treat_abnormal_scrap_as_loss !== false
+    const scrapCost = await fetchAndComputeScrapProductCost(
+      (text, params) => client.query(text, params),
+      { shiftId, avgCostPerKg, treatAbnormalAsLoss }
+    )
+    const mpCostScrap   = scrapCost.productCost
+    const mpCost        = mpCostPT + mpCostScrap
 
     // Overhead estimado — ya aplicado por overheadApplicationService en closeShift
     // (production_shifts.estimated_overhead_total). El módulo legacy de costos
@@ -4158,27 +4250,58 @@ async function getShiftSummary({ tenantId, shiftId }) {
   const avgCostPerKg = parseFloat(mpCostRows[0]?.avg_cost_per_kg || 0)
   const costSource   = mpCostRows[0]?.cost_source || 'sin_datos'
 
-  // Modelo D — Costo MP del turno generador:
+  // Costo MP del turno generador:
   //  • PT al 100% del costo MP virgen.
-  //  • La merma capturada NO carga al costo de este turno (transferido al
-  //    turno que reuse la merma reciclada del REGRIND, que está valorada
-  //    a avg_cost × 1.20).
-  //  • Mostramos `mpCostScrapInfo` = valor en regrind (informativo) para
-  //    que el resumen pueda comunicar cuánto valor se "guardó" como activo.
-  const mpCostPT          = totalProducedKg  * avgCostPerKg
-  const mpCostScrap       = 0                                            // ya no se carga al turno
-  const mpCostScrapInfo   = scrapCapturedKg * avgCostPerKg * (1 + reprocessFactor)  // valor del regrind generado
-  const mpCostTotal       = mpCostPT
+  //  • Merma costeada por TIPO (tenant_scrap_types: is_normal / recovery_value_pct)
+  //    + shift_scrap.is_abnormal + flag treat_abnormal_scrap_as_loss. Mismo
+  //    cálculo que validateShift (módulo scrapCosting) para que el histórico
+  //    coincida con el cost_per_unit guardado.
+  //  • `mpCostScrapInfo` = valor informativo del regrind generado.
+  const { rows: scrapCfgSumRows } = await query(
+    `SELECT treat_abnormal_scrap_as_loss FROM tenant_process_config WHERE tenant_id = $1`,
+    [tenantId]
+  )
+  const treatAbnormalAsLoss = scrapCfgSumRows[0]?.treat_abnormal_scrap_as_loss !== false
+  const scrapCost = await fetchAndComputeScrapProductCost(query, { shiftId, avgCostPerKg, treatAbnormalAsLoss })
 
-  // Costos fijos (excluir el factor de reproceso que es config interna)
+  const mpCostPT          = totalProducedKg  * avgCostPerKg
+  const mpCostScrap       = scrapCost.productCost                        // merma normal no recuperable
+  const mpCostScrapLoss   = scrapCost.lossValue                          // merma a pérdida (no producto)
+  const mpCostScrapInfo   = scrapCapturedKg * avgCostPerKg * (1 + reprocessFactor)  // valor del regrind generado
+  const mpCostTotal       = mpCostPT + mpCostScrap
+
+  // Costos fijos LEGACY (shift_cost_snapshot). Vacío para tenants nuevos —
+  // se mantiene por historicidad de turnos viejos. Excluye el factor de
+  // reproceso que es config interna.
   const fixedCosts  = costs.filter(c => c.name !== '__scrap_factor__')
   const fixedTotal  = fixedCosts.reduce((s, c) => s + parseFloat(c.amount || 0), 0)
+
+  // Gastos indirectos (overhead) del módulo NUEVO de Costeo
+  // (tenant_overhead_items + shift_overhead_application). Estas filas se crean
+  // al validar el turno (applyOverheadToShift) y son las que de verdad alimentan
+  // el costeo hoy. Antes el histórico NO las leía → mostraba overhead $0.
+  const { rows: ovhRows } = await query(
+    `SELECT i.id, i.name, i.allocation_base, soa.basis_value, soa.estimated_amount
+       FROM shift_overhead_application soa
+       JOIN tenant_overhead_items i ON i.id = soa.overhead_item_id
+      WHERE soa.shift_id = $1
+      ORDER BY i.name`,
+    [shiftId]
+  )
+  const overheadItems = ovhRows.map(r => ({
+    id:             r.id,
+    name:           r.name,
+    allocationBase: r.allocation_base,
+    basisValue:     parseFloat(r.basis_value || 0),
+    amount:         parseFloat(r.estimated_amount || 0),
+  }))
+  const overheadTotal = overheadItems.reduce((s, o) => s + o.amount, 0)
 
   // Empaque (bolsa/etiqueta/caja) desde la receta vigente, escalado por la
   // producción real del turno. 0 si el producto no tiene receta con empaque.
   const packagingCost = await computeShiftPackagingCost(query, { shiftId, tenantId })
 
-  const totalCost   = mpCostTotal + fixedTotal + packagingCost
+  const totalCost   = mpCostTotal + fixedTotal + overheadTotal + packagingCost
 
   // §6c: NRV multi-calidad — calidades inferiores valoradas a expected_sale_price × kg
   let nrvLowerGrades = 0
@@ -4311,13 +4434,17 @@ async function getShiftSummary({ tenantId, shiftId }) {
       ptKg:             parseFloat(totalProducedKg.toFixed(3)),
       mpCostPT:         parseFloat(mpCostPT.toFixed(4)),
       scrapCapturedKg:  parseFloat(scrapCapturedKg.toFixed(3)),
-      mpCostScrap:      parseFloat(mpCostScrap.toFixed(4)),       // siempre 0 en Modelo D
+      mpCostScrap:      parseFloat(mpCostScrap.toFixed(4)),       // merma normal no recuperable cargada al producto
+      mpCostScrapLoss:  parseFloat(mpCostScrapLoss.toFixed(4)),   // merma a pérdida del período (NO al costo unitario)
       mpCostScrapInfo:  parseFloat(mpCostScrapInfo.toFixed(4)),   // valor del regrind generado (informativo)
       mpCostTotal:      parseFloat(mpCostTotal.toFixed(4)),
       // Alias legacy para compat — apunta al total MP
       estimatedMpKg:    parseFloat(totalProducedKg.toFixed(3)),
       estimatedMpCost:  parseFloat(mpCostTotal.toFixed(4)),
       fixedTotal:       parseFloat(fixedTotal.toFixed(4)),
+      // Gastos indirectos (overhead) del módulo nuevo — desglose por ítem + total
+      overheadItems:    overheadItems.map(o => ({ ...o, amount: parseFloat(o.amount.toFixed(4)) })),
+      overheadTotal:    parseFloat(overheadTotal.toFixed(4)),
       packagingCost:    parseFloat(packagingCost.toFixed(4)),
       totalCost:        parseFloat(totalCost.toFixed(4)),
       costPerUnit:      parseFloat(costPerUnit.toFixed(4)),
@@ -4827,7 +4954,7 @@ async function revertValidation({
 module.exports = {
   getOrdersQueue, listOrders, getOrder, createOrder, updateOrder, cancelOrder,
   releaseOrder, updateOrderPriority, reorderQueue, getOrderStockAvailability,
-  getActiveShifts, getShift, getShiftSummary, listShiftsHistory, reopenShift, openShift, selfStartShift, capturePackage,
+  getActiveShifts, getShift, getShiftSummary, listShiftsHistory, reopenShift, openShift, selfStartShift, selfQuickStart, capturePackage,
   loadMp, recordScrap, reportIncident, closeShift: closeShiftWithOverhead, forceCloseShift, validateShift,
   getHandoverSummary, acceptHandover, getClosedShiftSummary,
   previewStockForNewOrder,

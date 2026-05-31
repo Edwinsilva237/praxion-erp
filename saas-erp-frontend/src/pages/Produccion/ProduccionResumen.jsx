@@ -282,7 +282,7 @@ export default function ProduccionResumen() {
             <p style={{ fontSize:13, color:'#185FA5', fontWeight:500 }}>
               {hasMeters ? 'Costo por metro lineal' : 'Costo por pieza'}
             </p>
-            <p style={{ fontSize:11, color:'#378ADD', marginTop:2 }}>Incluye MP + gastos fijos del turno</p>
+            <p style={{ fontSize:11, color:'#378ADD', marginTop:2 }}>Incluye MP + gastos indirectos + empaque</p>
           </div>
           <div style={{ textAlign:'right' }}>
             <p style={{ fontSize:26, fontWeight:500, color:'#0C447C' }}>
@@ -406,26 +406,52 @@ export default function ProduccionResumen() {
 
       {/* Desglose de costos */}
       <Section title="Desglose de costos del turno">
-        {/* Materia prima estimada */}
+        {/* Materia prima (peso producido) */}
         {costs.avgCostPerKg > 0 && (
           <>
             <Row
-              label={`Materia prima estimada (${fmt(costs.estimatedMpKg,2)} kg × $${fmt(costs.avgCostPerKg,4)}/kg)`}
-              value={`$${fmt(costs.estimatedMpCost,2)}`}
+              label={`Materia prima (${fmt(costs.ptKg ?? costs.estimatedMpKg,2)} kg × $${fmt(costs.avgCostPerKg,4)}/kg)`}
+              value={`$${fmt(costs.mpCostPT ?? costs.estimatedMpCost,2)}`}
             />
             <p style={{ fontSize:11, color:'var(--color-text-secondary)', marginTop:-2, marginBottom:4 }}>
-              Base: {fmt(materials.goodKg + materials.secondKg, 2)} kg producidos + {fmt(costs.scrapFactor,1)}% merma estimada
+              Base: {fmt(materials.goodKg + materials.secondKg, 2)} kg producidos (peso de piezas buenas + calidades menores)
             </p>
           </>
         )}
-        {/* Costos fijos */}
+        {/* Merma cargada al producto (normal no recuperable) */}
+        {costs.mpCostScrap > 0 && (
+          <Row
+            label="Merma cargada al producto"
+            value={`$${fmt(costs.mpCostScrap,2)}`}
+          />
+        )}
+        {/* Merma a pérdida del período (informativo — NO entra al costo por pieza) */}
+        {costs.mpCostScrapLoss > 0 && (
+          <Row
+            label="Merma a pérdida del período (no carga al producto)"
+            value={`$${fmt(costs.mpCostScrapLoss,2)}`}
+            valueColor="var(--color-text-secondary)"
+          />
+        )}
+        {/* Costos fijos legacy (turnos antiguos) */}
         {costs.items.map((item) => (
           <Row key={item.id || item.name}
             label={item.name}
             value={`$${fmt(item.amount,2)}`}
           />
         ))}
-        {costs.items.length === 0 && costs.avgCostPerKg === 0 && (
+        {/* Gastos indirectos (overhead) del módulo de Costeo */}
+        {(costs.overheadItems || []).map((item) => (
+          <Row key={item.id || item.name}
+            label={`${item.name} (gasto indirecto)`}
+            value={`$${fmt(item.amount,2)}`}
+          />
+        ))}
+        {/* Empaque desde receta */}
+        {costs.packagingCost > 0 && (
+          <Row label="Empaque (receta)" value={`$${fmt(costs.packagingCost,2)}`} />
+        )}
+        {costs.items.length === 0 && (costs.overheadItems || []).length === 0 && costs.avgCostPerKg === 0 && (
           <p style={{ fontSize:13, color:'var(--color-text-secondary)' }}>Sin costos registrados para este turno.</p>
         )}
         <Divider />

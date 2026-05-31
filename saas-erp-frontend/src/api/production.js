@@ -78,6 +78,8 @@ export const productionApi = {
   confirmPresence:      (id)     => api.post(`${BASE}/scheduled-shifts/${id}/confirm`).then(r => r.data),
   // Micro pyme: iniciar turno directo sin programación (requiere flag).
   selfStartShift:       ()       => api.post(`${BASE}/shifts/self-start`).then(r => r.data),
+  // Micro pyme: inicio rápido — crea orden (producto+cantidad) + inicia turno + la deja activa.
+  selfQuickStart:       (body)   => api.post(`${BASE}/shifts/quick-start`, body).then(r => r.data),
 
   // Runtime: miembros del turno activo y reasignación del responsable del handover
   listShiftMembers:     (shiftId) => api.get(`${BASE}/shifts/${shiftId}/members`).then(r => r.data),

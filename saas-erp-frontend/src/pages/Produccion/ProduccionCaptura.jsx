@@ -141,13 +141,101 @@ function PriorityAlert({ alerts, onDismiss }) {
   )
 }
 
+// ── Micro pyme: pantalla de inicio con dos opciones ────────────────────────────
+// (A) Iniciar con una orden ya creada (de la cola) · (B) Inicio rápido:
+// elige producto + cantidad y el sistema crea la orden y arranca el turno.
+function MicroPymeStart({ products = [], selfStartMutation, selfQuickStartMutation, allowQuickOrder = false }) {
+  const [mode, setMode]       = useState(null) // null | 'quick'
+  const [productId, setPid]   = useState('')
+  const [qty, setQty]         = useState('')
+
+  // Sin inicio rápido: un solo botón. El operador arranca el turno y luego
+  // elige una orden ya creada de la cola (el dueño controla qué se produce).
+  if (!allowQuickOrder) {
+    return (
+      <div className="flex flex-col items-center gap-4 py-8">
+        <p className="font-medium text-ink-secondary">Inicia tu turno para empezar a capturar</p>
+        <button
+          onClick={() => selfStartMutation.mutate()}
+          disabled={selfStartMutation.isPending}
+          className="card p-6 hover:border-brand-500/40 transition-colors text-center flex flex-col items-center gap-2 w-full max-w-xs disabled:opacity-50">
+          {selfStartMutation.isPending ? <Spinner /> : <span className="text-4xl">▶️</span>}
+          <span className="font-semibold text-ink-primary text-lg">Iniciar turno</span>
+          <span className="text-[11px] text-ink-muted">Luego eliges la orden a producir de la cola</span>
+        </button>
+      </div>
+    )
+  }
+
+  if (mode === 'quick') {
+    const qtyN = parseInt(qty, 10)
+    return (
+      <div className="card p-5 max-w-md mx-auto flex flex-col gap-3">
+        <div>
+          <p className="font-semibold text-ink-primary">⚡ Inicio rápido</p>
+          <p className="text-xs text-ink-muted mt-0.5">
+            Elige el producto y la cantidad. El sistema crea la orden, arranca tu turno y te deja capturando.
+          </p>
+        </div>
+        <div>
+          <label className="label">Producto</label>
+          <select className="select" value={productId} onChange={e => setPid(e.target.value)}>
+            <option value="">Selecciona un producto…</option>
+            {products.map(p => (
+              <option key={p.id} value={p.id}>{p.sku ? `${p.sku} · ` : ''}{p.name}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label">Cantidad de paquetes (meta)</label>
+          <input type="number" min="1" inputMode="numeric" className="input"
+            value={qty} onChange={e => setQty(e.target.value)} placeholder="Ej. 35" />
+        </div>
+        <div className="flex gap-2 mt-1">
+          <button onClick={() => setMode(null)} className="btn-secondary flex-1"
+            disabled={selfQuickStartMutation.isPending}>Atrás</button>
+          <button
+            onClick={() => selfQuickStartMutation.mutate({ productId, quantityPackages: qtyN })}
+            disabled={!productId || !qtyN || qtyN <= 0 || selfQuickStartMutation.isPending}
+            className="btn-primary flex-1 justify-center h-12 font-bold">
+            {selfQuickStartMutation.isPending ? <Spinner size="sm" /> : 'Iniciar y producir'}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-4 py-8">
+      <p className="font-medium text-ink-secondary">¿Cómo quieres iniciar tu turno?</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
+        <button
+          onClick={() => selfStartMutation.mutate()}
+          disabled={selfStartMutation.isPending}
+          className="card p-5 hover:border-brand-500/40 transition-colors text-center flex flex-col items-center gap-1.5 disabled:opacity-50">
+          {selfStartMutation.isPending ? <Spinner /> : <span className="text-3xl">📋</span>}
+          <span className="font-semibold text-ink-primary">Iniciar con una orden</span>
+          <span className="text-[11px] text-ink-muted">Elige una orden ya creada de la cola</span>
+        </button>
+        <button
+          onClick={() => setMode('quick')}
+          className="card p-5 hover:border-brand-500/40 transition-colors text-center flex flex-col items-center gap-1.5">
+          <span className="text-3xl">⚡</span>
+          <span className="font-semibold text-ink-primary">Inicio rápido</span>
+          <span className="text-[11px] text-ink-muted">Producto + cantidad; la orden se crea sola</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Vista: pantalla de bienvenida / selección ──────────────────────────────────
 function PantallaSeleccion({
   activeShifts, myTodayShifts, queueOrders, loadingShifts, loadingMyShifts,
   shiftClosed, closedShiftId, closedAt,
   confirmMutation, reopenMutation,
   onSelectShift, onShiftClosed,
-  allowSelfStart, selfStartMutation,
+  allowSelfStart, allowQuickOrder, selfStartMutation, selfQuickStartMutation, products,
 }) {
   const scheduledShifts = myTodayShifts.filter(s => s.status === 'scheduled')
 
@@ -177,19 +265,12 @@ function PantallaSeleccion({
         />
       ) : activeShifts.length === 0 && scheduledShifts.length === 0 ? (
         allowSelfStart ? (
-          <div className="empty-state flex flex-col items-center gap-3">
-            <p className="font-medium text-ink-secondary">Listo para empezar</p>
-            <p className="text-sm text-ink-muted text-center">
-              Inicia tu turno y captura tu producción del día.
-            </p>
-            <button
-              onClick={() => selfStartMutation.mutate()}
-              disabled={selfStartMutation.isPending}
-              className="btn-primary w-full max-w-xs justify-center h-14 text-base font-bold"
-            >
-              {selfStartMutation.isPending ? <Spinner className="w-5 h-5" /> : '▶  Iniciar turno'}
-            </button>
-          </div>
+          <MicroPymeStart
+            products={products}
+            selfStartMutation={selfStartMutation}
+            selfQuickStartMutation={selfQuickStartMutation}
+            allowQuickOrder={allowQuickOrder}
+          />
         ) : (
           <div className="empty-state">
             <p className="font-medium text-ink-secondary">Sin turnos asignados hoy</p>
@@ -564,6 +645,22 @@ export default function ProduccionCaptura() {
     onError: (e) => showFeedback('error', e?.response?.data?.error || 'No se pudo iniciar el turno'),
   })
 
+  // Micro pyme: inicio rápido (crea orden + inicia turno + la deja activa).
+  const selfQuickStartMutation = useMutation({
+    mutationFn: (body) => productionApi.selfQuickStart(body),
+    onSuccess: ({ shift, order }) => {
+      setSelectedShift(shift.id)
+      setActiveOrderId(order.id)
+      setContinued(true)
+      queryClient.invalidateQueries({ queryKey: ['active-shifts'] })
+      queryClient.invalidateQueries({ queryKey: ['my-today-shifts'] })
+      queryClient.invalidateQueries({ queryKey: ['production-queue-capture'] })
+      setWaitingHandover(false)
+      setViewMode('captura') // ya tiene orden activa → directo a capturar
+    },
+    onError: (e) => showFeedback('error', e?.response?.data?.error || 'No se pudo iniciar el inicio rápido'),
+  })
+
   const captureMutation = useMutation({
     mutationFn: (body) => productionApi.capturePackage(selectedShift, body),
     onSuccess: (data) => {
@@ -762,7 +859,10 @@ export default function ProduccionCaptura() {
         onSelectShift={handleSelectShift}
         onShiftClosed={setShiftClosed}
         allowSelfStart={tenantConfig?.allow_self_start_shift}
+        allowQuickOrder={tenantConfig?.allow_quick_order}
         selfStartMutation={selfStartMutation}
+        selfQuickStartMutation={selfQuickStartMutation}
+        products={allProducts}
       />
     )
   }

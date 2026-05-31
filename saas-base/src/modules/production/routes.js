@@ -322,6 +322,20 @@ router.post('/shifts/self-start', checkPermission('production','create'), async 
     next(err)
   }
 })
+// Micro pyme: "inicio rápido" — crea la orden (producto+cantidad), la libera,
+// inicia el turno y la deja activa. Todo en un paso. Requiere allow_self_start_shift.
+router.post('/shifts/quick-start', checkPermission('production','create'), async (req,res,next) => {
+  try {
+    const { productId, quantityPackages, lengthMm } = req.body
+    res.status(201).json(await svc.selfQuickStart({
+      tenantId:tid(req), userId:uid(req), productId, quantityPackages, lengthMm,
+      ipAddress:ip(req), userAgent:ua(req)
+    }))
+  } catch(err){
+    if(err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
 router.post('/shifts/:id/reopen', async (req,res,next) => {
   try {
     res.json(await svc.reopenShift({

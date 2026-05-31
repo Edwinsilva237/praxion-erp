@@ -75,7 +75,9 @@ router.get('/current', tenantResolver, authGuard, async (req, res, next) => {
       `SELECT id, slug, name, display_name, logo_storage_path,
               brand_color_primary, brand_color_secondary,
               plan, is_active, is_sandbox, notification_email, modules,
-              suspended_reason, suspended_at
+              suspended_reason, suspended_at,
+              (SELECT allow_self_start_shift FROM tenant_process_config WHERE tenant_id = tenants.id) AS allow_self_start_shift,
+              (SELECT allow_quick_order FROM tenant_process_config WHERE tenant_id = tenants.id) AS allow_quick_order
          FROM tenants WHERE id = $1`,
       [req.tenant.id]
     )
@@ -110,6 +112,8 @@ router.get('/current', tenantResolver, authGuard, async (req, res, next) => {
       modules:               t.modules || {},
       suspended_reason:      t.suspended_reason,
       suspended_at:          t.suspended_at,
+      allow_self_start_shift: t.allow_self_start_shift === true,
+      allow_quick_order:      t.allow_quick_order === true,
       logo_url:              logoUrl,
     })
   } catch (err) { next(err) }

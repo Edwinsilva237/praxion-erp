@@ -55,6 +55,8 @@ const ALLOWED_UPDATES = [
   'require_revert_dual_approval',
   // Micro pyme: iniciar turno directo sin programación (mig 176)
   'allow_self_start_shift',
+  // Micro pyme: permitir crear la orden al iniciar (inicio rápido) (mig 179)
+  'allow_quick_order',
   // Facturación: retenciones en todas las modalidades (mig 177)
   'enable_retentions',
 ]
