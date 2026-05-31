@@ -28,6 +28,7 @@ export const productionApi = {
   getActiveShifts:  ()         => api.get(`${BASE}/shifts/active`).then(r => r.data),
   getShift:         (id)       => api.get(`${BASE}/shifts/${id}`).then(r => r.data),
   getShiftSummary:  (id)       => api.get(`${BASE}/shifts/${id}/summary`).then(r => r.data),
+  downloadShiftSummaryPdf: (id) => api.get(`${BASE}/shifts/${id}/summary/pdf`, { responseType: 'blob' }).then(r => r.data),
   getShiftsHistory: (params)   => api.get(`${BASE}/shifts/history`, { params }).then(r => r.data),
   openShift:        (body)     => api.post(`${BASE}/shifts`, body).then(r => r.data),
   closeShift:       (id)       => api.post(`${BASE}/shifts/${id}/close`).then(r => r.data),

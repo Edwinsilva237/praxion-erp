@@ -21,24 +21,25 @@ function fmtNow() {
 }
 
 /**
- * Modal para capturar una firma "de entrega" en la pantalla del celular.
- * Pensado para recepciones sin documento de respaldo (ej. paquetería): quien
- * ENTREGA la mercancía firma con el dedo como evidencia.
+ * Modal para capturar la firma del REPARTIDOR DEL PROVEEDOR en la pantalla del
+ * celular. Pensado para cuando el proveedor entrega mercancía SIN una remisión
+ * que la respalde: su repartidor (que sí sabe qué entrega) firma como acuse.
+ * NO es para paquetería — ahí el mensajero no puede dar fe del contenido y la
+ * evidencia adecuada es la foto del paquete + su guía.
  *
- * Compone un PNG tipo comprobante (firma + nombre de quien entrega + empresa +
- * fecha/hora) y lo devuelve como File vía `onSigned(file)` para subirlo como
- * evidencia de la recepción (reutiliza la infraestructura de evidencia existente).
+ * Compone un PNG tipo comprobante (firma + nombre de quien entrega + fecha/hora)
+ * y lo devuelve como File vía `onSigned(file)` para subirlo como evidencia de la
+ * recepción (reutiliza la infraestructura de evidencia existente).
  *
  * Props:
- *   title     — encabezado del modal (default "Firma de entrega")
+ *   title     — encabezado del modal (default "Firma del repartidor del proveedor")
  *   docLabel  — folio/identificador a estampar en el comprobante (ej. folio de recepción)
  *   onClose() — cerrar sin firmar
  *   onSigned(file) — recibe el File PNG compuesto
  */
-export default function SignatureCaptureModal({ title = 'Firma de entrega', docLabel, onClose, onSigned }) {
+export default function SignatureCaptureModal({ title = 'Firma del repartidor del proveedor', docLabel, onClose, onSigned }) {
   const padRef = useRef(null)
   const [name, setName]       = useState('')
-  const [company, setCompany] = useState('')
   const [sigEmpty, setSigEmpty] = useState(true)
   const [busy, setBusy]       = useState(false)
   const [error, setError]     = useState(null)
@@ -76,16 +77,12 @@ export default function SignatureCaptureModal({ title = 'Firma de entrega', docL
     const dw = sigImg.width * ratio, dh = sigImg.height * ratio
     ctx.drawImage(sigImg, boxX + pad + (availW - dw) / 2, boxY + pad + (availH - dh) / 2, dw, dh)
 
-    // Pie: nombre, empresa, fecha
+    // Pie: nombre, fecha
     ctx.strokeStyle = '#111827'; ctx.lineWidth = 1.5
     ctx.beginPath(); ctx.moveTo(40, 540); ctx.lineTo(W - 40, 540); ctx.stroke()
 
     ctx.fillStyle = '#111827'; ctx.font = `bold 24px ${FONT}`
     ctx.fillText(`Entregó: ${name.trim()}`, 40, 576)
-    if (company.trim()) {
-      ctx.fillStyle = '#374151'; ctx.font = `20px ${FONT}`
-      ctx.fillText(company.trim(), 40, 604)
-    }
     ctx.fillStyle = '#6b7280'; ctx.font = `18px ${FONT}`; ctx.textAlign = 'right'
     ctx.fillText(`Fecha: ${fmtNow()}`, W - 40, 576)
     ctx.textAlign = 'left'
@@ -127,8 +124,8 @@ export default function SignatureCaptureModal({ title = 'Firma de entrega', docL
         </div>
 
         <p className="text-xs text-ink-secondary">
-          Pide a quien <strong>entrega</strong> la mercancía que firme aquí. Sirve como evidencia
-          cuando no hay un documento que respalde la entrega (ej. paquetería).
+          Para cuando el <strong>proveedor entrega sin remisión</strong>. Pide a su repartidor que
+          firme aquí como acuse de la entrega. (Para paquetería usa mejor foto del paquete y su guía.)
         </p>
 
         <div>
@@ -144,17 +141,10 @@ export default function SignatureCaptureModal({ title = 'Firma de entrega', docL
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label className="label">Nombre de quien entrega <span className="text-status-danger">*</span></label>
-            <input className="input text-base" value={name}
-              onChange={e => setName(e.target.value)} placeholder="Ej: Juan Pérez" />
-          </div>
-          <div>
-            <label className="label">Empresa / paquetería</label>
-            <input className="input text-base" value={company}
-              onChange={e => setCompany(e.target.value)} placeholder="Ej: Estafeta (opcional)" />
-          </div>
+        <div>
+          <label className="label">Nombre de quien entrega <span className="text-status-danger">*</span></label>
+          <input className="input text-base" value={name}
+            onChange={e => setName(e.target.value)} placeholder="Ej: Juan Pérez" />
         </div>
 
         {error && <p className="field-error">{error}</p>}

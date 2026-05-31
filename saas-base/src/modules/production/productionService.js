@@ -4200,6 +4200,24 @@ async function getShiftSummary({ tenantId, shiftId }) {
   // scrapKg "histórico" — diferencia con cargas reales (cuando sí hay loadMp).
   const scrapKg     = Math.max(0, totalMpKg - goodKg - secondKg)
 
+  // Split operador vs supervisor: la merma "agregada" por el supervisor queda
+  // registrada en shift_corrections (action='create', target_type='shift_scrap').
+  // El resto de la merma capturada es del operador. Lo consume el resumen para
+  // mostrar el desglose ("├ Operador / └ Supervisor agregada").
+  const { rows: supScrapRows } = await query(
+    `SELECT target_id FROM shift_corrections
+     WHERE shift_id = $1 AND target_type = 'shift_scrap' AND action = 'create'`,
+    [shiftId]
+  )
+  const supScrapIds = new Set(supScrapRows.map(r => r.target_id))
+  let scrapByOperatorKg = 0, scrapBySupervisorKg = 0
+  let scrapOperatorCount = 0, scrapSupervisorCount = 0
+  for (const sc of (shift.scrap || [])) {
+    const kg = parseFloat(sc.kg || 0)
+    if (supScrapIds.has(sc.id)) { scrapBySupervisorKg += kg; scrapSupervisorCount++ }
+    else                         { scrapByOperatorKg  += kg; scrapOperatorCount++ }
+  }
+
   // Metros por orden
   const orderMap = {}
   for (const pkg of goodPkgs) {
@@ -4436,6 +4454,22 @@ async function getShiftSummary({ tenantId, shiftId }) {
       scrapKg:          parseFloat(scrapKg.toFixed(3)),
       scrapCapturedKg:  parseFloat(scrapCapturedKg.toFixed(3)),
       scrapPct:         totalMpKg > 0 ? parseFloat((scrapKg/totalMpKg*100).toFixed(2)) : 0,
+      // Merma REPORTADA = la realmente capturada (shift_scrap), distinta de la
+      // implícita por diferencia de pesos (scrapKg). El frontend del resumen las
+      // muestra por separado: la reportada y la "diferencia de balance".
+      scrapReportedKg:    parseFloat(scrapCapturedKg.toFixed(3)),
+      scrapPctReported:   totalMpKg > 0 ? parseFloat((scrapCapturedKg/totalMpKg*100).toFixed(2)) : 0,
+      // Desglose operador / supervisor de la merma reportada.
+      scrapByOperatorKg:    parseFloat(scrapByOperatorKg.toFixed(3)),
+      scrapBySupervisorKg:  parseFloat(scrapBySupervisorKg.toFixed(3)),
+      scrapOperatorCount,
+      scrapSupervisorCount,
+      // Diferencia de balance = MP cargada − producido (bueno + 2da) − merma reportada.
+      // Si es grande, hay pesajes/capturas que no cuadran.
+      scrapBalanceDiff:    parseFloat((totalMpKg - goodKg - secondKg - scrapCapturedKg).toFixed(3)),
+      scrapBalanceDiffPct: totalMpKg > 0
+        ? parseFloat(((totalMpKg - goodKg - secondKg - scrapCapturedKg) / totalMpKg * 100).toFixed(2))
+        : 0,
     },
     costs: {
       items:            fixedCosts,

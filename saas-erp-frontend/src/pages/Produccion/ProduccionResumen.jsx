@@ -7,6 +7,7 @@ import { processConfigApi } from '@/api/processConfig'
 import api from '@/api/axios'
 import useAuthStore from '@/store/useAuthStore'
 import Spinner from '@/components/ui/Spinner'
+import { downloadBlob, printBlob } from '@/utils/downloadBlob'
 import clsx from 'clsx'
 
 const fmt  = (n, d=2) => Number(n||0).toLocaleString('es-MX', { minimumFractionDigits:d, maximumFractionDigits:d })
@@ -166,6 +167,21 @@ export default function ProduccionResumen() {
   const navigate = useNavigate()
   const can = useAuthStore(s => s.can)
   const [showRevert, setShowRevert] = useState(false)
+  const [genPdf, setGenPdf] = useState(false)
+
+  async function handlePdf(print) {
+    setGenPdf(true)
+    try {
+      const blob = await productionApi.downloadShiftSummaryPdf(id)
+      const name = `Turno-${summary?.shift?.shiftNumber ?? id}`
+      if (print) await printBlob(blob, name)
+      else await downloadBlob(blob, `${name}.pdf`)
+    } catch (e) {
+      alert('No se pudo generar el PDF: ' + (e.response?.data?.error || e.message))
+    } finally {
+      setGenPdf(false)
+    }
+  }
 
   const { data: summary, isLoading, error } = useQuery({
     queryKey: ['shift-summary', id],
@@ -248,6 +264,14 @@ export default function ProduccionResumen() {
           }}>
             {STATUS_LABEL[shift.status] || shift.status}
           </span>
+          <div style={{ display:'flex', gap:6 }}>
+            <button onClick={() => handlePdf(false)} disabled={genPdf} className="btn-secondary btn-sm">
+              {genPdf ? '…' : 'PDF'}
+            </button>
+            <button onClick={() => handlePdf(true)} disabled={genPdf} className="btn-secondary btn-sm">
+              Imprimir
+            </button>
+          </div>
           {shift.status === 'reviewed' && can('production', 'revert_validation') && (
             <button onClick={() => setShowRevert(true)} className="btn-secondary btn-sm">
               ⚠ Revertir validación

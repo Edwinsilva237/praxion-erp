@@ -11,6 +11,7 @@ const svcSched            = require('./scheduledShiftService')
 const svcShiftCfg         = require('./shiftConfigService')
 const { redactOrder, redactOrderList } = require('./recipeRedactor')
 const { getUserPermissions } = require('../roles/permissionService')
+const { generateShiftSummaryPDF } = require('./shiftSummaryPdfService')
 
 const router = express.Router()
 router.use(tenantResolver)
@@ -229,6 +230,19 @@ router.get('/shifts/:id/summary', checkPermission('production','read'), async (r
     const summary = await svc.getShiftSummary({ tenantId:tid(req), shiftId:req.params.id })
     if (!summary) return res.status(404).json({ error:'Turno no encontrado.' })
     res.json(summary)
+  } catch(err){next(err)}
+})
+
+// PDF del resumen del turno con branding del tenant (imprimir / compartir).
+// Reusa getShiftSummary (misma fuente de verdad que la pantalla) — no recalcula.
+router.get('/shifts/:id/summary/pdf', checkPermission('production','read'), async (req,res,next) => {
+  try {
+    const summary = await svc.getShiftSummary({ tenantId:tid(req), shiftId:req.params.id })
+    if (!summary) return res.status(404).json({ error:'Turno no encontrado.' })
+    const buf = await generateShiftSummaryPDF({ tenantId:tid(req), summary })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="turno-${summary.shift.shiftNumber}.pdf"`)
+    res.send(buf)
   } catch(err){next(err)}
 })
 

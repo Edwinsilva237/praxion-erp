@@ -23,15 +23,32 @@ const SignaturePad = forwardRef(function SignaturePad({ onChange, className = ''
   const drawing   = useRef(false)
   const lastPt    = useRef({ x: 0, y: 0 })
   const dirty     = useRef(false)
+  const lastSize  = useRef({ w: 0, h: 0 })
   const [empty, setEmpty] = useState(true)
 
   // Ajusta el tamaño real del lienzo al de su contenedor, respetando el
-  // devicePixelRatio para que el trazo se vea nítido. Re-pinta el fondo blanco.
-  const setupCanvas = useCallback(() => {
+  // devicePixelRatio para que el trazo se vea nítido.
+  //
+  // `preserve`: cuando es true conserva lo ya dibujado (lo recorta a un canvas
+  // temporal y lo vuelve a pintar tras redimensionar). Crítico en móvil: al
+  // enfocar un input aparece el teclado → la ventana hace `resize` → si no
+  // preserváramos, se borraría la firma a medio capturar.
+  const setupCanvas = useCallback((preserve = false) => {
     const canvas = canvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
-    const dpr  = window.devicePixelRatio || 1
+    if (rect.width === 0 || rect.height === 0) return // en transición: no tocar
+
+    // Snapshot del contenido actual (en píxeles de dispositivo).
+    let snapshot = null
+    if (preserve && canvas.width > 0 && canvas.height > 0) {
+      snapshot = document.createElement('canvas')
+      snapshot.width  = canvas.width
+      snapshot.height = canvas.height
+      snapshot.getContext('2d').drawImage(canvas, 0, 0)
+    }
+
+    const dpr = window.devicePixelRatio || 1
     canvas.width  = Math.max(1, Math.round(rect.width * dpr))
     canvas.height = Math.max(1, Math.round(rect.height * dpr))
     const ctx = canvas.getContext('2d')
@@ -42,16 +59,26 @@ const SignaturePad = forwardRef(function SignaturePad({ onChange, className = ''
     ctx.strokeStyle = '#111827'
     ctx.fillStyle = '#ffffff'
     ctx.fillRect(0, 0, rect.width, rect.height)
+    // Re-pintamos el trazo previo escalado al nuevo tamaño (ctx ya está en
+    // coordenadas CSS por el scale(dpr), por eso dibujamos a rect.width/height).
+    if (snapshot) ctx.drawImage(snapshot, 0, 0, rect.width, rect.height)
     ctxRef.current = ctx
+    lastSize.current = { w: rect.width, h: rect.height }
   }, [])
 
   useEffect(() => {
     setupCanvas()
+    // Solo re-configuramos si el TAMAÑO del lienzo cambió de verdad. Así, cuando
+    // el teclado aparece/desaparece sin reflujar el canvas, no hacemos nada
+    // (no se borra ni se ve degradado). Si sí cambió (giro de pantalla), se
+    // preserva el trazo.
     const onResize = () => {
-      // Al redimensionar se pierde el trazo (re-setup limpia). Aceptable: el
-      // teclado virtual o el giro de pantalla es raro durante la firma.
-      setupCanvas()
-      if (dirty.current) { dirty.current = false; setEmpty(true); onChange?.(true) }
+      const c = canvasRef.current
+      if (!c) return
+      const r = c.getBoundingClientRect()
+      if (Math.abs(r.width - lastSize.current.w) < 1 &&
+          Math.abs(r.height - lastSize.current.h) < 1) return
+      setupCanvas(true)
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)

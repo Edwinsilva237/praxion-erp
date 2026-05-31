@@ -231,17 +231,18 @@ function EvidenciaSection({ receiptId, existingFilename, existingMimetype, onUpl
         )}
       </div>
 
-      {/* Firma en pantalla — para recepciones sin documento (ej. paquetería) */}
+      {/* Firma en pantalla — proveedor entrega sin remisión y su repartidor firma el acuse */}
       <button type="button" onClick={() => setSignOpen(true)}
         className="btn-secondary btn-sm justify-center">
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
             d="M3 21l3.6-.9a2 2 0 00.95-.53l11.4-11.4a2 2 0 000-2.83l-1.3-1.3a2 2 0 00-2.83 0L3.43 14.45a2 2 0 00-.53.95L2 19l1 2z"/>
         </svg>
-        Firmar entrega en pantalla
+        Firma del repartidor del proveedor
       </button>
       <p className="text-[11px] text-ink-muted -mt-1">
-        Sin documento del proveedor (ej. paquetería): que firme quien entrega.
+        El proveedor entrega sin remisión: que firme su repartidor como acuse. (Si llega por
+        paquetería, mejor toma foto del paquete y su guía.)
       </p>
 
       {error && <p className="field-error">{error}</p>}
