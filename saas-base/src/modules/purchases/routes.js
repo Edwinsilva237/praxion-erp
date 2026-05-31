@@ -17,6 +17,7 @@ const attachmentService       = require('../attachments/attachmentService')
 const storage                 = require('../../utils/storage')
 const config                  = require('../../config')
 const { generatePurchaseOrderPDF } = require('./purchaseOrderPdfService')
+const { generateReceiptPDF }       = require('./receiptPdfService')
 
 // Multer para XML y PDF de facturas/OC de proveedor
 const uploadDoc = multer({
@@ -365,6 +366,62 @@ router.post('/receipts/:id/cancel', checkPermission('purchases', 'update'), asyn
     res.json(receipt)
   } catch (err) { next(err) }
 })
+
+/**
+ * GET /api/purchases/receipts/:id/pdf
+ * PDF de la recepción con branding del tenant (logo + colores). Incluye la
+ * evidencia/firma de entrega cuando es imagen.
+ */
+router.get('/receipts/:id/pdf', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const buf = await generateReceiptPDF({ tenantId: req.tenant.id, receiptId: req.params.id })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="recepcion-${req.params.id}.pdf"`)
+    res.send(buf)
+  } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/receipts/:id/evidence
+ * Sube (o reemplaza) la evidencia de una recepción: foto, PDF escaneado o la
+ * firma digital de quien entrega (PNG). Form-data: file (PDF/JPG/PNG/WebP).
+ */
+router.post('/receipts/:id/evidence',
+  checkPermission('purchases', 'create'),
+  uploadEvidence.single('file'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'Se requiere un archivo.' })
+      const result = await supplierReceiptService.uploadEvidence({
+        tenantId: req.tenant.id, receiptId: req.params.id,
+        buffer: req.file.buffer, originalname: req.file.originalname,
+        mimetype: req.file.mimetype, userId: req.auth.userId,
+      })
+      res.status(201).json(result)
+    } catch (err) { next(err) }
+  }
+)
+
+/**
+ * GET /api/purchases/receipts/:id/evidence
+ * Sirve la evidencia de la recepción. proxy=true: el backend transmite los bytes
+ * en vez de redirigir a R2 (cuyo CORS no permite el origen móvil/webview).
+ */
+router.get('/receipts/:id/evidence',
+  checkPermission('purchases', 'read'),
+  async (req, res, next) => {
+    try {
+      const file = await supplierReceiptService.getEvidenceFile({
+        tenantId: req.tenant.id, receiptId: req.params.id,
+      })
+      if (!file) return res.status(404).json({ error: 'Sin evidencia.' })
+      await storage.serve(res, file.storagePath, {
+        mimeType: file.mimetype, filename: file.filename,
+        disposition: 'inline', proxy: true,
+      })
+    } catch (err) { next(err) }
+  }
+)
 
 // ─── Facturas y CXP de proveedor ─────────────────────────────────────────────
 

@@ -16,6 +16,10 @@ export const purchasesApi = {
   downloadOrderPdf: (id) =>
     api.get(`${B}/orders/${id}/pdf`, { responseType: 'blob' }).then(r => r.data),
 
+  // PDF de la recepción con branding del tenant (incluye firma/evidencia)
+  downloadReceiptPdf: (id) =>
+    api.get(`${B}/receipts/${id}/pdf`, { responseType: 'blob' }).then(r => r.data),
+
   // ── Recepciones ────────────────────────────────────────────────────────
   listReceipts:   (p) => api.get(`${B}/receipts`, { params: p }).then(r => r.data),
   getReceipt:     (id) => api.get(`${B}/receipts/${id}`).then(r => r.data),

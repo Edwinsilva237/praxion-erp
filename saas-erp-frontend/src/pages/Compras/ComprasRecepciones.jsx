@@ -8,12 +8,14 @@ import { processConfigApi } from '@/api/processConfig'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
+import SignatureCaptureModal from '@/components/ui/SignatureCaptureModal'
 import Can from '@/components/auth/Can'
 import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob, printBlob } from '@/utils/downloadBlob'
 import { useDocumentScanner } from '@/hooks/useDocumentScanner'
 import clsx from 'clsx'
 import api from '@/api/axios'
+import { Capacitor } from '@capacitor/core'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const EMPTY_LINE = () => ({
@@ -37,11 +39,12 @@ function DiffBadge({ ordered, received, unit }) {
 }
 
 // ── Sección de evidencia reutilizable ─────────────────────────────────────────
-function EvidenciaSection({ receiptId, existingFilename, existingMimetype, onUploaded, onFileSelected }) {
+function EvidenciaSection({ receiptId, existingFilename, existingMimetype, onUploaded, onFileSelected, docLabel }) {
   const [uploading, setUploading] = useState(false)
   const [error, setError]         = useState(null)
   const [preview, setPreview]     = useState(null)
   const [cameraOpen, setCameraOpen] = useState(false)
+  const [signOpen, setSignOpen]   = useState(false)
   const videoRef   = useRef(null)
   const streamRef  = useRef(null)
   const fileRef    = useRef(null)
@@ -87,6 +90,34 @@ function EvidenciaSection({ receiptId, existingFilename, existingMimetype, onUpl
     } catch (e) {
       const msg = String(e?.message || '')
       if (!/cancel/i.test(msg)) setError('No se pudo escanear: ' + (e?.message || 'inténtalo de nuevo'))
+    }
+  }
+
+  // Firma capturada (PNG compuesto) → se trata igual que cualquier evidencia.
+  function handleSigned(file) {
+    setSignOpen(false)
+    handleFile(file)
+  }
+
+  // Abre la evidencia ya guardada vía axios (preserva auth + funciona en móvil,
+  // donde un <a href> no manda los headers y R2 no expone CORS).
+  async function viewEvidence() {
+    if (!receiptId) return
+    setError(null)
+    try {
+      const r = await api.get(`/purchases/receipts/${receiptId}/evidence`, { responseType: 'blob' })
+      const b = r.data
+      const isPdf = b.type === 'application/pdf' || (existingMimetype || '').includes('pdf')
+      const fname = existingFilename || `evidencia-${receiptId}${isPdf ? '.pdf' : '.png'}`
+      if (Capacitor.isNativePlatform()) {
+        await downloadBlob(b, fname)   // nativo: guardar / compartir
+        return
+      }
+      const url = URL.createObjectURL(b)
+      window.open(url, '_blank')
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch {
+      setError('No se pudo abrir la evidencia.')
     }
   }
 
@@ -139,13 +170,10 @@ function EvidenciaSection({ receiptId, existingFilename, existingMimetype, onUpl
             <p className="text-[10px] text-brand-500">Evidencia adjunta</p>
           </div>
           <div className="flex gap-1.5">
-            <a
-              href={`/api${purchasesApi.getEvidenceUrl(receiptId)}`}
-              target="_blank" rel="noopener noreferrer"
-              className="btn-ghost btn-sm text-xs text-brand-300"
-            >
+            <button type="button" onClick={viewEvidence}
+              className="btn-ghost btn-sm text-xs text-brand-300">
               Ver
-            </a>
+            </button>
           </div>
         </div>
       )}
@@ -203,7 +231,29 @@ function EvidenciaSection({ receiptId, existingFilename, existingMimetype, onUpl
         )}
       </div>
 
+      {/* Firma en pantalla — para recepciones sin documento (ej. paquetería) */}
+      <button type="button" onClick={() => setSignOpen(true)}
+        className="btn-secondary btn-sm justify-center">
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M3 21l3.6-.9a2 2 0 00.95-.53l11.4-11.4a2 2 0 000-2.83l-1.3-1.3a2 2 0 00-2.83 0L3.43 14.45a2 2 0 00-.53.95L2 19l1 2z"/>
+        </svg>
+        Firmar entrega en pantalla
+      </button>
+      <p className="text-[11px] text-ink-muted -mt-1">
+        Sin documento del proveedor (ej. paquetería): que firme quien entrega.
+      </p>
+
       {error && <p className="field-error">{error}</p>}
+
+      {/* Captura de firma en pantalla */}
+      {signOpen && (
+        <SignatureCaptureModal
+          docLabel={docLabel}
+          onClose={() => setSignOpen(false)}
+          onSigned={handleSigned}
+        />
+      )}
 
       {/* Modal de cámara */}
       {cameraOpen && createPortal(
@@ -224,103 +274,6 @@ function EvidenciaSection({ receiptId, existingFilename, existingMimetype, onUpl
       )}
     </div>
   )
-}
-
-// ── Generación de PDF en el navegador ─────────────────────────────────────────
-async function generateReceiptPDF(receipt) {
-  // Importación dinámica para no pesar en el bundle inicial.
-  // Usamos el paquete npm local (no CDN) — el UMD del CDN no funciona con
-  // dynamic import ESM porque expone a window.jspdf en vez de exportar.
-  const { jsPDF } = await import('jspdf')
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-
-  const marginL = 15
-  const pageW   = 210
-  let y = 20
-
-  // Encabezado
-  doc.setFontSize(16).setFont(undefined, 'bold')
-  doc.text('RECEPCIÓN DE MATERIAL', pageW / 2, y, { align: 'center' })
-  y += 8
-
-  doc.setFontSize(10).setFont(undefined, 'normal')
-  doc.text(`N°: ${receipt.receipt_number}`, pageW / 2, y, { align: 'center' })
-  y += 5
-  doc.text(`Fecha: ${fmtDateOnly(receipt.received_date)}`, pageW / 2, y, { align: 'center' })
-  y += 10
-
-  doc.setDrawColor(200).line(marginL, y, pageW - marginL, y)
-  y += 7
-
-  // Datos generales
-  const datos = [
-    ['Proveedor',          receipt.partner_name || receipt.generic_supplier || '—'],
-    ['OC Referencia',      receipt.purchase_order_number || '—'],
-    ['Folio proveedor',    receipt.document_type && receipt.document_number
-      ? `${receipt.document_type} ${receipt.document_number}` : '—'],
-    ['Almacén destino',    receipt.warehouse_name || '—'],
-    ['Recibió',            receipt.created_by_name || '—'],
-    ['Confirmó',           receipt.confirmed_by_name || '—'],
-  ]
-
-  doc.setFontSize(9)
-  datos.forEach(([label, val]) => {
-    doc.setFont(undefined, 'bold').text(label + ':', marginL, y)
-    doc.setFont(undefined, 'normal').text(val, marginL + 40, y)
-    y += 5.5
-  })
-  y += 5
-
-  // Tabla de líneas
-  doc.setDrawColor(200).line(marginL, y, pageW - marginL, y)
-  y += 5
-
-  doc.setFontSize(8).setFont(undefined, 'bold')
-  const cols = [marginL, 75, 110, 145, 175]
-  doc.text('Artículo',          cols[0], y)
-  doc.text('OC Pendiente',      cols[1], y)
-  doc.text('Recibido',          cols[2], y)
-  doc.text('P. Unit.',          cols[3], y)
-  doc.text('Importe',           cols[4], y)
-  y += 4
-  doc.line(marginL, y, pageW - marginL, y)
-  y += 5
-
-  doc.setFont(undefined, 'normal')
-  let total = 0
-  ;(receipt.lines || []).forEach(l => {
-    const nombre   = (l.item_name || l.description || '—').substring(0, 30)
-    const pedido   = l.ordered_qty ? `${fmtNum(l.ordered_qty, 3)} ${l.unit}` : '—'
-    const recibido = `${fmtNum(l.quantity_received, 3)} ${l.unit}`
-    const precio   = fmtMXN(l.unit_price)
-    const importe  = parseFloat(l.quantity_received || 0) * parseFloat(l.unit_price || 0)
-    total += importe
-
-    doc.text(nombre,          cols[0], y)
-    doc.text(pedido,          cols[1], y)
-    doc.text(recibido,        cols[2], y)
-    doc.text(precio,          cols[3], y)
-    doc.text(fmtMXN(importe), cols[4], y)
-    y += 6
-  })
-
-  y += 2
-  doc.line(marginL, y, pageW - marginL, y)
-  y += 6
-  doc.setFont(undefined, 'bold').setFontSize(10)
-  doc.text('Total:', cols[3], y)
-  doc.text(fmtMXN(total), cols[4], y)
-  y += 15
-
-  // Firmas
-  doc.setFontSize(9).setFont(undefined, 'normal')
-  doc.line(marginL, y, marginL + 60, y)
-  doc.line(pageW - marginL - 60, y, pageW - marginL, y)
-  y += 5
-  doc.text(`Recibió: ${receipt.created_by_name || ''}`,   marginL,              y)
-  doc.text(`Confirmó: ${receipt.confirmed_by_name || ''}`, pageW - marginL - 60, y)
-
-  return doc
 }
 
 // ── Panel de detalle lateral ──────────────────────────────────────────────────
@@ -356,11 +309,12 @@ function DetallePanel({ receiptId, onClose }) {
     if (!receipt) return
     setGenPdf(true)
     try {
-      const doc = await generateReceiptPDF(receipt)
-      // downloadBlob: web descarga normal; nativo guarda + comparte.
-      await downloadBlob(doc.output('blob'), `${receipt.receipt_number}.pdf`)
+      // PDF generado en el backend con branding del tenant (logo + colores) e
+      // incrustando la firma/evidencia. downloadBlob: web descarga; nativo comparte.
+      const blob = await purchasesApi.downloadReceiptPdf(receipt.id)
+      await downloadBlob(blob, `${receipt.receipt_number}.pdf`)
     }
-    catch (e) { alert('Error generando PDF: ' + e.message) }
+    catch (e) { alert('Error generando PDF: ' + (e.response?.data?.error || e.message)) }
     finally { setGenPdf(false) }
   }
 
@@ -368,10 +322,10 @@ function DetallePanel({ receiptId, onClose }) {
     if (!receipt) return
     setGenPdf(true)
     try {
-      const doc = await generateReceiptPDF(receipt)
-      await printBlob(doc.output('blob'), receipt.receipt_number || 'Recepcion')
+      const blob = await purchasesApi.downloadReceiptPdf(receipt.id)
+      await printBlob(blob, receipt.receipt_number || 'Recepcion')
     }
-    catch (e) { alert('Error al imprimir: ' + e.message) }
+    catch (e) { alert('Error al imprimir: ' + (e.response?.data?.error || e.message)) }
     finally { setGenPdf(false) }
   }
 
@@ -486,6 +440,7 @@ function DetallePanel({ receiptId, onClose }) {
                   receiptId={receiptId}
                   existingFilename={receipt.evidence_filename}
                   existingMimetype={receipt.evidence_mimetype}
+                  docLabel={receipt.receipt_number}
                   onUploaded={() => qc.invalidateQueries({ queryKey: ['receipt-detail', receiptId] })}
                 />
               </div>
