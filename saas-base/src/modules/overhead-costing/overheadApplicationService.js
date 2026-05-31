@@ -87,7 +87,8 @@ async function applyOverheadToShift(shiftId, tenantId, shiftData) {
     query(
       `SELECT top.*,
               toi.allocation_base,
-              toi.is_active AS item_is_active
+              toi.is_active AS item_is_active,
+              toi.default_expected_basis_divisor AS item_default_basis_divisor
        FROM tenant_overhead_periods top
        JOIN tenant_overhead_items toi ON toi.id = top.overhead_item_id
        WHERE top.tenant_id = $1
@@ -108,7 +109,13 @@ async function applyOverheadToShift(shiftId, tenantId, shiftData) {
   for (const period of periods) {
     const basisValue = computeBasisValue(period.allocation_base, shiftData)
     const estimatedAmount = period.estimated_amount || 0
-    const divisor = parseFloat(period.expected_basis_divisor) || 0
+    // Divisor (turnos/horas/kg esperados al mes): el del período manda; si está
+    // vacío (caso típico: el período se generó ANTES de capturar "esperados/mes"),
+    // se usa el default del ítem como respaldo. Así configurar el ítem aplica de
+    // inmediato sin tener que regenerar los períodos del mes.
+    const periodDivisor = parseFloat(period.expected_basis_divisor)
+    const itemDivisor   = parseFloat(period.item_default_basis_divisor)
+    const divisor = periodDivisor > 0 ? periodDivisor : (itemDivisor > 0 ? itemDivisor : 0)
 
     // Si hay divisor estimado, dividimos el total; si no, imputamos el total completo
     // (conservative: el re-costeo mensual ajustará el real_amount correctamente).
