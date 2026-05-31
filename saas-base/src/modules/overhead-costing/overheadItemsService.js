@@ -181,7 +181,37 @@ async function updateItem(tenantId, id, patch) {
       params
     )
   )
-  return rows[0]
+  const updated = rows[0]
+
+  // Propagar monto y/o divisor a los períodos NO finalizados (meses ABIERTOS) de
+  // este ítem, para que editar el gasto se refleje de inmediato en el costeo del
+  // turno SIN tener que tocar "Períodos del mes". Los meses ya cerrados
+  // (is_finalized=true) NO se tocan — sus montos quedan bloqueados por el cierre.
+  const periodSet = []
+  const periodParams = []
+  let pi = 1
+  if (data.default_estimated_amount !== undefined) {
+    periodSet.push(`estimated_amount = $${pi++}`)
+    periodParams.push(data.default_estimated_amount)
+  }
+  if (data.default_expected_basis_divisor !== undefined) {
+    periodSet.push(`expected_basis_divisor = $${pi++}`)
+    periodParams.push(data.default_expected_basis_divisor)
+  }
+  if (periodSet.length > 0) {
+    periodParams.push(id, tenantId)
+    await withBypass(() =>
+      query(
+        `UPDATE tenant_overhead_periods
+         SET ${periodSet.join(', ')}
+         WHERE overhead_item_id = $${pi++} AND tenant_id = $${pi}
+           AND is_finalized = false`,
+        periodParams
+      )
+    )
+  }
+
+  return updated
 }
 
 module.exports = { listItems, getItem, createItem, updateItem }

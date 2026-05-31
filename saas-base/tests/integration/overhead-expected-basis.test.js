@@ -18,6 +18,7 @@ afterAll(async () => {
 
 describe('Overhead: default_expected_basis_divisor → período del mes', () => {
   let client
+  let itemId
 
   beforeAll(async () => {
     const tenantInfo = await createTenant({ label: 'ovhdiv', planSlug: 'owner' })
@@ -35,6 +36,7 @@ describe('Overhead: default_expected_basis_divisor → período del mes', () => 
       default_expected_basis_divisor: 60,
     }).expect(201)
     expect(parseFloat(res.body.default_expected_basis_divisor)).toBe(60)
+    itemId = res.body.id
   })
 
   test('ensure-current copia el divisor del ítem al período generado', async () => {
@@ -42,6 +44,18 @@ describe('Overhead: default_expected_basis_divisor → período del mes', () => 
     const period = res.body.rows.find(r => parseFloat(r.estimated_amount) === 6000)
     expect(period).toBeTruthy()
     expect(parseFloat(period.expected_basis_divisor)).toBe(60)
+  })
+
+  test('Editar el monto/divisor del ítem propaga a los períodos NO finalizados', async () => {
+    await client.patch(`/api/overhead/items/${itemId}`, {
+      default_estimated_amount: 9000,
+      default_expected_basis_divisor: 90,
+    }).expect(200)
+    const res = await client.get('/api/overhead/periods?year=2030&month=6&itemId=' + itemId).expect(200)
+    const period = res.body.find(p => p.overhead_item_id === itemId)
+    expect(period).toBeTruthy()
+    expect(parseFloat(period.estimated_amount)).toBe(9000)        // propagado
+    expect(parseFloat(period.expected_basis_divisor)).toBe(90)    // propagado
   })
 
   test('Rechaza divisor <= 0', async () => {
