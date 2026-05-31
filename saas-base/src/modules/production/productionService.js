@@ -1000,17 +1000,32 @@ async function selfStartShift({ tenantId, userId, ipAddress, userAgent }) {
   )
   if (existing[0]) return existing[0]
 
-  // Turno configurado (el primero del tenant) y fecha LOCAL de operación.
-  const { rows: sc } = await query(
-    `SELECT shift_number FROM tenant_shift_config
-      WHERE tenant_id = $1 ORDER BY shift_number LIMIT 1`,
-    [tenantId]
-  )
-  const shiftNumber = sc[0]?.shift_number != null ? String(sc[0].shift_number) : '1'
+  // Fecha LOCAL de operación.
   const { rows: dr } = await query(
     `SELECT (NOW() AT TIME ZONE 'America/Mexico_City')::date::text AS today`
   )
   const shiftDate = dr[0].today
+
+  // Número de turno SIN colisión con el unique (tenant, line, shift_number,
+  // shift_date). Esto permite iniciar un 2º turno el mismo día tras cerrar el
+  // anterior (micro pyme): tomamos el primer turno configurado que NO se haya
+  // usado hoy; si todos están usados, seguimos incrementando.
+  const { rows: used } = await query(
+    `SELECT shift_number FROM production_shifts
+      WHERE tenant_id = $1 AND line_id = 1 AND shift_date = $2`,
+    [tenantId, shiftDate]
+  )
+  const usedSet = new Set(used.map(r => String(r.shift_number)))
+  const { rows: cfgNums } = await query(
+    `SELECT shift_number FROM tenant_shift_config WHERE tenant_id = $1 ORDER BY shift_number`,
+    [tenantId]
+  )
+  const configNums = cfgNums.map(r => String(r.shift_number))
+  let shiftNumber = configNums.find(n => !usedSet.has(n))
+  if (!shiftNumber) {
+    const maxUsed = Math.max(0, ...[...usedSet].map(n => parseInt(n, 10)).filter(n => !isNaN(n)))
+    shiftNumber = String(maxUsed + 1)
+  }
 
   return withTransaction(async (client) => {
     const { rows } = await client.query(

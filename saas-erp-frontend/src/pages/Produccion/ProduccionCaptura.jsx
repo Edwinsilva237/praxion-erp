@@ -236,6 +236,7 @@ function PantallaSeleccion({
   confirmMutation, reopenMutation,
   onSelectShift, onShiftClosed,
   allowSelfStart, allowQuickOrder, selfStartMutation, selfQuickStartMutation, products,
+  startNewRequested, onStartNew,
 }) {
   const scheduledShifts = myTodayShifts.filter(s => s.status === 'scheduled')
 
@@ -256,27 +257,27 @@ function PantallaSeleccion({
     <Spinner />
     <p className="text-xs text-ink-muted">Cargando tus turnos del día...</p>
   </div>
-      ) : shiftClosed && closedShiftId ? (
+      ) : shiftClosed && closedShiftId && !startNewRequested ? (
         <ClosedShiftSummary
           shiftId={closedShiftId}
           reopenPending={reopenMutation.isPending}
           onReopen={(id) => reopenMutation.mutate(id)}
           onExit={() => onShiftClosed(false)}
+          allowSelfStart={allowSelfStart}
+          onStartNew={onStartNew}
+        />
+      ) : allowSelfStart && (startNewRequested || (activeShifts.length === 0 && scheduledShifts.length === 0)) ? (
+        <MicroPymeStart
+          products={products}
+          selfStartMutation={selfStartMutation}
+          selfQuickStartMutation={selfQuickStartMutation}
+          allowQuickOrder={allowQuickOrder}
         />
       ) : activeShifts.length === 0 && scheduledShifts.length === 0 ? (
-        allowSelfStart ? (
-          <MicroPymeStart
-            products={products}
-            selfStartMutation={selfStartMutation}
-            selfQuickStartMutation={selfQuickStartMutation}
-            allowQuickOrder={allowQuickOrder}
-          />
-        ) : (
-          <div className="empty-state">
-            <p className="font-medium text-ink-secondary">Sin turnos asignados hoy</p>
-            <p className="text-sm text-ink-muted">Consulta con tu supervisor.</p>
-          </div>
-        )
+        <div className="empty-state">
+          <p className="font-medium text-ink-secondary">Sin turnos asignados hoy</p>
+          <p className="text-sm text-ink-muted">Consulta con tu supervisor.</p>
+        </div>
       ) : (
         <>
           {/* Turno programado pendiente de confirmar */}
@@ -382,6 +383,9 @@ export default function ProduccionCaptura() {
   const [shiftClosed,   setShiftClosed]     = useState(false)
   const [closedShiftId, setClosedShiftId]   = useState(null)
   const [closedAt,      setClosedAt]        = useState(null)
+  // Micro pyme: el operador pidió iniciar OTRO turno (aunque tenga uno cerrado
+  // pendiente de validar). Evita que la pantalla de resumen lo vuelva a atrapar.
+  const [startNewRequested, setStartNewRequested] = useState(false)
   const [viewMode, setViewMode]             = useState('cola') // 'cola' | 'captura'
   const [tab, setTab]                       = useState('paquetes')
   const [weight, setWeight]                 = useState('')
@@ -434,7 +438,8 @@ export default function ProduccionCaptura() {
   // un supervisor (o cualquier otro usuario) que abra la captura vea por
   // error el resumen de un turno ajeno cerrado.
   useEffect(() => {
-    if (selectedShift || shiftClosed) return  // ya hay flujo activo, no interferir
+    // No re-atrapar con el resumen si el operador pidió iniciar otro turno.
+    if (selectedShift || shiftClosed || startNewRequested) return
     if (!currentUser?.id) return
     const today = new Date().toISOString().slice(0, 10)
     const myClosedShift = activeShifts.find(s =>
@@ -448,7 +453,7 @@ export default function ProduccionCaptura() {
       setClosedAt(new Date(myClosedShift.closed_at))
       setShiftClosed(true)
     }
-  }, [activeShifts, currentUser, selectedShift, shiftClosed])
+  }, [activeShifts, currentUser, selectedShift, shiftClosed, startNewRequested])
 
   // Auto-restauración al cargar: si el usuario tiene un turno activo o en
   // pending_handover (entrante esperando recibir), reseleccionarlo
@@ -637,6 +642,8 @@ export default function ProduccionCaptura() {
     mutationFn: () => productionApi.selfStartShift(),
     onSuccess: (shift) => {
       setSelectedShift(shift.id)
+      setShiftClosed(false)
+      setStartNewRequested(false)
       queryClient.invalidateQueries({ queryKey: ['active-shifts'] })
       queryClient.invalidateQueries({ queryKey: ['my-today-shifts'] })
       setWaitingHandover(false)
@@ -652,6 +659,8 @@ export default function ProduccionCaptura() {
       setSelectedShift(shift.id)
       setActiveOrderId(order.id)
       setContinued(true)
+      setShiftClosed(false)
+      setStartNewRequested(false)
       queryClient.invalidateQueries({ queryKey: ['active-shifts'] })
       queryClient.invalidateQueries({ queryKey: ['my-today-shifts'] })
       queryClient.invalidateQueries({ queryKey: ['production-queue-capture'] })
@@ -863,6 +872,8 @@ export default function ProduccionCaptura() {
         selfStartMutation={selfStartMutation}
         selfQuickStartMutation={selfQuickStartMutation}
         products={allProducts}
+        startNewRequested={startNewRequested}
+        onStartNew={() => { setShiftClosed(false); setStartNewRequested(true) }}
       />
     )
   }

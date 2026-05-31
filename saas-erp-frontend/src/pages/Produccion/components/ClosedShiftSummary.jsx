@@ -15,7 +15,7 @@ import Spinner from '@/components/ui/Spinner'
  *   onExit:       callback al presionar "Volver". Cierra la pantalla.
  *   reopenPending: boolean — true mientras la mutation de reabrir está en curso.
  */
-export default function ClosedShiftSummary({ shiftId, onReopen, onExit, reopenPending }) {
+export default function ClosedShiftSummary({ shiftId, onReopen, onExit, reopenPending, allowSelfStart, onStartNew }) {
   const { data: summary, isLoading, error } = useQuery({
     queryKey: ['closed-shift-summary', shiftId],
     queryFn: () => productionApi.getClosedSummary(shiftId),
@@ -189,6 +189,15 @@ export default function ClosedShiftSummary({ shiftId, onReopen, onExit, reopenPe
 
       {/* Acciones */}
       <div className="flex flex-col sm:flex-row gap-3 pt-2">
+        {/* Micro pyme: iniciar OTRO turno sin esperar a que se valide el cerrado. */}
+        {allowSelfStart && onStartNew && (
+          <button
+            onClick={onStartNew}
+            className="flex-1 bg-brand-500/10 hover:bg-brand-500/15 border-2 border-brand-500/40 text-brand-300 font-semibold py-3 px-4 rounded-xl"
+          >
+            ▶ Iniciar nuevo turno
+          </button>
+        )}
         {canReopen && (
           <button
             onClick={() => onReopen?.(shiftId)}
