@@ -11,6 +11,9 @@ export const authApi = {
       // NO mandamos X-Tenant-Slug: el interceptor lo inyecta automáticamente
       // desde localStorage. Lo borramos temporalmente para esta llamada.
       headers: { 'X-Tenant-Slug': '' },
+      // Más paciencia que el resto de la app: el primer login de la mañana
+      // puede pegarle a un servidor que apenas está arrancando.
+      timeout: 60000,
     }).then(r => r.data),
 
   me: () =>

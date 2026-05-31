@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -12,6 +12,35 @@ const schema = z.object({
   email:    z.string().email('Correo inválido'),
   password: z.string().min(1, 'Requerido'),
 })
+
+// El login espera más que el resto de la app: un servidor que estuvo inactivo
+// (p. ej. el primer arranque de la mañana) puede tardar en responder. 15s no
+// alcanza y el usuario veía un falso "credencial incorrecta".
+const LOGIN_TIMEOUT = 60000
+
+// Traduce un error de login a un mensaje honesto. Antes, CUALQUIER fallo (incl.
+// timeout / sin red) caía a "Credenciales incorrectas", lo que hacía creer que
+// la contraseña estaba mal cuando en realidad el servidor no respondió a tiempo.
+function loginErrorMessage(err) {
+  // Sin respuesta del servidor: timeout, servidor iniciando, o sin conexión.
+  if (err?.code === 'ECONNABORTED' || !err?.response) {
+    return 'No pudimos contactar al servidor (puede estar iniciando). Espera unos segundos y vuelve a intentar.'
+  }
+  if (err.response.status === 401) {
+    return err.response.data?.error || 'Correo o contraseña incorrectos.'
+  }
+  return err.response.data?.error || err.response.data?.message || 'Ocurrió un error. Vuelve a intentar.'
+}
+
+// Pre-calienta el backend al abrir el login: si está dormido, empieza a
+// despertar mientras el usuario escribe sus datos. Best-effort: ignora errores
+// y usa no-cors (la petición igual llega al servidor y lo despierta).
+function warmUpServer() {
+  const base = import.meta.env.VITE_API_URL
+  if (!base) return // dev con proxy: no hay arranque frío que calentar
+  const healthUrl = base.replace(/\/api\/?$/, '') + '/health'
+  try { fetch(healthUrl, { mode: 'no-cors', cache: 'no-store' }).catch(() => {}) } catch { /* noop */ }
+}
 
 // ── Modal: Olvidé contraseña ───────────────────────────────────────────────
 // Para forgot-password sí necesitamos saber el tenant. Si el usuario aún no
@@ -124,6 +153,9 @@ export default function Login() {
     formState: { errors, isSubmitting },
   } = useForm({ resolver: zodResolver(schema) })
 
+  // Despierta el servidor en cuanto se abre el login (arranque frío de la mañana).
+  useEffect(() => { warmUpServer() }, [])
+
   // Primer intento: discovery sin tenant.
   const onSubmit = async ({ email, password }) => {
     setServerError(null)
@@ -140,8 +172,7 @@ export default function Login() {
       // Caso 2: login directo (1 tenant match).
       completeLogin(data)
     } catch (err) {
-      const msg = err.response?.data?.error || err.response?.data?.message
-      setServerError(msg || 'Credenciales incorrectas')
+      setServerError(loginErrorMessage(err))
     }
   }
 
@@ -152,11 +183,10 @@ export default function Login() {
     setServerError(null)
     try {
       localStorage.setItem('erp_tenant_slug', tenant.slug)
-      const { data } = await api.post('/auth/login', pendingCreds)
+      const { data } = await api.post('/auth/login', pendingCreds, { timeout: LOGIN_TIMEOUT })
       completeLogin(data)
     } catch (err) {
-      const msg = err.response?.data?.error || err.response?.data?.message
-      setServerError(msg || 'Credenciales incorrectas')
+      setServerError(loginErrorMessage(err))
       setSelecting(false)
     }
   }

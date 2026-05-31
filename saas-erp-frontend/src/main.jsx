@@ -56,3 +56,15 @@ createRoot(document.getElementById('root')).render(
     </Sentry.ErrorBoundary>
   </StrictMode>
 )
+
+// Quita el preloader de marca (definido en index.html) una vez que React pintó
+// el primer frame. El doble requestAnimationFrame evita el parpadeo entre que se
+// va el preloader y aparece la UI. Se desvanece y luego se elimina del DOM.
+const preloader = document.getElementById('app-preloader')
+if (preloader) {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    preloader.classList.add('app-preloader--hidden')
+    preloader.addEventListener('transitionend', () => preloader.remove(), { once: true })
+    setTimeout(() => preloader.remove(), 800) // respaldo si transitionend no dispara
+  }))
+}

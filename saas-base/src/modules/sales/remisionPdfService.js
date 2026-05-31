@@ -13,8 +13,12 @@ const { loadTenantLogo, headerTextX, drawHeaderLogo } = require('../../utils/pdf
  * Mantiene el mismo look-and-feel que el PDF de factura para consistencia visual.
  *
  * Incluye al pie la foto de evidencia de entrega cuando existe.
+ *
+ * @param {boolean} [showPrices=true] - Cuando es false genera una remisión de
+ *   entrega "sin precios": oculta las columnas P. Unitario / Importe, el bloque
+ *   TOTAL y la leyenda de IVA. Útil para entregar al cliente sin revelar montos.
  */
-async function generateRemisionPDF({ tenantId, noteId }) {
+async function generateRemisionPDF({ tenantId, noteId, showPrices = true }) {
   const { rows: nrows } = await query(
     `SELECT dn.*,
             bp.name AS partner_name, bp.tax_name AS partner_tax_name,
@@ -103,7 +107,8 @@ async function generateRemisionPDF({ tenantId, noteId }) {
     doc.fontSize(12).font('Helvetica-Bold')
        .text(note.document_number, 55 + W * 0.6, 74, { width: W * 0.4 - 15, align: 'right' })
     doc.fontSize(8).font('Helvetica')
-       .text('Documento no fiscal', 55 + W * 0.6, 92, { width: W * 0.4 - 15, align: 'right' })
+       .text(showPrices ? 'Documento no fiscal' : 'Documento no fiscal · sin precios',
+             55 + W * 0.6, 92, { width: W * 0.4 - 15, align: 'right' })
 
     // ─── DATOS GENERALES ───────────────────────────────────────────
     let y = 125
@@ -166,14 +171,20 @@ async function generateRemisionPDF({ tenantId, noteId }) {
     y += 14
     doc.rect(40, y, W, 16).fill(azul)
     doc.fillColor('white').fontSize(7.5).font('Helvetica-Bold')
-    const cw = { sku: 70, desc: 245, cant: 50, unit: 55, precio: 70, importe: 75 }
+    // Sin precios, la descripción se ensancha pero Cant./Unidad se quedan a una
+    // distancia legible del borde (no pegadas a la orilla) para no partir "Unidad".
+    const cw = showPrices
+      ? { sku: 70, desc: 245, cant: 50, unit: 55, precio: 70, importe: 75 }
+      : { sku: 70, desc: 330, cant: 60, unit: 62 }
     let cx = 45
     doc.text('SKU', cx, y + 4); cx += cw.sku
     doc.text('Descripción', cx, y + 4); cx += cw.desc
     doc.text('Cant.', cx, y + 4, { width: cw.cant, align: 'right' }); cx += cw.cant
     doc.text('Unidad', cx, y + 4); cx += cw.unit
-    doc.text('P. Unitario', cx, y + 4, { width: cw.precio, align: 'right' }); cx += cw.precio
-    doc.text('Importe', cx, y + 4, { width: cw.importe, align: 'right' })
+    if (showPrices) {
+      doc.text('P. Unitario', cx, y + 4, { width: cw.precio, align: 'right' }); cx += cw.precio
+      doc.text('Importe', cx, y + 4, { width: cw.importe, align: 'right' })
+    }
 
     y += 16
     lines.forEach((line, i) => {
@@ -187,36 +198,42 @@ async function generateRemisionPDF({ tenantId, noteId }) {
       doc.text(line.product_name || '', cx, y + 6, { width: cw.desc - 5 }); cx += cw.desc
       doc.text(parseFloat(line.quantity_delivered).toFixed(2), cx, y + 6, { width: cw.cant, align: 'right' }); cx += cw.cant
       doc.text(line.unit || '', cx, y + 6, { width: cw.unit }); cx += cw.unit
-      doc.text(fmt(line.unit_price), cx, y + 6, { width: cw.precio, align: 'right' }); cx += cw.precio
-      doc.text(fmt(lineSubtotal), cx, y + 6, { width: cw.importe, align: 'right' })
+      if (showPrices) {
+        doc.text(fmt(line.unit_price), cx, y + 6, { width: cw.precio, align: 'right' }); cx += cw.precio
+        doc.text(fmt(lineSubtotal), cx, y + 6, { width: cw.importe, align: 'right' })
+      }
       y += rowH
     })
 
     // ─── TOTALES ───────────────────────────────────────────────────
     // La remisión NO incluye IVA — es un documento pre-fiscal. El IVA se
-    // agrega cuando se emite el CFDI.
-    y += 10
-    const tw = 200
-    const tx = 40 + W - tw
+    // agrega cuando se emite el CFDI. Se omite por completo en la versión
+    // sin precios (remisión de entrega).
+    if (showPrices) {
+      y += 10
+      const tw = 200
+      const tx = 40 + W - tw
 
-    // Usamos subtotal como total (tax = 0 después de la migración 094).
-    const totalRem = parseFloat(note.subtotal_mxn || note.total_mxn || 0)
+      // Usamos subtotal como total (tax = 0 después de la migración 094).
+      const totalRem = parseFloat(note.subtotal_mxn || note.total_mxn || 0)
 
-    doc.rect(tx - 5, y, tw + 5, 22).fill(azul)
-    doc.fillColor('white').fontSize(11).font('Helvetica-Bold')
-       .text('TOTAL', tx, y + 6, { width: tw * 0.5 })
-       .text(`${note.currency} ${fmt(totalRem)}`, tx + tw * 0.5, y + 6, { width: tw * 0.5 - 5, align: 'right' })
-    y += 26
+      doc.rect(tx - 5, y, tw + 5, 22).fill(azul)
+      doc.fillColor('white').fontSize(11).font('Helvetica-Bold')
+         .text('TOTAL', tx, y + 6, { width: tw * 0.5 })
+         .text(`${note.currency} ${fmt(totalRem)}`, tx + tw * 0.5, y + 6, { width: tw * 0.5 - 5, align: 'right' })
+      y += 26
 
-    // Leyenda IVA al facturar
-    doc.fillColor(grisText).fontSize(7.5).font('Helvetica-Oblique')
-       .text('* El IVA (16%) se calcula automáticamente al emitir la factura (CFDI).',
-              40, y, { width: W - 10, align: 'left' })
-    y += 4
+      // Leyenda IVA al facturar
+      doc.fillColor(grisText).fontSize(7.5).font('Helvetica-Oblique')
+         .text('* El IVA (16%) se calcula automáticamente al emitir la factura (CFDI).',
+                40, y, { width: W - 10, align: 'left' })
+      y += 4
+    }
 
     // ─── DATOS ADICIONALES ─────────────────────────────────────────
+    // El TC solo es relevante si se muestran montos.
     const extras = []
-    if (usdRate) {
+    if (usdRate && showPrices) {
       let tcText = `$${usdRate.toFixed(4)} MXN/USD`
       if (usdRateDate) {
         const d = new Date(usdRateDate).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })

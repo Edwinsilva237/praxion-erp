@@ -245,6 +245,7 @@ router.post('/delivery-notes/:id/send-email', checkPermission('sales', 'update')
 /**
  * GET /api/sales/delivery-notes/:id/pdf
  * Descarga la representación impresa (PDF) de la remisión.
+ * ?precios=0 (o false) genera la versión de entrega sin precios.
  */
 router.get('/delivery-notes/:id/pdf', checkPermission('sales', 'read'), async (req, res, next) => {
   try {
@@ -253,9 +254,11 @@ router.get('/delivery-notes/:id/pdf', checkPermission('sales', 'read'), async (r
       [req.params.id, req.tenant.id]
     )
     if (!rows.length) return res.status(404).json({ error: 'Remisión no encontrada.' })
-    const buf = await generateRemisionPDF({ tenantId: req.tenant.id, noteId: req.params.id })
+    const showPrices = !['0', 'false', 'no'].includes(String(req.query.precios).toLowerCase())
+    const buf = await generateRemisionPDF({ tenantId: req.tenant.id, noteId: req.params.id, showPrices })
+    const suffix = showPrices ? '' : '-sin-precios'
     res.setHeader('Content-Type', 'application/pdf')
-    res.setHeader('Content-Disposition', `attachment; filename="${rows[0].document_number}.pdf"`)
+    res.setHeader('Content-Disposition', `attachment; filename="${rows[0].document_number}${suffix}.pdf"`)
     res.end(buf)
   } catch (err) { next(err) }
 })

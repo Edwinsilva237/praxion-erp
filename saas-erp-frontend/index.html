@@ -11,8 +11,48 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+    <!-- Preloader de marca: se muestra al instante (antes de cargar React) para
+         evitar la pantalla oscura en blanco al abrir. main.jsx lo desvanece y
+         lo quita en cuanto React pinta. El isotipo va incrustado (911 bytes)
+         para que no dependa de ninguna descarga. -->
+    <style>
+      #app-preloader {
+        position: fixed; inset: 0; z-index: 9999;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 26px; background: #0B0F12;
+        transition: opacity .45s ease;
+      }
+      #app-preloader.app-preloader--hidden { opacity: 0; pointer-events: none; }
+      #app-preloader .app-preloader__logo {
+        width: 84px; height: auto;
+        animation: app-preloader-pulse 1.8s ease-in-out infinite;
+      }
+      #app-preloader .app-preloader__spinner {
+        width: 26px; height: 26px; border-radius: 50%;
+        border: 3px solid rgba(130, 169, 38, .22);
+        border-top-color: #82a926;
+        animation: app-preloader-spin .8s linear infinite;
+      }
+      @keyframes app-preloader-spin { to { transform: rotate(360deg); } }
+      @keyframes app-preloader-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+      @media (prefers-reduced-motion: reduce) {
+        #app-preloader .app-preloader__logo,
+        #app-preloader .app-preloader__spinner { animation: none; }
+      }
+    </style>
   </head>
   <body>
+    <div id="app-preloader" role="status" aria-label="Cargando Praxion">
+      <svg class="app-preloader__logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 403.98 497.32" aria-hidden="true">
+        <polygon fill="#FFFFFF" points="0 357.63 0 114.44 204.85 0 403.98 112.72 403.98 342.18 213.43 446.89 213.43 369.07 342.18 298.69 343.32 148.2 204.85 68.09 60.08 147.63 59.51 390.82 0 357.63"/>
+        <polygon fill="#82a926" points="129.46 457.36 129.46 327.76 201.99 368.96 201.99 495.56 129.46 457.36"/>
+        <polygon fill="#FFFFFF" points="280.38 178.91 203.99 136.86 123.6 181.49 201.7 223.83 280.38 178.91"/>
+        <polygon fill="#506612" points="201.99 311.66 123.6 267.89 123.6 181.49 201.7 223.83 201.99 311.66"/>
+        <polygon fill="#82a926" points="280.38 270.46 201.99 311.66 201.7 223.83 280.38 178.91 280.38 270.46"/>
+      </svg>
+      <div class="app-preloader__spinner"></div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

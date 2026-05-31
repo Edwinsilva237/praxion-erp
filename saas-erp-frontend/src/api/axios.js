@@ -1,4 +1,5 @@
 import axios from 'axios'
+import useServerStatus from '@/store/useServerStatus'
 
 // ── Detección de tenant slug por subdomain ────────────────────────────────
 // SOLO activa en hosts terminados en `.praxionops.com` (dominio oficial del
@@ -44,12 +45,39 @@ if (subdomainSlug) {
 
 // En dev: VITE_API_URL vacío → usa '/api' y el proxy de Vite forwardea a :3000.
 // En prod: VITE_API_URL=https://api.tu-dominio.com/api → llamadas directas al
-// backend en su propio subdominio (CORS abre el dominio + subdominios).
+// backend (CORS abre el dominio + subdominios).
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 })
+
+// ── Detección de "servidor lento / despertando" ────────────────────────────
+// Si una petición tarda más de SLOW_MS sin responder (típico cuando el backend
+// estuvo inactivo y está arrancando), avisamos a la UI para mostrar un aviso
+// discreto — pero SOLO si de verdad se demora. Cuando la petición responde,
+// limpiamos el temporizador. (El store no importa axios → no hay ciclo.)
+const SLOW_MS = 8000
+let slowCount = 0
+function syncWaking() {
+  useServerStatus.getState().setWaking(slowCount > 0)
+}
+function startSlowTimer(config) {
+  config.__slowTimer = setTimeout(() => {
+    config.__wasSlow = true
+    slowCount += 1
+    syncWaking()
+  }, SLOW_MS)
+}
+function clearSlowTimer(config) {
+  if (!config) return
+  if (config.__slowTimer) { clearTimeout(config.__slowTimer); config.__slowTimer = null }
+  if (config.__wasSlow) {
+    config.__wasSlow = false
+    slowCount = Math.max(0, slowCount - 1)
+    syncWaking()
+  }
+}
 
 // ── Request: adjunta access token y tenant slug ────────────────────────────
 api.interceptors.request.use((config) => {
@@ -59,6 +87,7 @@ api.interceptors.request.use((config) => {
   const slug = localStorage.getItem('erp_tenant_slug') || 'demo'
   config.headers['X-Tenant-Slug'] = slug
 
+  startSlowTimer(config)
   return config
 })
 
@@ -98,9 +127,10 @@ const processQueue = (error, token = null) => {
 }
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => { clearSlowTimer(response.config); return response },
   async (error) => {
     const original = error.config
+    clearSlowTimer(original)
 
     // Tenant suspendido: aterrizamos al usuario en /suspendido (única pantalla
     // donde puede pagar o cerrar sesión). Excluimos /billing/* y la propia
@@ -136,8 +166,10 @@ api.interceptors.response.use(
       }
 
       try {
-        // Usar api (no axios) para que lleve X-Tenant-Slug automáticamente
-        const { data } = await api.post('/auth/refresh', { refreshToken })
+        // Usar api (no axios) para que lleve X-Tenant-Slug automáticamente.
+        // Timeout amplio: en el primer arranque de la mañana el servidor puede
+        // estar despertando; con 15s fallaba la renovación y botaba al login.
+        const { data } = await api.post('/auth/refresh', { refreshToken }, { timeout: 60000 })
         const newToken = data.accessToken
         localStorage.setItem('erp_access_token', newToken)
         if (data.refreshToken) localStorage.setItem('erp_refresh_token', data.refreshToken)
