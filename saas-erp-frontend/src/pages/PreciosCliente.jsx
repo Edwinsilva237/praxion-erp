@@ -730,7 +730,7 @@ function AddPriceModal({ partnerId, existingProductIds, onClose, onSaved }) {
                 </select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div>
                 <label className="label">Vigente desde <span className="text-ink-muted font-normal text-[10px]">(opcional)</span></label>
                 <input type="date" value={validFrom} onChange={e => setValidFrom(e.target.value)} className="input" />
@@ -834,7 +834,7 @@ function EditPriceModal({ partnerId, row, onClose, onSaved }) {
                 </select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div>
                 <label className="label">Vigente desde</label>
                 <input type="date" value={validFrom} onChange={e => setValidFrom(e.target.value)} className="input" />

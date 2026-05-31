@@ -1146,43 +1146,46 @@ export default function ComprasFacturas() {
           <input className="input" placeholder="Folio, proveedor, RFC, UUID..."
             value={search} onChange={e => setSearch(e.target.value)} />
         </div>
-        <div className="min-w-[200px]">
-          <label className="label">Proveedor</label>
-          <Autocomplete value={partner}
-            onChange={(p) => { setPartner(p); setPage(1) }}
-            onSearch={searchPartners}
-            placeholder="Filtrar por proveedor..." />
+        {/* Filtros adicionales — ocultos en móvil (allí solo se busca) */}
+        <div className="hidden sm:contents">
+          <div className="min-w-[200px]">
+            <label className="label">Proveedor</label>
+            <Autocomplete value={partner}
+              onChange={(p) => { setPartner(p); setPage(1) }}
+              onSearch={searchPartners}
+              placeholder="Filtrar por proveedor..." />
+          </div>
+          <div>
+            <label className="label">Tipo</label>
+            <select className="select" value={typeFilter}
+              onChange={e => { setTypeFilter(e.target.value); setPage(1) }}>
+              {TYPE_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Estado</label>
+            <select className="select" value={statusFilter}
+              onChange={e => { setStatusFilter(e.target.value); setPage(1) }}>
+              {STATUS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Desde</label>
+            <input type="date" className="input" value={from}
+              onChange={e => { setFrom(e.target.value); setPage(1) }} />
+          </div>
+          <div>
+            <label className="label">Hasta</label>
+            <input type="date" className="input" value={to}
+              onChange={e => { setTo(e.target.value); setPage(1) }} />
+          </div>
+          {(typeFilter || statusFilter || from || to || search || partner) && (
+            <button onClick={() => { setTypeFilter(''); setStatusFilter(''); setFrom(''); setTo(''); setSearch(''); setPartner(null); setPage(1) }}
+              className="btn-ghost btn-sm text-ink-muted">
+              Limpiar filtros
+            </button>
+          )}
         </div>
-        <div>
-          <label className="label">Tipo</label>
-          <select className="select" value={typeFilter}
-            onChange={e => { setTypeFilter(e.target.value); setPage(1) }}>
-            {TYPE_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="label">Estado</label>
-          <select className="select" value={statusFilter}
-            onChange={e => { setStatusFilter(e.target.value); setPage(1) }}>
-            {STATUS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="label">Desde</label>
-          <input type="date" className="input" value={from}
-            onChange={e => { setFrom(e.target.value); setPage(1) }} />
-        </div>
-        <div>
-          <label className="label">Hasta</label>
-          <input type="date" className="input" value={to}
-            onChange={e => { setTo(e.target.value); setPage(1) }} />
-        </div>
-        {(typeFilter || statusFilter || from || to || search || partner) && (
-          <button onClick={() => { setTypeFilter(''); setStatusFilter(''); setFrom(''); setTo(''); setSearch(''); setPartner(null); setPage(1) }}
-            className="btn-ghost btn-sm text-ink-muted">
-            Limpiar filtros
-          </button>
-        )}
       </div>
 
       {/* Tabla */}
@@ -1207,7 +1210,7 @@ export default function ComprasFacturas() {
           </div>
         ) : (
           <>
-            <table className="table">
+            <table className="table hidden sm:table">
               <thead>
                 <tr>
                   <th>Tipo</th>
@@ -1278,6 +1281,47 @@ export default function ComprasFacturas() {
                 })}
               </tbody>
             </table>
+
+            {/* Móvil: tarjetas (la tabla de 9 columnas se salía a los lados) */}
+            <div className="sm:hidden divide-y divide-line-subtle">
+              {docs.map(inv => {
+                const isRemission = inv.type === 'remission'
+                const paid = parseFloat(inv.balance || 0) <= 0.01
+                return (
+                  <div key={inv.id} className={clsx('p-3 flex flex-col gap-2', inv.is_overdue && 'bg-status-danger/10/30')}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={clsx('text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full',
+                            isRemission ? 'bg-purple-500/15 text-purple-300' : 'bg-emerald-100 text-emerald-700')}>
+                            {isRemission ? 'Remisión' : 'Factura'}
+                          </span>
+                          <span className="font-mono text-sm font-medium text-brand-300">{inv.invoice_number}</span>
+                          {inv.attachment_count > 0 && (
+                            <span className="text-[10px] font-bold bg-status-info/15 text-status-info px-1.5 py-0.5 rounded-full">📎 {inv.attachment_count}</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-ink-secondary mt-0.5 font-medium truncate">
+                          {inv.partner_name || inv.generic_supplier || '—'}
+                        </p>
+                        <p className="text-[10px] text-ink-muted">
+                          Emitida {fmtDate(inv.invoice_date)} · Vence{' '}
+                          <span className={clsx(inv.is_overdue && 'text-status-danger font-semibold')}>{fmtDate(inv.due_date)}</span>
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="font-mono text-sm font-semibold text-ink-primary">{fmtMXN(inv.total_mxn)}</p>
+                        <p className={clsx('font-mono text-[11px] font-semibold',
+                          paid ? 'text-status-success' : (inv.is_overdue ? 'text-status-danger' : 'text-status-warning'))}>
+                          Saldo {fmtMXN(inv.balance)}
+                        </p>
+                      </div>
+                    </div>
+                    <CycleSteps inv={inv} />
+                  </div>
+                )
+              })}
+            </div>
 
             {totalPages > 1 && (
               <div className="border-t border-line-subtle px-4 py-3 flex items-center justify-between">

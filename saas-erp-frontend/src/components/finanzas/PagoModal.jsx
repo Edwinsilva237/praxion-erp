@@ -213,7 +213,7 @@ export function PagoModal({ onClose, onSaved, prefilledPartnerId = null, prefill
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
       <form onSubmit={handleSubmit}
-        className="card w-full max-w-4xl p-6 max-h-[92vh] overflow-y-auto flex flex-col gap-5">
+        className="card w-full max-w-4xl p-4 sm:p-6 max-h-[92vh] overflow-y-auto flex flex-col gap-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-status-success/15 flex items-center justify-center shrink-0">
@@ -384,7 +384,9 @@ export function PagoModal({ onClose, onSaved, prefilledPartnerId = null, prefill
                     : 'No hay remisiones pendientes de cobrar para este cliente.'}
                 </p>
               ) : (
-              <div className="border border-line-subtle rounded-xl overflow-x-auto">
+              <>
+              {/* Escritorio: tabla */}
+              <div className="hidden sm:block border border-line-subtle rounded-xl overflow-x-auto">
                 <table className="table text-xs min-w-full">
                   <thead>
                     <tr>
@@ -437,6 +439,54 @@ export function PagoModal({ onClose, onSaved, prefilledPartnerId = null, prefill
                   </tbody>
                 </table>
               </div>
+
+              {/* Móvil: tarjetas — "A aplicar" queda accesible sin scroll horizontal */}
+              <div className="sm:hidden flex flex-col gap-2">
+                {tabDocs.map(d => {
+                  const pending = parseFloat(d.amount_pending)
+                  const applied = parseFloat(appByArId[d.id] || 0)
+                  const excess  = applied > pending
+                  const ppd = isPpd(d)
+                  return (
+                    <div key={d.id} className={clsx('border rounded-xl p-3 flex flex-col gap-2',
+                      d.is_overdue ? 'border-status-danger/40 bg-status-danger/10/40' : 'border-line-subtle')}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-medium text-ink-primary text-sm">
+                            {DOC_TYPE_LABEL[d.document_type] || d.document_type}{' '}
+                            <span className="font-mono text-brand-300">{d.document_number}</span>
+                            {ppd && <span className="ml-1.5 badge-amber text-[10px]">PPD</span>}
+                          </p>
+                          <p className="text-[10px] text-ink-muted mt-0.5">
+                            Emitida {fmtDateOnly(d.issue_date)} · Vence{' '}
+                            <span className={clsx(d.is_overdue && 'text-status-danger font-semibold')}>{fmtDateOnly(d.due_date)}</span>
+                          </p>
+                        </div>
+                        <Badge status={d.is_overdue ? 'overdue' : d.status} />
+                      </div>
+                      <div className="flex items-end justify-between gap-3">
+                        <div className="shrink-0">
+                          <p className="text-[10px] text-ink-muted uppercase tracking-wide">Pendiente</p>
+                          <p className="text-sm font-mono tabular-nums font-medium text-ink-primary">{fmtMXN(pending)}</p>
+                        </div>
+                        <div className="flex-1 max-w-[55%]">
+                          <label className="text-[10px] text-ink-muted uppercase tracking-wide block mb-0.5">A aplicar</label>
+                          <input type="number" step="0.01" min="0" inputMode="decimal"
+                            value={appByArId[d.id] ?? ''}
+                            onChange={e => updateApp(d.id, e.target.value)}
+                            className={clsx('input w-full text-right font-mono tabular-nums text-base h-10',
+                              excess && 'border-status-danger/40 bg-status-danger/10')}
+                            placeholder="0.00" />
+                        </div>
+                      </div>
+                      {ppd && applied > 0 && (
+                        <p className="text-[10px] text-teal-300">Al guardar se emitirá un complemento de pago (CFDI tipo P).</p>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+              </>
               )}
 
               {/* Resumen */}

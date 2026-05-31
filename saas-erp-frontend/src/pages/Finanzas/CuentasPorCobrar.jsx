@@ -176,36 +176,39 @@ export default function CuentasPorCobrar() {
           <input className="input" placeholder="Número de documento, cliente, RFC..."
             value={search} onChange={e => setSearch(e.target.value)} />
         </div>
-        <div className="min-w-[200px]">
-          <label className="label">Cliente</label>
-          <Autocomplete value={partner}
-            onChange={(p) => { setPartner(p); setPage(1) }}
-            onSearch={searchPartners}
-            placeholder="Filtrar por cliente..." />
+        {/* Filtros adicionales — ocultos en móvil (allí solo se busca) */}
+        <div className="hidden sm:contents">
+          <div className="min-w-[200px]">
+            <label className="label">Cliente</label>
+            <Autocomplete value={partner}
+              onChange={(p) => { setPartner(p); setPage(1) }}
+              onSearch={searchPartners}
+              placeholder="Filtrar por cliente..." />
+          </div>
+          <div>
+            <label className="label">Estado</label>
+            <select className="select" value={statusFilter}
+              onChange={e => { setStatusFilter(e.target.value); setPage(1) }}>
+              {STATUS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Desde</label>
+            <input type="date" className="input" value={from}
+              onChange={e => { setFrom(e.target.value); setPage(1) }} />
+          </div>
+          <div>
+            <label className="label">Hasta</label>
+            <input type="date" className="input" value={to}
+              onChange={e => { setTo(e.target.value); setPage(1) }} />
+          </div>
+          {(statusFilter || from || to || search || partner) && (
+            <button onClick={() => { setStatusFilter(''); setFrom(''); setTo(''); setSearch(''); setPartner(null); setPage(1) }}
+              className="btn-ghost btn-sm text-ink-muted">
+              Limpiar filtros
+            </button>
+          )}
         </div>
-        <div>
-          <label className="label">Estado</label>
-          <select className="select" value={statusFilter}
-            onChange={e => { setStatusFilter(e.target.value); setPage(1) }}>
-            {STATUS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="label">Desde</label>
-          <input type="date" className="input" value={from}
-            onChange={e => { setFrom(e.target.value); setPage(1) }} />
-        </div>
-        <div>
-          <label className="label">Hasta</label>
-          <input type="date" className="input" value={to}
-            onChange={e => { setTo(e.target.value); setPage(1) }} />
-        </div>
-        {(statusFilter || from || to || search || partner) && (
-          <button onClick={() => { setStatusFilter(''); setFrom(''); setTo(''); setSearch(''); setPartner(null); setPage(1) }}
-            className="btn-ghost btn-sm text-ink-muted">
-            Limpiar filtros
-          </button>
-        )}
       </div>
 
       {/* Tabla */}
