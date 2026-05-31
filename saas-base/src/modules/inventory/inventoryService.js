@@ -428,38 +428,47 @@ async function recordProductionValidation(client, { tenantId, shift, userId }) {
       if (costUnit <= 0) continue
       const ptStatus = grp.is_second_quality ? 'blocked' : 'available'
 
-      const { rows: zeroMovs } = await client.query(
-        `SELECT COALESCE(SUM(quantity), 0)::numeric AS units
+      // Movimientos de captura de PT de este turno (de CUALQUIER costo). En la 1ª
+      // validación entraron a 0; tras un revert+revalidar conservan el costo VIEJO
+      // (el revert no toca los movimientos con reference_type='shift_progress').
+      // Por eso revaluamos con el DELTA (nuevo − actual), no solo cuando están en 0
+      // — así re-validar con un cost_per_unit distinto SÍ actualiza el inventario.
+      const { rows: capMovs } = await client.query(
+        `SELECT COALESCE(SUM(quantity), 0)::numeric AS units,
+                COALESCE(MAX(unit_cost), 0)::numeric AS cur_cost
            FROM inventory_movements
           WHERE tenant_id = $1 AND warehouse_id = $2 AND item_type = 'product'
             AND item_id = $3 AND movement_type = 'production_pt_entry'
-            AND status_to = $4 AND unit_cost = 0
+            AND status_to = $4
             AND reference_type = 'shift_progress'
             AND reference_id IN (SELECT id FROM shift_progress WHERE shift_id = $5)`,
         [tenantId, warehousePT, grp.product_id, ptStatus, shift.id]
       )
-      const unitsToRevalue = parseFloat(zeroMovs[0].units || 0)
-      if (unitsToRevalue <= 0) continue
+      const capUnits = parseFloat(capMovs[0].units || 0)
+      const curCost  = parseFloat(capMovs[0].cur_cost || 0)
+      if (capUnits <= 0) continue
+      if (Math.abs(curCost - costUnit) < 1e-6) continue  // ya tiene el costo correcto
 
-      // Inyecta el valor que faltó (entró a 0) sobre la cantidad actual del stock.
+      // Ajusta el avg_cost por el DELTA de valor de estas unidades (nuevo − viejo).
+      const deltaValue = (costUnit - curCost) * capUnits
       await client.query(
         `UPDATE inventory_stock
             SET avg_cost = CASE WHEN quantity > 0
-                 THEN ((quantity * avg_cost) + ($1::numeric * $2::numeric)) / quantity
+                 THEN ((quantity * avg_cost) + $1::numeric) / quantity
                  ELSE $2::numeric END,
                 updated_at = NOW()
           WHERE tenant_id = $3 AND warehouse_id = $4 AND item_type = 'product'
             AND item_id = $5 AND status = $6`,
-        [unitsToRevalue, costUnit, tenantId, warehousePT, grp.product_id, ptStatus]
+        [deltaValue, costUnit, tenantId, warehousePT, grp.product_id, ptStatus]
       )
 
-      // Pone el costo real en esos movimientos de captura (valor del kardex).
+      // Pone el costo nuevo en los movimientos de captura (valor del kardex).
       await client.query(
         `UPDATE inventory_movements
             SET unit_cost = $1::numeric
           WHERE tenant_id = $2 AND warehouse_id = $3 AND item_type = 'product'
             AND item_id = $4 AND movement_type = 'production_pt_entry'
-            AND status_to = $5 AND unit_cost = 0
+            AND status_to = $5
             AND reference_type = 'shift_progress'
             AND reference_id IN (SELECT id FROM shift_progress WHERE shift_id = $6)`,
         [costUnit, tenantId, warehousePT, grp.product_id, ptStatus, shift.id]
