@@ -22,9 +22,12 @@ const DESTINATIONS = ['reprocess', 'discard', 'sell']
 async function listTypes({ tenantId, destination, isNormal, isActive }) {
   const params = [tenantId]
   const filters = []
-  if (destination) { params.push(destination); filters.push(`default_destination = $${params.length}`) }
-  if (isNormal !== undefined) { params.push(isNormal); filters.push(`is_normal = $${params.length}`) }
-  if (isActive !== undefined) { params.push(isActive); filters.push(`is_active = $${params.length}`) }
+  // OJO: calificar con tst. — raw_materials (el LEFT JOIN) también tiene columnas
+  // is_active/is_normal, así que sin prefijo Postgres las marca como ambiguas
+  // ("la referencia a la columna is_active es ambigua") → 500.
+  if (destination) { params.push(destination); filters.push(`tst.default_destination = $${params.length}`) }
+  if (isNormal !== undefined) { params.push(isNormal); filters.push(`tst.is_normal = $${params.length}`) }
+  if (isActive !== undefined) { params.push(isActive); filters.push(`tst.is_active = $${params.length}`) }
   const where = filters.length ? `AND ${filters.join(' AND ')}` : ''
 
   const { rows } = await query(

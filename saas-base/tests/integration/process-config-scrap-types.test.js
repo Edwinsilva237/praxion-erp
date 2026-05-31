@@ -58,6 +58,22 @@ describe('SaaS v2: GET /api/process-config/scrap-types', () => {
     expect(res.body).toHaveLength(3)
     res.body.forEach(t => expect(t.default_destination).toBe('discard'))
   })
+
+  // Regresión: el filtro isActive=true (que manda el formulario de captura) daba
+  // 500 "la referencia a la columna is_active es ambigua" porque el LEFT JOIN a
+  // raw_materials también tiene is_active y la columna no estaba calificada.
+  test('Filtra por isActive=true sin 500 (columna ambigua)', async () => {
+    const res = await client.get('/api/process-config/scrap-types?isActive=true').expect(200)
+    expect(Array.isArray(res.body)).toBe(true)
+    expect(res.body.length).toBe(4) // los 4 default vienen activos
+    res.body.forEach(t => expect(t.is_active).toBe(true))
+  })
+
+  test('Filtra por isNormal=true sin ambigüedad', async () => {
+    const res = await client.get('/api/process-config/scrap-types?isNormal=true').expect(200)
+    expect(Array.isArray(res.body)).toBe(true)
+    res.body.forEach(t => expect(t.is_normal).toBe(true))
+  })
 })
 
 describe('SaaS v2: POST /api/process-config/scrap-types', () => {
