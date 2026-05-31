@@ -4,6 +4,7 @@ import { productionApi } from '@/api/production'
 import { productsApi } from '@/api/products'
 import { rawMaterialsApi } from '@/api/rawMaterials'
 import { processConfigApi } from '@/api/processConfig'
+import { tenantsApi } from '@/api/tenants'
 import useAuthStore from '@/store/useAuthStore'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
@@ -523,6 +524,15 @@ export default function ProduccionCaptura() {
   })
   const usesLots = tenantConfig?.uses_lots ?? false
 
+  // Flags de inicio directo: los leemos de tenantsApi.getCurrent (SIN permiso),
+  // no de processConfigApi.getConfig (que exige process_config:read y el
+  // capturista NO tiene → devolvía 403 y la pantalla mostraba "Sin turnos").
+  const { data: tenantInfo } = useQuery({
+    queryKey: ['tenant', 'current'],
+    queryFn:  tenantsApi.getCurrent,
+    staleTime: 300000,
+  })
+
   const { data: scrapTypesRaw } = useQuery({
     queryKey: ['scrap-types-active'],
     queryFn:  () => processConfigApi.listScrapTypes({ isActive: true }),
@@ -867,8 +877,8 @@ export default function ProduccionCaptura() {
         reopenMutation={reopenMutation}
         onSelectShift={handleSelectShift}
         onShiftClosed={setShiftClosed}
-        allowSelfStart={tenantConfig?.allow_self_start_shift}
-        allowQuickOrder={tenantConfig?.allow_quick_order}
+        allowSelfStart={tenantInfo?.allow_self_start_shift}
+        allowQuickOrder={tenantInfo?.allow_quick_order}
         selfStartMutation={selfStartMutation}
         selfQuickStartMutation={selfQuickStartMutation}
         products={allProducts}
