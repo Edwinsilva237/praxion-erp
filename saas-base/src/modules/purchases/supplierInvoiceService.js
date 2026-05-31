@@ -64,6 +64,11 @@ async function registerInvoice({
     let exchangeRateId = null
     let exchangeRateValue = 1
     let totalMxn = total
+    // Para conciliar contra las recepciones (que son SIN IVA) usamos el SUBTOTAL
+    // de la factura, no el total con IVA. Si no viene subtotal, lo derivamos de
+    // (total - tax) — para una factura sin IVA, subtotal == total.
+    const invoiceSubtotal = subtotal || parseFloat((total - (tax || 0)).toFixed(2))
+    let subtotalMxn = invoiceSubtotal
     if (currency === 'USD') {
       const date = invoiceDate || new Date().toISOString().split('T')[0]
       const rate = await getRateForDate({ tenantId, date, currency: 'USD' })
@@ -71,6 +76,7 @@ async function registerInvoice({
       exchangeRateId  = rate.id
       exchangeRateValue = parseFloat(rate.rate_mxn)
       totalMxn = parseFloat((total * exchangeRateValue).toFixed(2))
+      subtotalMxn = parseFloat((invoiceSubtotal * exchangeRateValue).toFixed(2))
     }
 
     // Calcular fecha de vencimiento
@@ -107,7 +113,8 @@ async function registerInvoice({
       )
       totalReceipts = parseFloat(rcpts[0].total || 0)
     }
-    const reconDiff   = parseFloat((totalMxn - totalReceipts).toFixed(2))
+    // Comparar SIN IVA contra SIN IVA: subtotal de la factura vs subtotal de las recepciones.
+    const reconDiff   = parseFloat((subtotalMxn - totalReceipts).toFixed(2))
     const reconStatus = allReceiptIds.length === 0 ? 'pending'
                       : Math.abs(reconDiff) < 0.01  ? 'reconciled'
                       : 'with_diff'

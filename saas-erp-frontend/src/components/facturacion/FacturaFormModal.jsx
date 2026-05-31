@@ -447,8 +447,8 @@ export function FacturaFormModal({ onClose, onCreated }) {
           </button>
         </div>
 
-        {/* Selector de modo */}
-        <div className="grid grid-cols-3 gap-2">
+        {/* Selector de modo — vertical en móvil (no se aprietan), 3 columnas en escritorio */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           {[
             { value: 'from-remissions', label: 'Desde remisión(es)', desc: 'Una o varias del mismo cliente' },
             { value: 'direct',          label: 'Factura directa',     desc: 'Pedido con direct_invoice' },

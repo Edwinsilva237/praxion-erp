@@ -11,6 +11,7 @@ import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
 import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob, printBlob } from '@/utils/downloadBlob'
+import { useDocumentScanner } from '@/hooks/useDocumentScanner'
 import clsx from 'clsx'
 import api from '@/api/axios'
 
@@ -44,6 +45,7 @@ function EvidenciaSection({ receiptId, existingFilename, existingMimetype, onUpl
   const videoRef   = useRef(null)
   const streamRef  = useRef(null)
   const fileRef    = useRef(null)
+  const { isSupported: scanSupported, scanToPdf } = useDocumentScanner()
 
   async function handleFile(file) {
     if (!file) return
@@ -73,6 +75,18 @@ function EvidenciaSection({ receiptId, existingFilename, existingMimetype, onUpl
       // Modo creación: el receipt aún no existe. Entregamos el File al padre
       // para que lo suba después del INSERT (en el mutationFn).
       onFileSelected?.(file)
+    }
+  }
+
+  // Escáner de documentos (ML Kit) → PDF, igual que en remisiones. Solo en nativo.
+  async function handleScan() {
+    setError(null)
+    try {
+      const res = await scanToPdf({ pageLimit: 5, fileName: 'evidencia-recepcion.pdf' })
+      if (res?.file) handleFile(res.file)
+    } catch (e) {
+      const msg = String(e?.message || '')
+      if (!/cancel/i.test(msg)) setError('No se pudo escanear: ' + (e?.message || 'inténtalo de nuevo'))
     }
   }
 
@@ -163,20 +177,30 @@ function EvidenciaSection({ receiptId, existingFilename, existingMimetype, onUpl
         <input ref={fileRef} type="file" accept="image/*,.pdf" className="hidden"
           onChange={e => handleFile(e.target.files[0])} />
         <button type="button" onClick={() => fileRef.current?.click()}
-          className="btn-secondary btn-sm flex-1">
+          className="btn-secondary btn-sm flex-1 justify-center">
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
           </svg>
           {hasExisting ? 'Reemplazar archivo' : 'Subir archivo'}
         </button>
-        <button type="button" onClick={openCamera}
-          className="btn-secondary btn-sm flex-1">
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
-          </svg>
-          Tomar foto
-        </button>
+        {scanSupported ? (
+          <button type="button" onClick={handleScan}
+            className="btn-secondary btn-sm flex-1 justify-center">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7V5a1 1 0 011-1h2M4 17v2a1 1 0 001 1h2m10-16h2a1 1 0 011 1v2m-3 13h2a1 1 0 001-1v-2M7 12h10"/>
+            </svg>
+            Escanear
+          </button>
+        ) : (
+          <button type="button" onClick={openCamera}
+            className="btn-secondary btn-sm flex-1 justify-center">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
+            </svg>
+            Tomar foto
+          </button>
+        )}
       </div>
 
       {error && <p className="field-error">{error}</p>}
@@ -796,7 +820,7 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
                     {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
                   </select>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="label">Fecha de recepción</label>
                     <input type="date" className="input" value={receiptDate} onChange={e => setDate(e.target.value)} />
@@ -809,7 +833,7 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
                       <option value="otro">Otro</option>
                     </select>
                   </div>
-                  <div className="col-span-2">
+                  <div className="sm:col-span-2">
                     <label className="label">Número de documento (folio del proveedor)</label>
                     <input className="input" placeholder="Ej: R-00123, F-0045..."
                       value={docNumber} onChange={e => setDocNumber(e.target.value)} />
@@ -836,7 +860,7 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
                         <p className="text-sm font-semibold text-ink-primary flex-1">{line.item?.label}</p>
                         {hayExceso && <span className="text-[10px] font-bold text-status-warning bg-status-warning/15 px-2 py-0.5 rounded-full">⚠ exceso</span>}
                       </div>
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="label text-status-warning">Pendiente OC</label>
                           <div className="input bg-status-warning/10 border-status-warning/40 text-status-warning font-mono text-sm cursor-default">
@@ -859,7 +883,7 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
                           />
                         </div>
                       </div>
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="label">Precio unitario</label>
                           <input type="number" step="0.0001" min="0" value={line.unit_price}
@@ -878,7 +902,7 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
                       {usesLots && line.item_type === 'raw_material' && (
                         <div className="border-t border-line-subtle pt-3 mt-1">
                           <p className="text-[10px] uppercase tracking-wide font-semibold text-ink-muted mb-2">Trazabilidad del lote</p>
-                          <div className={clsx('grid gap-3', usesExpiry ? 'grid-cols-3' : 'grid-cols-2')}>
+                          <div className={clsx('grid gap-3', usesExpiry ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1 sm:grid-cols-2')}>
                             <div>
                               <label className="label">Número de lote</label>
                               <input type="text" value={line.lot_number || ''}
@@ -1059,7 +1083,8 @@ export default function ComprasRecepciones() {
 
       {/* Filtros */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[200px] max-w-xs">
+        {/* Buscador (siempre visible — en móvil es el único control) */}
+        <div className="relative flex-1 min-w-[200px] sm:max-w-xs">
           <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
           </svg>
@@ -1067,40 +1092,43 @@ export default function ComprasRecepciones() {
             value={search} onChange={e => { setSearch(e.target.value); setPage(1) }} />
         </div>
 
-        <select className="select w-44" value={statusFilter}
-          onChange={e => { setStatus(e.target.value); setPage(1) }}>
-          <option value="">Todos los estados</option>
-          <option value="draft">Borrador</option>
-          <option value="confirmed">Confirmada</option>
-          <option value="cancelled">Cancelada</option>
-        </select>
+        {/* Filtros adicionales — ocultos en móvil (allí solo se busca) */}
+        <div className="hidden sm:contents">
+          <select className="select w-44" value={statusFilter}
+            onChange={e => { setStatus(e.target.value); setPage(1) }}>
+            <option value="">Todos los estados</option>
+            <option value="draft">Borrador</option>
+            <option value="confirmed">Confirmada</option>
+            <option value="cancelled">Cancelada</option>
+          </select>
 
-        <select className="select w-44" value={warehouseFilter}
-          onChange={e => { setWH(e.target.value); setPage(1) }}>
-          <option value="">Todos los almacenes</option>
-          {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-        </select>
+          <select className="select w-44" value={warehouseFilter}
+            onChange={e => { setWH(e.target.value); setPage(1) }}>
+            <option value="">Todos los almacenes</option>
+            {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
 
-        <select className="select w-44" value={evidenceFilter}
-          onChange={e => { setEvidence(e.target.value); setPage(1) }}>
-          <option value="">Con y sin evidencia</option>
-          <option value="yes">📎 Con evidencia</option>
-          <option value="no">Sin evidencia</option>
-        </select>
+          <select className="select w-44" value={evidenceFilter}
+            onChange={e => { setEvidence(e.target.value); setPage(1) }}>
+            <option value="">Con y sin evidencia</option>
+            <option value="yes">📎 Con evidencia</option>
+            <option value="no">Sin evidencia</option>
+          </select>
 
-        <input type="date" className="input w-36" value={fromDate}
-          onChange={e => { setFrom(e.target.value); setPage(1) }} title="Desde" />
-        <input type="date" className="input w-36" value={toDate}
-          onChange={e => { setTo(e.target.value); setPage(1) }} title="Hasta" />
+          <input type="date" className="input w-36" value={fromDate}
+            onChange={e => { setFrom(e.target.value); setPage(1) }} title="Desde" />
+          <input type="date" className="input w-36" value={toDate}
+            onChange={e => { setTo(e.target.value); setPage(1) }} title="Hasta" />
 
-        {hasFilters && (
-          <button onClick={resetFilters} className="btn-ghost btn-sm text-ink-muted">
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-            Limpiar
-          </button>
-        )}
+          {hasFilters && (
+            <button onClick={resetFilters} className="btn-ghost btn-sm text-ink-muted">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+              Limpiar
+            </button>
+          )}
+        </div>
         {isFetching && !isLoading && <div className="ml-auto"><Spinner size="sm" /></div>}
       </div>
 

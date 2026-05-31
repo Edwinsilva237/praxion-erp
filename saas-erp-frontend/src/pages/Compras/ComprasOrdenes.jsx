@@ -164,8 +164,8 @@ export default function ComprasOrdenes() {
 
       {/* Filtros */}
       <div className="flex flex-wrap items-center gap-3">
-        {/* Buscador */}
-        <div className="relative flex-1 min-w-[200px] max-w-xs">
+        {/* Buscador (siempre visible — en móvil es el único control) */}
+        <div className="relative flex-1 min-w-[200px] sm:max-w-xs">
           <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
           </svg>
@@ -180,22 +180,25 @@ export default function ComprasOrdenes() {
 
         <ScanButton onScan={code => { setSearch(code); setPage(1) }} title="Escanear código" />
 
-        <select className="select w-44" value={typeFilter} onChange={e => { setTypeFilter(e.target.value); setPage(1) }}>
-          {TYPE_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
+        {/* Filtros adicionales — ocultos en móvil (allí solo se busca) */}
+        <div className="hidden sm:contents">
+          <select className="select w-44" value={typeFilter} onChange={e => { setTypeFilter(e.target.value); setPage(1) }}>
+            {TYPE_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
 
-        <select className="select w-52" value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1) }}>
-          {STATUS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
+          <select className="select w-52" value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1) }}>
+            {STATUS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
 
-        {hasFilters && (
-          <button onClick={resetFilters} className="btn-ghost btn-sm text-ink-muted">
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-            Limpiar
-          </button>
-        )}
+          {hasFilters && (
+            <button onClick={resetFilters} className="btn-ghost btn-sm text-ink-muted">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+              Limpiar
+            </button>
+          )}
+        </div>
 
         {isFetching && !isLoading && (
           <div className="ml-auto"><Spinner size="sm" /></div>

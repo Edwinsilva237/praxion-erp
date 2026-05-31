@@ -322,14 +322,14 @@ function AccionesOC({ oc, onAction, loadingAction }) {
 
   const Btn = ({ label, action, variant = 'secondary', icon }) => (
     <button onClick={() => onAction(action)} disabled={!!loadingAction}
-      className={clsx(`btn-${variant} btn-sm`, loadingAction === action && 'opacity-60')}>
+      className={clsx(`btn-${variant} btn-sm justify-center`, loadingAction === action && 'opacity-60')}>
       {loadingAction === action ? <Spinner size="sm" /> : icon}
       {label}
     </button>
   )
 
   const PdfBtn = () => (
-    <button onClick={() => onAction('pdf')} disabled={!!loadingAction} className="btn-secondary btn-sm">
+    <button onClick={() => onAction('pdf')} disabled={!!loadingAction} className="btn-secondary btn-sm justify-center">
       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
       </svg>
@@ -339,7 +339,7 @@ function AccionesOC({ oc, onAction, loadingAction }) {
 
   const EmailBtn = () => (
     <button disabled title="Próximamente"
-      className="btn-secondary btn-sm opacity-40 cursor-not-allowed">
+      className="btn-secondary btn-sm justify-center opacity-40 cursor-not-allowed">
       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
       </svg>
@@ -364,7 +364,7 @@ function AccionesOC({ oc, onAction, loadingAction }) {
   )
 
   if (status === 'draft') return (
-    <div className="flex flex-wrap gap-2 border-t border-line-subtle pt-4 mt-2">
+    <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 border-t border-line-subtle pt-4 mt-2">
       <Btn label="Confirmar y enviar" action="confirm" variant="primary"
         icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7"/>
@@ -375,19 +375,19 @@ function AccionesOC({ oc, onAction, loadingAction }) {
   )
 
   if (status === 'sent') return (
-    <div className="flex flex-wrap gap-2 border-t border-line-subtle pt-4 mt-2">
+    <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 border-t border-line-subtle pt-4 mt-2">
       <RecepcionBtn /><PdfBtn /><EmailBtn /><CancelBtn />
     </div>
   )
 
   if (status === 'partially_received') return (
-    <div className="flex flex-wrap gap-2 border-t border-line-subtle pt-4 mt-2">
+    <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 border-t border-line-subtle pt-4 mt-2">
       <RecepcionBtn /><PdfBtn />
     </div>
   )
 
   if (['received', 'invoiced'].includes(status)) return (
-    <div className="flex flex-wrap gap-2 border-t border-line-subtle pt-4 mt-2">
+    <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 border-t border-line-subtle pt-4 mt-2">
       <PdfBtn />
     </div>
   )

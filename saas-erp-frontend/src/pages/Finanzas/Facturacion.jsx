@@ -6,6 +6,7 @@ import Autocomplete from '@/components/ui/Autocomplete'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
+import CollapsibleFilters from '@/components/ui/CollapsibleFilters'
 import { FacturaFormModal } from '@/components/facturacion/FacturaFormModal'
 import { FacturaDetallePanel } from '@/components/facturacion/FacturaDetallePanel'
 import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
@@ -71,13 +72,13 @@ export default function Facturacion() {
   return (
     <div className="page-enter flex flex-col gap-4">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold text-ink-primary">Facturación</h1>
           <p className="text-xs text-ink-muted mt-0.5">CFDI 4.0 — genera, timbra y envía facturas a tus clientes</p>
         </div>
         <Can do="invoicing:create">
-          <button onClick={() => setShowForm(true)} className="btn-primary">
+          <button onClick={() => setShowForm(true)} className="btn-primary w-full justify-center sm:w-auto">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/>
             </svg>
@@ -100,44 +101,50 @@ export default function Facturacion() {
         </div>
       )}
 
-      {/* Filtros */}
-      <div className="card p-4 flex flex-wrap gap-3 items-end">
-        <div className="flex-1 min-w-[200px]">
-          <label className="label">Buscar</label>
-          <input className="input" placeholder="Folio, cliente, RFC, UUID, remisión..."
-            value={search} onChange={e => setSearch(e.target.value)} />
+      {/* Filtros colapsables en móvil */}
+      <CollapsibleFilters
+        activeCount={[search, statusFilter, from, to, partner].filter(Boolean).length}>
+        <div className="card p-4 flex flex-col sm:flex-row sm:flex-wrap gap-3 sm:items-end">
+          <div className="sm:flex-1 sm:min-w-[200px]">
+            <label className="label">Buscar</label>
+            <input className="input" placeholder="Folio, cliente, RFC, UUID, remisión..."
+              value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
+          <div className="sm:min-w-[200px]">
+            <label className="label">Cliente</label>
+            <Autocomplete value={partner}
+              onChange={(p) => { setPartner(p); setPage(1) }}
+              onSearch={searchPartners}
+              placeholder="Filtrar por cliente..." />
+          </div>
+          <div>
+            <label className="label">Estado</label>
+            <select className="select" value={statusFilter}
+              onChange={e => { setStatusFilter(e.target.value); setPage(1) }}>
+              {STATUS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          {/* Desde + Hasta: par de 2 columnas en móvil, sueltos en escritorio */}
+          <div className="grid grid-cols-2 gap-3 sm:contents">
+            <div>
+              <label className="label">Desde</label>
+              <input type="date" className="input" value={from}
+                onChange={e => { setFrom(e.target.value); setPage(1) }} />
+            </div>
+            <div>
+              <label className="label">Hasta</label>
+              <input type="date" className="input" value={to}
+                onChange={e => { setTo(e.target.value); setPage(1) }} />
+            </div>
+          </div>
+          {(statusFilter || from || to || search || partner) && (
+            <button onClick={() => { setStatusFilter(''); setFrom(''); setTo(''); setSearch(''); setPartner(null); setPage(1) }}
+              className="btn-ghost btn-sm text-ink-muted self-start sm:self-auto">
+              Limpiar filtros
+            </button>
+          )}
         </div>
-        <div className="min-w-[200px]">
-          <label className="label">Cliente</label>
-          <Autocomplete value={partner}
-            onChange={(p) => { setPartner(p); setPage(1) }}
-            onSearch={searchPartners}
-            placeholder="Filtrar por cliente..." />
-        </div>
-        <div>
-          <label className="label">Estado</label>
-          <select className="select" value={statusFilter}
-            onChange={e => { setStatusFilter(e.target.value); setPage(1) }}>
-            {STATUS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="label">Desde</label>
-          <input type="date" className="input" value={from}
-            onChange={e => { setFrom(e.target.value); setPage(1) }} />
-        </div>
-        <div>
-          <label className="label">Hasta</label>
-          <input type="date" className="input" value={to}
-            onChange={e => { setTo(e.target.value); setPage(1) }} />
-        </div>
-        {(statusFilter || from || to || search || partner) && (
-          <button onClick={() => { setStatusFilter(''); setFrom(''); setTo(''); setSearch(''); setPartner(null); setPage(1) }}
-            className="btn-ghost btn-sm text-ink-muted">
-            Limpiar filtros
-          </button>
-        )}
-      </div>
+      </CollapsibleFilters>
 
       {/* Tabla */}
       <div className="card overflow-hidden">

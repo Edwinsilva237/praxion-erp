@@ -488,7 +488,10 @@ function StepReconcile({ parsed, onClose, onSaved }) {
     .filter(r => selectedReceipts.includes(r.id))
     .reduce((s, r) => s + parseFloat(r.total_mxn || 0), 0)
 
-  const diff = parseFloat((parsed.total - totalReceipts).toFixed(2))
+  // Conciliar SIN IVA contra SIN IVA: subtotal de la factura vs subtotal de las
+  // recepciones (las recepciones son el valor de la mercancía, sin IVA).
+  const invoiceSubtotal = parseFloat(parsed.subtotal) || (parseFloat(parsed.total || 0) - parseFloat(parsed.tax || 0))
+  const diff = parseFloat((invoiceSubtotal - totalReceipts).toFixed(2))
   const reconStatus = selectedReceipts.length === 0 ? 'pending'
                     : Math.abs(diff) < 0.01 ? 'reconciled' : 'with_diff'
 
@@ -699,9 +702,9 @@ function StepReconcile({ parsed, onClose, onSaved }) {
             {reconStatus === 'reconciled' ? '✓ Conciliación exacta' : '⚠ Diferencia detectada'}
           </p>
           <div className="grid grid-cols-2 gap-1 text-sm">
-            <span className="text-ink-secondary">Total factura</span>
-            <span className="text-right font-mono font-semibold">{fmtMXN(parsed.total)}</span>
-            <span className="text-ink-secondary">Total recepciones seleccionadas</span>
+            <span className="text-ink-secondary">Subtotal factura (sin IVA)</span>
+            <span className="text-right font-mono font-semibold">{fmtMXN(invoiceSubtotal)}</span>
+            <span className="text-ink-secondary">Recepciones (sin IVA)</span>
             <span className="text-right font-mono">{fmtMXN(totalReceipts)}</span>
             {reconStatus !== 'reconciled' && (
               <>
