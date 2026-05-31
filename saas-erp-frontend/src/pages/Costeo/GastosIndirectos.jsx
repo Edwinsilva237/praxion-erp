@@ -60,8 +60,11 @@ const HELP_ESTIMADO = {
 
 const EMPTY = {
   code: '', name: '', allocation_base: 'shifts', capture_frequency: 'monthly',
-  default_estimated_amount: 0, sort_order: 0, notes: '',
+  default_estimated_amount: 0, default_expected_basis_divisor: null, sort_order: 0, notes: '',
 }
+
+// Unidad de la base de prorrateo, para la pregunta de "esperados al mes".
+const BASIS_UNIT = { shifts: 'turnos', hours: 'horas', units: 'unidades', weight: 'kg', equal: 'turnos' }
 
 function ItemModal({ item, onClose, onSaved }) {
   const isNew = !item?.id
@@ -70,6 +73,7 @@ function ItemModal({ item, onClose, onSaved }) {
     allocation_base: item.allocation_base,
     capture_frequency: item.capture_frequency,
     default_estimated_amount: item.default_estimated_amount ?? 0,
+    default_expected_basis_divisor: item.default_expected_basis_divisor ?? null,
     sort_order: item.sort_order ?? 0,
     notes: item.notes ?? '',
   })
@@ -157,6 +161,26 @@ function ItemModal({ item, onClose, onSaved }) {
               onChange={e => set('default_estimated_amount', parseFloat(e.target.value) || 0)}
             />
             <p className="text-xs text-ink-muted mt-1">Se usará como valor por defecto al crear el período del mes. Lo podrás ajustar después.</p>
+          </div>
+
+          <div>
+            <label className="label">
+              ¿Cuántos {BASIS_UNIT[form.allocation_base] || 'turnos'} esperas al mes? <span className="text-ink-muted font-normal">(opcional)</span>
+            </label>
+            <input
+              type="number" min={0} step="0.01"
+              className="input"
+              placeholder={`Ej. 60 ${BASIS_UNIT[form.allocation_base] || 'turnos'}`}
+              value={form.default_expected_basis_divisor ?? ''}
+              onChange={e => {
+                const n = parseFloat(e.target.value)
+                set('default_expected_basis_divisor', e.target.value === '' || isNaN(n) ? null : n)
+              }}
+            />
+            <p className="text-xs text-ink-muted mt-1">
+              Reparte el estimado durante el mes: cada {BASIS_UNIT[form.allocation_base] === 'turnos' ? 'turno' : (BASIS_UNIT[form.allocation_base] || 'turno')} carga
+              <strong> monto ÷ esperados</strong>. Si lo dejas vacío, cada turno cargará el monto completo hasta el cierre de mes.
+            </p>
           </div>
 
           <div>

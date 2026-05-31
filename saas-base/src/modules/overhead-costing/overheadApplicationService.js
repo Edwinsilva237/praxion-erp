@@ -68,6 +68,20 @@ async function applyOverheadToShift(shiftId, tenantId, shiftData) {
   const shiftDate = startedAt instanceof Date ? startedAt : new Date(startedAt)
   const shiftDateStr = shiftDate.toISOString().slice(0, 10)
 
+  // Fix (2026-05-30): auto-generar el presupuesto estimado del mes del turno si
+  // no existe, para que el overhead aplique SIN pasos manuales. Antes el operador
+  // tenía que abrir "Períodos del mes" para que se crearan los renglones; si no,
+  // applyOverheadToShift no encontraba períodos y el turno salía con overhead $0.
+  // ensurePeriodsForMonth es idempotente (salta los que ya existen) y copia el
+  // default_estimated_amount + default_expected_basis_divisor de cada ítem activo.
+  try {
+    const [yStr, mStr] = shiftDateStr.split('-')
+    const { ensurePeriodsForMonth } = require('./overheadPeriodsService')
+    await ensurePeriodsForMonth(tenantId, parseInt(yStr, 10), parseInt(mStr, 10))
+  } catch (e) {
+    console.warn('[overhead] ensurePeriodsForMonth (auto) falló, no bloquea:', e.message)
+  }
+
   // 1. Obtener períodos activos que solapan con la fecha del turno
   const { rows: periods } = await withBypass(() =>
     query(

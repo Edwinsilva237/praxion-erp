@@ -13,9 +13,11 @@ const { query, withBypass } = require('../../db')
 // Campos permitidos en creación y actualización
 const ALLOWED_FIELDS = {
   create: ['code', 'name', 'allocation_base', 'capture_frequency',
-           'default_estimated_amount', 'is_active', 'sort_order', 'notes'],
+           'default_estimated_amount', 'default_expected_basis_divisor',
+           'is_active', 'sort_order', 'notes'],
   update: ['name', 'allocation_base', 'capture_frequency',
-           'default_estimated_amount', 'is_active', 'sort_order', 'notes'],
+           'default_estimated_amount', 'default_expected_basis_divisor',
+           'is_active', 'sort_order', 'notes'],
 }
 
 const VALID_ALLOCATION_BASES   = ['shifts', 'hours', 'units', 'weight', 'equal']
@@ -49,6 +51,12 @@ function validate(data, mode) {
       data.default_estimated_amount !== null &&
       (isNaN(parseFloat(data.default_estimated_amount)) || parseFloat(data.default_estimated_amount) < 0)) {
     const err = new Error('default_estimated_amount debe ser un número >= 0.')
+    err.status = 400; throw err
+  }
+  if (data.default_expected_basis_divisor !== undefined &&
+      data.default_expected_basis_divisor !== null &&
+      (isNaN(parseFloat(data.default_expected_basis_divisor)) || parseFloat(data.default_expected_basis_divisor) <= 0)) {
+    const err = new Error('default_expected_basis_divisor debe ser un número > 0 (o vacío).')
     err.status = 400; throw err
   }
   if (data.is_active !== undefined && typeof data.is_active !== 'boolean') {

@@ -122,10 +122,15 @@ async function ensurePeriodsForMonth(tenantId, year, month) {
     const { rows: newRows } = await withBypass(() =>
       query(
         `INSERT INTO tenant_overhead_periods
-           (tenant_id, overhead_item_id, period_start, period_end, estimated_amount)
-         VALUES ($1, $2, $3, $4, $5)
+           (tenant_id, overhead_item_id, period_start, period_end, estimated_amount,
+            expected_basis_divisor)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING *`,
-        [tenantId, item.id, startStr, endStr, item.default_estimated_amount]
+        // expected_basis_divisor sale del default del ítem (turnos/horas/kg
+        // esperados al mes) → el estimado intra-mes ya se reparte. NULL = monto
+        // completo por turno (comportamiento previo).
+        [tenantId, item.id, startStr, endStr, item.default_estimated_amount,
+         item.default_expected_basis_divisor != null ? item.default_expected_basis_divisor : null]
       )
     )
     created.push(newRows[0])
