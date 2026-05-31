@@ -2,18 +2,22 @@ import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import api from '@/api/axios'
 import Spinner from '@/components/ui/Spinner'
+import { downloadBlob } from '@/utils/downloadBlob'
 
 /**
- * Carga la foto de evidencia de una remisión via axios (preservando los
- * headers X-Tenant-Slug y Authorization) y la renderiza como blob URL.
- * Click sobre la imagen abre un lightbox fullscreen para verla en grande.
+ * Carga la evidencia de entrega de una remisión via axios (preservando los
+ * headers X-Tenant-Slug y Authorization). Si es imagen la muestra (con lightbox
+ * fullscreen al hacer click). Si es un PDF (documento escaneado) ofrece abrirlo /
+ * descargarlo — un <img> no puede renderizar un PDF.
  *
  * Props:
  *   noteId
  *   className — clases para el wrapper de la imagen pequeña
  */
 export function DeliveryPhoto({ noteId, className }) {
+  const [blob, setBlob] = useState(null)
   const [blobUrl, setBlobUrl] = useState(null)
+  const [isPdf, setIsPdf] = useState(false)
   const [error, setError] = useState(null)
   const [showLightbox, setShowLightbox] = useState(false)
 
@@ -22,10 +26,21 @@ export function DeliveryPhoto({ noteId, className }) {
     let cancelled = false
 
     api.get(`/sales/delivery-notes/${noteId}/photo`, { responseType: 'blob' })
-      .then(r => {
+      .then(async r => {
         if (cancelled) return
-        createdUrl = URL.createObjectURL(r.data)
-        setBlobUrl(createdUrl)
+        const b = r.data
+        // Detectar PDF por content-type y, como respaldo, por los bytes "%PDF".
+        let pdf = b.type === 'application/pdf'
+        if (!pdf) {
+          try { pdf = (await b.slice(0, 5).text()).startsWith('%PDF') } catch { /* ignore */ }
+        }
+        if (cancelled) return
+        setBlob(b)
+        setIsPdf(pdf)
+        if (!pdf) {
+          createdUrl = URL.createObjectURL(b)
+          setBlobUrl(createdUrl)
+        }
       })
       .catch(e => {
         if (cancelled) return
@@ -39,10 +54,32 @@ export function DeliveryPhoto({ noteId, className }) {
   }, [noteId])
 
   if (error) {
-    return <p className="text-xs text-status-danger italic">No se pudo cargar la foto: {error}</p>
+    return <p className="text-xs text-status-danger italic">No se pudo cargar la evidencia: {error}</p>
   }
-  if (!blobUrl) {
+  if (!blob) {
     return <div className="flex justify-center py-8"><Spinner size="sm" /></div>
+  }
+
+  // PDF (documento escaneado): no se muestra en <img> → botón para abrir/descargar.
+  if (isPdf) {
+    return (
+      <div className="flex items-center gap-3 rounded-xl border border-line-subtle bg-surface-elevated/40 p-4">
+        <svg className="w-9 h-9 text-status-danger shrink-0" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
+        </svg>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-ink-primary">Evidencia en PDF</p>
+          <p className="text-xs text-ink-muted">Documento escaneado</p>
+        </div>
+        <button type="button" onClick={() => downloadBlob(blob, `evidencia-${noteId}.pdf`)}
+          className="btn-secondary btn-sm shrink-0">
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+          </svg>
+          Abrir
+        </button>
+      </div>
+    )
   }
 
   return (
