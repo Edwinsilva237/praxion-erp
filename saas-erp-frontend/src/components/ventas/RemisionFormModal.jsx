@@ -7,7 +7,7 @@ import { processConfigApi } from '@/api/processConfig'
 import { productLotsApi } from '@/api/productLots'
 import Spinner from '@/components/ui/Spinner'
 import { ProductImageThumb } from '@/components/productos/ProductImageThumb'
-import { fmtMXN, fmtDate, fmtNum } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
 /**
@@ -422,7 +422,7 @@ export function RemisionFormModal({ onClose, onCreated, prefilledOrderId = null 
             <div className="bg-surface-elevated/40 rounded-xl p-3 grid grid-cols-2 gap-2 text-xs">
               <div><span className="text-ink-muted">Pedido:</span> <span className="font-mono font-semibold text-brand-300">{primary.order_number}</span></div>
               <div><span className="text-ink-muted">Cliente:</span> <span className="font-medium">{primary.partner_name}</span></div>
-              <div><span className="text-ink-muted">F. programada:</span> <span>{fmtDate(primary.scheduled_date)}</span></div>
+              <div><span className="text-ink-muted">F. programada:</span> <span>{fmtDateOnly(primary.scheduled_date)}</span></div>
               <div><span className="text-ink-muted">OC cliente:</span> <span>{primary.po_number || '—'}</span></div>
               {primary.delivery_address && (
                 <div className="col-span-2">
@@ -586,12 +586,12 @@ export function RemisionFormModal({ onClose, onCreated, prefilledOrderId = null 
           {error && <p className="field-error">{error}</p>}
 
           <div className="flex gap-2 pt-1">
-            <button type="button" onClick={onClose} className="btn-secondary flex-1" disabled={mutation.isPending}>
+            <button type="button" onClick={onClose} className="btn-secondary flex-1 justify-center" disabled={mutation.isPending}>
               Cancelar
             </button>
             <button type="submit"
               disabled={mutation.isPending || !selectedOrderIds.length || !ordersLoaded}
-              className="btn-primary flex-1">
+              className="btn-primary flex-1 justify-center">
               {mutation.isPending
                 ? <Spinner size="sm" />
                 : `Crear remisión${selectedOrderIds.length > 1 ? ` (${selectedOrderIds.length} pedidos)` : ''}`}

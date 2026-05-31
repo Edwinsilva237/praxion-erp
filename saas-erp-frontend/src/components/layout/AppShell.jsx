@@ -61,18 +61,24 @@ export default function AppShell({ children }) {
       {/* Desktop: siempre visible | Móvil: drawer deslizable */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-30 w-56 flex-shrink-0
+          fixed inset-y-0 left-0 z-30 w-72 md:w-56 flex-shrink-0
           bg-bg-secondary border-r border-line-subtle
           transition-transform duration-200 ease-out
           md:static md:translate-x-0
           ${drawerOpen ? 'translate-x-0 drawer-enter' : '-translate-x-full'}
         `}
+        style={{ paddingTop: 'env(safe-area-inset-top)' }}
       >
         <Sidebar onClose={() => setDrawerOpen(false)} />
       </aside>
 
       {/* ── Área principal ─────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-bg-primary">
+      {/* paddingTop = área segura: en Android edge-to-edge (targetSdk 36) el
+          webview se dibuja bajo la barra de estado; sin esto, los banners y la
+          barra superior (menú + cambio de empresa) quedan tapados y no se
+          pueden tocar. */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-bg-primary"
+        style={{ paddingTop: 'env(safe-area-inset-top)' }}>
         {/* Banner: estás administrando la plataforma (afecta a TODOS los
             clientes). Color azul informativo para diferenciarlo del banner
             ámbar de sandbox y del rojo de errores. */}

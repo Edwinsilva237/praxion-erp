@@ -7,7 +7,8 @@ import Can from '@/components/auth/Can'
 import { PedidoFormModal } from '@/components/ventas/PedidoFormModal'
 import { PedidoDetallePanel } from '@/components/ventas/PedidoDetallePanel'
 import CollapsibleFilters from '@/components/ui/CollapsibleFilters'
-import { fmtMXN, fmtDate } from '@/utils/fmt'
+import ScanButton from '@/components/scanner/ScanButton'
+import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
 // Mini barra de progreso de entrega con dos segmentos:
@@ -153,13 +154,13 @@ export default function VentasPedidos() {
   return (
     <div className="page-enter flex flex-col gap-4">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold text-ink-primary">Pedidos de venta</h1>
           <p className="text-xs text-ink-muted mt-0.5">Captura, confirma y da seguimiento a los pedidos de tus clientes</p>
         </div>
         <Can do="sales:create">
-          <button onClick={() => setShowForm(true)} className="btn-primary">
+          <button onClick={() => setShowForm(true)} className="btn-primary w-full justify-center sm:w-auto">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/>
             </svg>
@@ -186,11 +187,14 @@ export default function VentasPedidos() {
       {/* Filtros */}
       <CollapsibleFilters
         activeCount={[search, statusFilter, from, to].filter(Boolean).length}>
-        <div className="card p-4 flex flex-wrap gap-3 items-end">
-          <div className="flex-1 min-w-[200px]">
+        <div className="card p-4 flex flex-col sm:flex-row sm:flex-wrap gap-3 sm:items-end">
+          <div className="sm:flex-1 sm:min-w-[200px]">
             <label className="label">Buscar</label>
-            <input className="input" placeholder="Número, cliente o RFC..."
-              value={search} onChange={e => setSearch(e.target.value)} />
+            <div className="flex gap-2">
+              <input className="input flex-1" placeholder="Número, cliente o RFC..."
+                value={search} onChange={e => setSearch(e.target.value)} />
+              <ScanButton onScan={code => setSearch(code)} title="Escanear código" />
+            </div>
           </div>
           <div>
             <label className="label">Estado</label>
@@ -199,19 +203,22 @@ export default function VentasPedidos() {
               {STATUS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           </div>
-          <div>
-            <label className="label">Desde</label>
-            <input type="date" className="input" value={from}
-              onChange={e => { setFrom(e.target.value); setPage(1) }} />
-          </div>
-          <div>
-            <label className="label">Hasta</label>
-            <input type="date" className="input" value={to}
-              onChange={e => { setTo(e.target.value); setPage(1) }} />
+          {/* Desde + Hasta: par de 2 columnas en móvil, campos sueltos en escritorio */}
+          <div className="grid grid-cols-2 gap-3 sm:contents">
+            <div>
+              <label className="label">Desde</label>
+              <input type="date" className="input" value={from}
+                onChange={e => { setFrom(e.target.value); setPage(1) }} />
+            </div>
+            <div>
+              <label className="label">Hasta</label>
+              <input type="date" className="input" value={to}
+                onChange={e => { setTo(e.target.value); setPage(1) }} />
+            </div>
           </div>
           {(statusFilter || from || to || search) && (
             <button onClick={() => { setStatusFilter(''); setFrom(''); setTo(''); setSearch(''); setPage(1) }}
-              className="btn-ghost btn-sm text-ink-muted">
+              className="btn-ghost btn-sm text-ink-muted self-start sm:self-auto">
               Limpiar filtros
             </button>
           )}
@@ -248,6 +255,79 @@ export default function VentasPedidos() {
           </div>
         ) : (
           <>
+            {/* ── Móvil: tarjetas con secciones ── */}
+            <div className="md:hidden flex flex-col gap-3">
+              {pendingOrders.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <p className="text-xs font-bold text-brand-300 uppercase tracking-wider px-1">
+                    ⏳ Pendientes de entrega · {pendingOrders.length}
+                  </p>
+                  {pendingOrders.map(o => {
+                    const urgency = getDeliveryUrgency(o.scheduled_date)
+                    return (
+                      <button key={o.id} type="button" onClick={() => setSelectedId(o.id)}
+                        className={clsx('w-full text-left border rounded-xl p-3 transition-colors',
+                          selectedId === o.id ? 'border-brand-500 bg-brand-500/10'
+                            : 'border-line-subtle bg-surface-primary hover:bg-surface-elevated/40')}>
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="font-mono font-semibold text-brand-300">{o.order_number}</span>
+                          <Badge status={o.status} />
+                        </div>
+                        <p className="mt-1 font-medium text-ink-primary truncate">{o.partner_name}</p>
+                        <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                          {o.pickup_in_warehouse && (
+                            <span className="text-[10px] font-bold bg-amber-200 text-status-warning px-1.5 py-0.5 rounded-full">🏪 Recoge</span>
+                          )}
+                          {!o.pickup_in_warehouse && o.driver_name && (
+                            <span className="text-[10px] font-bold bg-purple-200 text-purple-300 px-1.5 py-0.5 rounded-full">🚚 {o.driver_name.split(' ')[0]}</span>
+                          )}
+                        </div>
+                        <div className="mt-1.5 flex items-end justify-between gap-2">
+                          <span className={clsx('text-xs font-semibold',
+                            urgency === 'overdue' ? 'text-status-danger'
+                            : urgency === 'today' ? 'text-status-warning'
+                            : urgency === 'future' ? 'text-status-success' : 'text-ink-muted')}>
+                            Entrega: {fmtDateOnly(o.scheduled_date)}
+                          </span>
+                          <span className="font-mono tabular-nums font-medium">{fmtMXN(o.subtotal_mxn ?? o.total_mxn, o.currency)}</span>
+                        </div>
+                        {(o.status === 'in_delivery' || o.status === 'partially_delivered') && (
+                          <div className="mt-1.5">
+                            <DeliveryProgress delivered={o.delivered_total_mxn} remisioned={o.remisioned_total_mxn} total={o.total_mxn} />
+                          </div>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              {doneOrders.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <p className="text-xs font-bold text-ink-muted uppercase tracking-wider px-1">
+                    ✓ Entregados y cerrados · {doneOrders.length}
+                  </p>
+                  {doneOrders.map(o => (
+                    <button key={o.id} type="button" onClick={() => setSelectedId(o.id)}
+                      className={clsx('w-full text-left border rounded-xl p-3 transition-colors opacity-80',
+                        selectedId === o.id ? 'border-brand-500 bg-brand-500/10 opacity-100'
+                          : 'border-line-subtle bg-surface-primary hover:opacity-100')}>
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="font-mono font-semibold text-brand-300">{o.order_number}</span>
+                        <Badge status={o.status} />
+                      </div>
+                      <p className="mt-1 font-medium text-ink-primary truncate">{o.partner_name}</p>
+                      <div className="mt-1.5 flex items-end justify-between gap-2 text-xs">
+                        <span className="text-ink-muted">Entrega: {fmtDateOnly(o.scheduled_date)}</span>
+                        <span className="font-mono tabular-nums font-medium text-ink-secondary">{fmtMXN(o.subtotal_mxn ?? o.total_mxn, o.currency)}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* ── Escritorio: tabla completa ── */}
+            <div className="table-wrap hidden md:block">
             <table className="table">
               <thead>
                 <tr>
@@ -306,7 +386,7 @@ export default function VentasPedidos() {
                         urgency === 'today'   ? 'text-status-warning' :
                         urgency === 'future'  ? 'text-status-success' : 'text-ink-secondary')}
                         title={late ? 'Fecha programada vencida' : undefined}>
-                        {fmtDate(o.scheduled_date)}
+                        {fmtDateOnly(o.scheduled_date)}
                         {urgency === 'overdue' && (
                           <svg className="inline-block w-3 h-3 ml-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
                             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
@@ -360,7 +440,7 @@ export default function VentasPedidos() {
                         title={late
                           ? (o.status === 'delivered' ? 'Entregado después de la fecha programada' : 'Fecha programada vencida')
                           : undefined}>
-                        {fmtDate(o.scheduled_date)}
+                        {fmtDateOnly(o.scheduled_date)}
                         {late && (
                           <svg className="inline-block w-3 h-3 ml-1 -mt-0.5" fill="currentColor" viewBox="0 0 24 24">
                             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
@@ -379,6 +459,7 @@ export default function VentasPedidos() {
                 })}
               </tbody>
             </table>
+            </div>
 
             {/* Paginación */}
             {totalPages > 1 && (

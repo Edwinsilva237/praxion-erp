@@ -8,7 +8,7 @@ import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
 import { PagoProveedorModal } from '@/components/finanzas/PagoProveedorModal'
 import { CxPDetallePanel } from '@/components/finanzas/CxPDetallePanel'
-import { fmtMXN, fmtDate } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
 const STATUS_OPTS = [
@@ -288,10 +288,10 @@ export default function CuentasPorPagar() {
                       </div>
                       {d.partner_rfc && <p className="text-[10px] text-ink-muted font-mono">{d.partner_rfc}</p>}
                     </td>
-                    <td className="text-xs text-ink-secondary">{fmtDate(d.issue_date)}</td>
+                    <td className="text-xs text-ink-secondary">{fmtDateOnly(d.issue_date)}</td>
                     <td className={clsx('text-xs',
                       d.is_overdue ? 'text-status-danger font-semibold' : 'text-ink-secondary')}>
-                      {fmtDate(d.due_date)}
+                      {fmtDateOnly(d.due_date)}
                     </td>
                     <td><Badge status={d.is_overdue ? 'overdue' : d.status} /></td>
                     <td>

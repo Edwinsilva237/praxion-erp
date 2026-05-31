@@ -132,7 +132,7 @@ export default function Dashboard() {
     <div className="space-y-6">
 
       {/* Hero de bienvenida con branding del cliente */}
-      <section className="card flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6 relative overflow-hidden">
+      <section className="card flex flex-col sm:flex-row items-center gap-4 sm:gap-6 relative overflow-hidden">
         {/* Halo sutil con el color primario del cliente */}
         <div className="pointer-events-none absolute -right-20 -top-20 w-60 h-60 rounded-full blur-3xl opacity-[0.10]"
              style={{ background: accentColor }} />
@@ -147,7 +147,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        <div className="min-w-0 flex-1 relative">
+        <div className="min-w-0 flex-1 relative text-center sm:text-left">
           <p className="eyebrow">PANEL OPERATIVO</p>
           <h1 className="text-2xl sm:text-3xl font-semibold text-ink-primary mt-1">
             {greeting}, <span className="text-brand-300">{user?.fullName?.split(' ')[0] || 'usuario'}</span>

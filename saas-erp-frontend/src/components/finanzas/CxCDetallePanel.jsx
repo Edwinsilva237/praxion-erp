@@ -7,7 +7,7 @@ import { tenantsApi } from '@/api/tenants'
 import { PagoModal } from '@/components/finanzas/PagoModal'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
-import { fmtMXN, fmtDate } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob } from '@/utils/downloadBlob'
 import useAuthStore from '@/store/useAuthStore'
 import clsx from 'clsx'
@@ -176,7 +176,7 @@ function PagosAplicados({ payments, partnerId }) {
           <tbody>
             {payments.map(p => (
               <tr key={p.id}>
-                <td className="text-ink-secondary">{fmtDate(p.payment_date)}</td>
+                <td className="text-ink-secondary">{fmtDateOnly(p.payment_date)}</td>
                 <td>{PAYMENT_METHOD_LABEL[p.payment_method] || p.payment_method}</td>
                 <td className="text-ink-secondary text-[11px]">
                   {p.bank_name
@@ -257,7 +257,8 @@ export function CxCDetallePanel({ arId, onClose }) {
 
       <div className="w-full max-w-2xl bg-surface-primary h-full overflow-y-auto shadow-card flex flex-col">
         {/* Header */}
-        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10">
+        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10"
+          style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top))' }}>
           <div className="flex-1 min-w-0">
             {isLoading ? (
               <div className="flex flex-col gap-2">
@@ -274,7 +275,7 @@ export function CxCDetallePanel({ arId, onClose }) {
                   <Badge status={ar.is_overdue ? 'overdue' : ar.status} />
                 </div>
                 <p className="text-xs text-ink-muted mt-1">
-                  {ar.partner_name} · Emitido {fmtDate(ar.issue_date)}
+                  {ar.partner_name} · Emitido {fmtDateOnly(ar.issue_date)}
                 </p>
               </>
             ) : null}
@@ -351,8 +352,8 @@ export function CxCDetallePanel({ arId, onClose }) {
                 {[
                   ['Cliente',        ar.partner_name],
                   ['RFC',            ar.partner_rfc || '—'],
-                  ['F. emisión',     fmtDate(ar.issue_date)],
-                  ['F. vencimiento', fmtDate(ar.due_date)],
+                  ['F. emisión',     fmtDateOnly(ar.issue_date)],
+                  ['F. vencimiento', fmtDateOnly(ar.due_date)],
                 ].map(([label, val]) => (
                   <div key={label} className="bg-surface-elevated/60 border border-line-strong rounded-lg px-3 py-2">
                     <p className="text-[10px] font-bold text-ink-secondary uppercase tracking-wide">{label}</p>
@@ -514,7 +515,7 @@ function ComplementsList({ partnerId, complements }) {
                 <span className="font-mono font-medium text-ink-primary text-sm">
                   {fmtMXN(pc.amount, pc.currency)}
                 </span>
-                <span className="text-[11px] text-ink-muted">{fmtDate(pc.payment_date)}</span>
+                <span className="text-[11px] text-ink-muted">{fmtDateOnly(pc.payment_date)}</span>
                 <span className="text-[11px] text-ink-muted">· forma {pc.payment_form}</span>
                 {pc.reference && <span className="text-[11px] text-ink-muted">· ref {pc.reference}</span>}
               </div>
@@ -609,7 +610,7 @@ function EnviarComplementoModal({ partnerId, complement, onClose, onSent }) {
         </div>
         <p className="text-xs text-ink-muted mb-4">
           Se enviará el XML + PDF del complemento {fmtMXN(complement.amount, complement.currency)}
-          {' '}del {fmtDate(complement.payment_date)} a los destinatarios seleccionados.
+          {' '}del {fmtDateOnly(complement.payment_date)} a los destinatarios seleccionados.
         </p>
 
         {isLoading ? (
@@ -739,7 +740,7 @@ function EnviarReciboModal({ partnerId, payment, onClose, onSent }) {
         </div>
         <p className="text-xs text-ink-muted mb-4">
           Se enviará el PDF del recibo por <strong>{fmtMXN(payment.amount)}</strong> del
-          {' '}{fmtDate(payment.payment_date)} a los destinatarios seleccionados.
+          {' '}{fmtDateOnly(payment.payment_date)} a los destinatarios seleccionados.
         </p>
 
         {isLoading ? (

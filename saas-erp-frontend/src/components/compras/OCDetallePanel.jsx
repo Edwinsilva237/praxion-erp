@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { purchasesApi } from '@/api/purchases'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
-import { fmtMXN, fmtDate, fmtNum } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob } from '@/utils/downloadBlob'
 import clsx from 'clsx'
 
@@ -71,7 +71,7 @@ function RecepcionDetalle({ receiptId, onClose }) {
           {/* Datos */}
           <div className="grid grid-cols-2 gap-2 text-xs">
             {[
-              ['Fecha',        fmtDate(receipt.received_date)],
+              ['Fecha',        fmtDateOnly(receipt.received_date)],
               ['Almacén',      receipt.warehouse_name || '—'],
               ['Folio doc.',   receipt.document_type
                 ? `${receipt.document_type} ${receipt.document_number || ''}`.trim() : '—'],
@@ -155,7 +155,7 @@ function TabDetalle({ oc }) {
             ? `USD (TC $${oc.exchange_rate_value ? fmtNum(oc.exchange_rate_value, 4) : '—'})`
             : 'MXN'],
           ['F. creación',      fmtDate(oc.created_at)],
-          ['F. entrega est.',  fmtDate(oc.expected_date)],
+          ['F. entrega est.',  fmtDateOnly(oc.expected_date)],
         ].map(([label, val]) => (
           <div key={label} className="bg-surface-elevated/60 border border-line-strong rounded-lg px-3 py-2">
             <p className="text-[10px] font-bold text-ink-secondary uppercase tracking-wide">{label}</p>
@@ -281,7 +281,7 @@ function TabRecepciones({ oc, onGoToRecepcion }) {
                   <div>
                     <p className="text-sm font-semibold text-brand-300 font-mono">{r.receipt_number}</p>
                     <p className="text-xs text-ink-muted mt-0.5">
-                      {fmtDate(r.received_date)}
+                      {fmtDateOnly(r.received_date)}
                       {r.line_count > 0 && ` · ${r.line_count} línea${r.line_count !== 1 ? 's' : ''}`}
                     </p>
                   </div>
@@ -453,7 +453,8 @@ export function OCDetallePanel({ ocId, onClose, onGoToRecepcion }) {
       <div className="w-full max-w-xl bg-surface-primary h-full overflow-y-auto shadow-card flex flex-col">
 
         {/* Header */}
-        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10">
+        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10"
+          style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top))' }}>
           <div className="flex-1 min-w-0">
             {isLoading ? (
               <div className="flex flex-col gap-2">

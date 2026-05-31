@@ -331,8 +331,11 @@ router.get('/delivery-notes/:id/photo', checkPermission('sales', 'read'), async 
     const ext = path.extname(key).toLowerCase()
     const mime = ext === '.png'  ? 'image/png'
               : ext === '.webp' ? 'image/webp'
+              : ext === '.pdf'  ? 'application/pdf'
               : 'image/jpeg'
-    await storage.serve(res, key, { mimeType: mime, disposition: 'inline' })
+    // proxy: el backend transmite el archivo en vez de redirigir a R2 (cuyo CORS
+    // no permite el origen del móvil/webview → "Network Error" al cargar la foto).
+    await storage.serve(res, key, { mimeType: mime, disposition: 'inline', proxy: true })
   } catch (err) { next(err) }
 })
 

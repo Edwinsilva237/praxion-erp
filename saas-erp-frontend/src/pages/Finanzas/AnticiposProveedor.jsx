@@ -7,7 +7,7 @@ import { bankAccountsApi } from '@/api/bankAccounts'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
-import { fmtMXN, fmtDate } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
 const METHOD_LABEL = {
@@ -291,7 +291,7 @@ export default function AnticiposProveedor() {
                 const isActive = avail > 0.01
                 return (
                   <tr key={a.id} className={clsx(!isActive && 'opacity-60')}>
-                    <td className="text-ink-secondary text-sm">{fmtDate(a.payment_date)}</td>
+                    <td className="text-ink-secondary text-sm">{fmtDateOnly(a.payment_date)}</td>
                     <td className="font-medium text-ink-primary">{a.partner_name}</td>
                     <td className="text-sm">{METHOD_LABEL[a.payment_method] || a.payment_method}</td>
                     <td className="text-[11px] text-ink-secondary">

@@ -347,34 +347,34 @@ export default function Sidebar({ onClose }) {
     <div className="flex flex-col h-full bg-bg-secondary">
       {/* ── Brand ────────────────────────────────────────────────────── */}
       <div className={clsx(
-        'flex items-center gap-2.5 px-4 py-4 border-b',
+        'flex items-center gap-3 px-4 py-5 md:py-4 border-b',
         isInPlatformMode
           ? 'border-status-info/40 bg-status-info/5'
           : 'border-line-subtle'
       )}>
         <div className={clsx(
-          'w-9 h-9 rounded-md flex items-center justify-center shrink-0 overflow-hidden border',
+          'w-14 h-14 md:w-10 md:h-10 rounded-lg flex items-center justify-center shrink-0 overflow-hidden border',
           isInPlatformMode
             ? 'bg-bg-tertiary border-status-info/40'
             : 'bg-bg-tertiary border-line-subtle'
         )}>
           {isInPlatformMode ? (
-            <img src="/praxion-isotipo.svg" alt="Praxion" className="w-7 h-7 object-contain" />
+            <img src="/praxion-isotipo.svg" alt="Praxion" className="w-10 h-10 md:w-7 md:h-7 object-contain" />
           ) : tenantLogo ? (
             <img src={tenantLogo} alt={displayName} className="w-full h-full object-contain" />
           ) : (
-            <img src="/praxion-isotipo.svg" alt="Praxion" className="w-7 h-7 object-contain" />
+            <img src="/praxion-isotipo.svg" alt="Praxion" className="w-10 h-10 md:w-7 md:h-7 object-contain" />
           )}
         </div>
         <div className="min-w-0 flex-1">
           {isInPlatformMode ? (
             <>
-              <p className="text-sm font-semibold text-ink-primary truncate tracking-wide">PRAXION</p>
+              <p className="text-base md:text-sm font-semibold text-ink-primary truncate tracking-wide">PRAXION</p>
               <p className="text-[10px] text-status-info truncate uppercase tracking-widest">Modo plataforma</p>
             </>
           ) : (
             <>
-              <p className="text-sm font-semibold text-ink-primary truncate tracking-wide">
+              <p className="text-base md:text-sm font-semibold text-ink-primary truncate tracking-wide">
                 {tenantLogo ? displayName : 'PRAXION'}
               </p>
               <p className="text-[10px] text-ink-muted truncate uppercase tracking-widest">

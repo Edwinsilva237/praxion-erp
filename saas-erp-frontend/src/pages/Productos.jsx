@@ -117,9 +117,9 @@ function Field({ label, error, required, hint, children, className }) {
   )
 }
 
-function Section({ number, title, badge, children }) {
+function Section({ number, title, badge, children, className }) {
   return (
-    <div className="border border-line-subtle rounded-xl overflow-hidden">
+    <div className={clsx('border border-line-subtle rounded-xl overflow-hidden', className)}>
       <div className="flex items-center gap-2.5 px-4 py-3 bg-surface-elevated/40 border-b border-line-subtle">
         <span className="w-5 h-5 rounded-full bg-brand-600 text-white text-[10px] font-medium flex items-center justify-center shrink-0">
           {number}
@@ -357,6 +357,12 @@ function ProductModal({ product: initialProduct, onClose }) {
         {/* Form */}
         <form onSubmit={handleSubmit((d) => mutation.mutate(d))} className="px-6 py-5 space-y-4">
 
+          {/* Aviso de captura rápida — solo en móvil */}
+          <div className="sm:hidden rounded-lg bg-status-info/10 border border-status-info/30 px-3 py-2 text-xs text-status-info flex items-start gap-2">
+            <span className="text-sm leading-none mt-0.5">⚡</span>
+            <span><strong>Captura rápida.</strong> Registra lo esencial (incluida la clave SAT para facturar). El precio, presentaciones, imagen y demás se completan en la versión de escritorio.</span>
+          </div>
+
           {justCreated && (
             <div className="px-4 py-3 rounded-xl border border-status-success/40 bg-status-success/10 text-sm text-status-success flex items-start gap-2.5">
               <span className="text-base leading-none mt-0.5">✓</span>
@@ -422,7 +428,7 @@ function ProductModal({ product: initialProduct, onClose }) {
               </Field>
             )}
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Field label="SKU" required error={errors.sku?.message}
                 hint={!isEditing
                   ? (codeSug.canSuggest ? `Sugerencia: ${codeSug.code}` : 'No se puede cambiar después')
@@ -445,7 +451,7 @@ function ProductModal({ product: initialProduct, onClose }) {
                   )}
                 </div>
               </Field>
-              <Field label="Nombre" required error={errors.name?.message} className="col-span-2">
+              <Field label="Nombre" required error={errors.name?.message} className="sm:col-span-2">
                 <input
                   {...register('name')}
                   placeholder="Nombre del producto"
@@ -454,7 +460,7 @@ function ProductModal({ product: initialProduct, onClose }) {
               </Field>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Unidad de venta" required error={errors.saleUnit?.message}>
                 <select {...register('saleUnit')} className={clsx('select', errors.saleUnit && 'input-error')}>
                   {SALE_UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
@@ -462,14 +468,15 @@ function ProductModal({ product: initialProduct, onClose }) {
               </Field>
               <Field label="Unidades por empaque"
                 error={errors.unitsPerPackage?.message}
-                hint="Cuántas piezas vienen por paquete (opcional)">
+                hint="Cuántas piezas vienen por paquete (opcional)"
+                className="hidden sm:block">
                 <input {...register('unitsPerPackage')} type="number" min="1"
                   className={clsx('input', errors.unitsPerPackage && 'input-error')}
                   placeholder="1" />
               </Field>
             </div>
 
-            <Field label="Descripción" hint="Opcional — aparece en cotizaciones y facturas">
+            <Field label="Descripción" hint="Opcional — aparece en cotizaciones y facturas" className="hidden sm:block">
               <textarea {...register('description')} rows={2}
                 placeholder="Descripción para documentos..."
                 className="input h-auto py-2 resize-none" />
@@ -477,7 +484,7 @@ function ProductModal({ product: initialProduct, onClose }) {
           </Section>
 
           {/* ── 1b. Especificaciones del producto (colapsable — solo si aplica) ── */}
-          <section className="rounded-xl border border-line-subtle overflow-hidden">
+          <section className="rounded-xl border border-line-subtle overflow-hidden hidden sm:block">
             <button
               type="button"
               onClick={() => setSpecsExpanded(v => !v)}
@@ -514,7 +521,7 @@ function ProductModal({ product: initialProduct, onClose }) {
           </section>
 
           {/* ── 1c. Imagen y fichas técnicas ── */}
-          <Section number="1c" title="Imagen y fichas técnicas" badge="catálogo enriquecido">
+          <Section number="1c" title="Imagen y fichas técnicas" badge="catálogo enriquecido" className="hidden sm:block">
             {isEditing ? (
               <>
                 <ProductImageUploader
@@ -540,7 +547,7 @@ function ProductModal({ product: initialProduct, onClose }) {
           </Section>
 
           {/* ── 2. Precio base ── */}
-          <Section number="2" title="Precio base de lista" badge="opcional">
+          <Section number="2" title="Precio base de lista" badge="opcional" className="hidden sm:block">
             <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
               <Field label="Precio"
                 error={errors.basePrice?.message}
@@ -564,14 +571,14 @@ function ProductModal({ product: initialProduct, onClose }) {
 
           {/* ── 2c. Presentaciones de venta ── */}
           {isEditing && (
-            <Section number="2b" title="Presentaciones de venta" badge="cómo se vende y factura">
+            <Section number="2b" title="Presentaciones de venta" badge="cómo se vende y factura" className="hidden sm:block">
               <PackOptionsEditor product={product} />
             </Section>
           )}
 
           {/* ── 3. Datos SAT ── */}
           <Section number="3" title="Datos SAT para facturación" badge="requerido para timbrar">
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Field label="Clave producto SAT" required error={errors.satProductCode?.message}
                 hint="Catálogo c_ClaveProdServ. Busca por código (ej. 50202200) o por nombre (ej. palomitas).">
                 <SatProductCodeCombobox
@@ -606,7 +613,7 @@ function ProductModal({ product: initialProduct, onClose }) {
           </Section>
 
           {/* ── 4. Niveles de inventario y reposición ── */}
-          <Section number="4" title="Niveles de inventario y reposición">
+          <Section number="4" title="Niveles de inventario y reposición" className="hidden sm:block">
             {isEditing ? (
               <InventoryLevelsPanel
                 itemType="product"
@@ -754,7 +761,7 @@ function PackOptionsEditor({ product }) {
         <p className="text-xs text-ink-muted">Sin presentaciones — agrega la primera abajo.</p>
       )}
 
-      <div className="grid grid-cols-12 gap-2 items-end border-t border-line-subtle pt-3">
+      <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end border-t border-line-subtle pt-3">
         <div className="col-span-4">
           <label className="label">Unidad</label>
           <input className="input text-sm" placeholder="rollo, caja, millar..."

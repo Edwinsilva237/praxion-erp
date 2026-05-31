@@ -104,7 +104,8 @@ export default function ItemDetailPanel({ itemType, itemId, warehouseId, onClose
       <div className="w-full max-w-md bg-surface-primary h-full overflow-y-auto shadow-card flex flex-col">
 
         {/* Header */}
-        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10">
+        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10"
+          style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top))' }}>
           <button onClick={onClose} className="btn-ghost btn-icon text-ink-muted -ml-1 mt-0.5 shrink-0">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />

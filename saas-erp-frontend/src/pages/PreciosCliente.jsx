@@ -5,7 +5,7 @@ import { partnersApi } from '@/api/partners'
 import { productsApi } from '@/api/products'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
-import { fmtMXN, fmtDate } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
 // YYYY-MM-DD para <input type="date"> a partir de un valor del backend (Date/ISO).
@@ -133,7 +133,7 @@ export default function PreciosCliente() {
   return (
     <div className="page-enter flex flex-col gap-4">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold text-ink-primary">Precios por cliente</h1>
           <p className="text-xs text-ink-muted mt-0.5">
@@ -142,7 +142,7 @@ export default function PreciosCliente() {
             <span className="text-ink-muted"> — al usar una presentación con factor &gt;1 se multiplica automáticamente.</span>
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button onClick={() => setHistoryFilter({})} className="btn-ghost btn-sm">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -185,8 +185,8 @@ export default function PreciosCliente() {
       )}
 
       {/* Selector de cliente */}
-      <div className="card p-4 flex flex-wrap gap-3 items-end">
-        <div className="min-w-[280px] flex-1 max-w-md">
+      <div className="card p-4 flex flex-col sm:flex-row sm:flex-wrap gap-3 sm:items-end">
+        <div className="sm:min-w-[280px] sm:flex-1 sm:max-w-md">
           <label className="label">Cliente</label>
           <Autocomplete value={partner}
             onChange={(p) => { setPartner(p); setSearch('') }}
@@ -194,7 +194,7 @@ export default function PreciosCliente() {
             placeholder="Buscar cliente..." />
         </div>
         {partner && (
-          <div className="flex-1 min-w-[200px]">
+          <div className="sm:flex-1 sm:min-w-[200px]">
             <label className="label">Buscar producto</label>
             <input className="input" placeholder="SKU o nombre..."
               value={search} onChange={e => setSearch(e.target.value)} />
@@ -609,8 +609,8 @@ function PriceRow({ row, busy, onSave, onEdit, onDelete }) {
         {diffPct == null ? '—' : `${diffPct > 0 ? '+' : ''}${diffPct.toFixed(1)}%`}
       </td>
       <td className="text-xs text-ink-muted whitespace-nowrap">
-        {fmtDate(row.valid_from)}
-        {validUntil ? <span className="text-ink-muted"> → {fmtDate(row.valid_until)}</span>
+        {fmtDateOnly(row.valid_from)}
+        {validUntil ? <span className="text-ink-muted"> → {fmtDateOnly(row.valid_until)}</span>
           : <span className="text-status-success"> · vigente</span>}
       </td>
       <td>

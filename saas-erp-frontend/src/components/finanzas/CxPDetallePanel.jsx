@@ -5,7 +5,7 @@ import { cxpApi } from '@/api/cxp'
 import { PagoProveedorModal } from '@/components/finanzas/PagoProveedorModal'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
-import { fmtMXN, fmtDate } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob } from '@/utils/downloadBlob'
 import clsx from 'clsx'
 
@@ -67,7 +67,7 @@ function DocumentoOrigen({ ap }) {
           <span className="font-mono font-semibold">{src.invoice_number}</span>
         </div>
         <div>
-          <span className="text-ink-muted">F. emisión:</span> {fmtDate(src.invoice_date)}
+          <span className="text-ink-muted">F. emisión:</span> {fmtDateOnly(src.invoice_date)}
         </div>
         {src.serie && (
           <div>
@@ -97,7 +97,7 @@ function DocumentoOrigen({ ap }) {
           <div>
             <span className="text-ink-muted">Recepción:</span>{' '}
             <span className="font-mono">{src.receipt_number}</span>
-            {src.receipt_date && <span className="text-ink-muted"> · {fmtDate(src.receipt_date)}</span>}
+            {src.receipt_date && <span className="text-ink-muted"> · {fmtDateOnly(src.receipt_date)}</span>}
           </div>
         )}
         {src.reconciliation_status === 'with_diff' && src.reconciliation_diff != null && (
@@ -190,7 +190,7 @@ function PagosAplicados({ payments }) {
         <tbody>
           {payments.map(p => (
             <tr key={p.id}>
-              <td className="text-ink-secondary">{fmtDate(p.payment_date)}</td>
+              <td className="text-ink-secondary">{fmtDateOnly(p.payment_date)}</td>
               <td>{PAYMENT_METHOD_LABEL[p.payment_method] || p.payment_method}</td>
               <td className="text-ink-secondary text-[11px]">
                 {p.bank_name
@@ -291,7 +291,7 @@ function AplicarAnticipoModal({ ap, advances, onClose, onApplied }) {
                 const avail = parseFloat(a.amount_available)
                 return (
                   <tr key={a.id}>
-                    <td className="text-ink-secondary">{fmtDate(a.payment_date)}</td>
+                    <td className="text-ink-secondary">{fmtDateOnly(a.payment_date)}</td>
                     <td className="text-ink-secondary">
                       <p className="text-[11px]">{a.payment_method} {a.reference ? `· ${a.reference}` : ''}</p>
                       {a.notes && <p className="text-[10px] text-ink-muted truncate max-w-[180px]" title={a.notes}>{a.notes}</p>}
@@ -546,7 +546,8 @@ export function CxPDetallePanel({ apId, onClose }) {
 
       <div className="w-full max-w-2xl bg-surface-primary h-full overflow-y-auto shadow-card flex flex-col">
         {/* Header */}
-        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10">
+        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10"
+          style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top))' }}>
           <div className="flex-1 min-w-0">
             {isLoading ? (
               <div className="flex flex-col gap-2">
@@ -563,8 +564,8 @@ export function CxPDetallePanel({ apId, onClose }) {
                   <Badge status={ap.is_overdue ? 'overdue' : ap.status} />
                 </div>
                 <p className="text-xs text-ink-muted mt-1">
-                  {ap.partner_name} · Emitido {fmtDate(ap.issue_date)}
-                  {ap.due_date && <> · Vence {fmtDate(ap.due_date)}</>}
+                  {ap.partner_name} · Emitido {fmtDateOnly(ap.issue_date)}
+                  {ap.due_date && <> · Vence {fmtDateOnly(ap.due_date)}</>}
                 </p>
               </>
             ) : null}

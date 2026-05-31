@@ -6,7 +6,7 @@ import { invoicingApi } from '@/api/invoicing'
 import { tenantsApi } from '@/api/tenants'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
-import { fmtMXN, fmtDate, fmtNum } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob } from '@/utils/downloadBlob'
 import useAuthStore from '@/store/useAuthStore'
 import SatCatalogSelect from '@/components/fiscal/SatCatalogSelect'
@@ -22,7 +22,7 @@ function DatosGenerales({ invoice }) {
           ['Cliente',          invoice.partner_name || '—'],
           ['Razón social',     invoice.receptor_legal_name || invoice.partner_tax_name || invoice.partner_name || '—'],
           ['RFC',              invoice.rfc || '—'],
-          ['F. emisión',       fmtDate(invoice.issue_date)],
+          ['F. emisión',       fmtDateOnly(invoice.issue_date)],
           ['F. timbrado',      fmtDate(invoice.stamp_date)],
           ['Moneda',           invoice.currency === 'USD'
             ? `USD (TC $${invoice.exchange_rate_value ? fmtNum(invoice.exchange_rate_value, 4) : '—'})`
@@ -132,7 +132,7 @@ function LineasTable({ invoice }) {
                     <p className="text-[10px] text-status-warning mt-0.5">
                       {l.original_currency} ${Number(l.original_unit_price).toFixed(2)} × TC {Number(l.applied_exchange_rate).toFixed(4)}
                       {l.applied_exchange_rate_date && (
-                        <span className="text-ink-muted"> ({fmtDate(l.applied_exchange_rate_date)})</span>
+                        <span className="text-ink-muted"> ({fmtDateOnly(l.applied_exchange_rate_date)})</span>
                       )}
                     </p>
                   )}
@@ -172,7 +172,7 @@ function PaymentComplementsSection({ invoice, loadingAction, setError, setLoadin
         ? () => invoicingApi.downloadComplementXml(invoice.id, pc.facturapi_id)
         : () => invoicingApi.downloadComplementPdf(invoice.id, pc.facturapi_id)
       const r = await fn()
-      downloadBlob(r.data, `complemento-${invoice.document_number}-${fmtDate(pc.payment_date)}.${kind}`)
+      downloadBlob(r.data, `complemento-${invoice.document_number}-${fmtDateOnly(pc.payment_date)}.${kind}`)
     } catch (e) {
       setError(e.response?.data?.error || e.message || `Error al descargar ${kind.toUpperCase()}`)
     } finally {
@@ -199,7 +199,7 @@ function PaymentComplementsSection({ invoice, loadingAction, setError, setLoadin
                 <span className="font-mono font-medium text-ink-primary text-sm">
                   {fmtMXN(pc.amount, pc.currency)}
                 </span>
-                <span className="text-[11px] text-ink-muted">{fmtDate(pc.payment_date)}</span>
+                <span className="text-[11px] text-ink-muted">{fmtDateOnly(pc.payment_date)}</span>
                 <span className="text-[11px] text-ink-muted">· forma {pc.payment_form}</span>
                 {pc.reference && <span className="text-[11px] text-ink-muted">· ref {pc.reference}</span>}
               </div>
@@ -788,7 +788,7 @@ function CancelSatModal({ invoice, onConfirm, onClose, loading }) {
                         {r.cfdi_uuid}
                       </p>
                       <p className="text-[10px] text-ink-muted">
-                        {fmtDate(r.issue_date)}
+                        {fmtDateOnly(r.issue_date)}
                         {r.remission_number && <> · remisión {r.remission_number}</>}
                       </p>
                     </button>
@@ -1253,7 +1253,8 @@ export function FacturaDetallePanel({ invoiceId, onClose }) {
 
       <div className="w-full max-w-2xl bg-surface-primary h-full overflow-y-auto shadow-card flex flex-col">
         {/* Header */}
-        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10">
+        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10"
+          style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top))' }}>
           <div className="flex-1 min-w-0">
             {isLoading ? (
               <div className="flex flex-col gap-2">
@@ -1270,7 +1271,7 @@ export function FacturaDetallePanel({ invoiceId, onClose }) {
                   )}
                 </div>
                 <p className="text-xs text-ink-muted mt-1">
-                  {invoice.partner_name} · Emitida {fmtDate(invoice.issue_date)}
+                  {invoice.partner_name} · Emitida {fmtDateOnly(invoice.issue_date)}
                 </p>
               </>
             ) : null}

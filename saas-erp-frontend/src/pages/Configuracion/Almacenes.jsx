@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { warehousesApi } from '@/api/warehouses'
 import Spinner from '@/components/ui/Spinner'
+import CollapsibleHelp from '@/components/ui/CollapsibleHelp'
 import Badge from '@/components/ui/Badge'
 import WarehouseModal from '@/components/almacenes/WarehouseModal'
 import useAuthStore from '@/store/useAuthStore'
@@ -154,8 +155,7 @@ export default function Almacenes() {
       )}
 
       {/* ── Banner explicativo ─────────────────────────────────────────── */}
-      <div className="bg-status-info/10 border border-status-info/40 rounded-xl px-4 py-3 text-sm text-status-info">
-        <p className="font-semibold mb-1">Sobre los tipos de almacén</p>
+      <CollapsibleHelp title="Sobre los tipos de almacén">
         <p className="text-status-info">
           Los <strong>tipos</strong> son fijos del sistema y definen el comportamiento (qué procesos los
           usan automáticamente). Puedes crear varios almacenes del mismo tipo y elegir cuál es el{' '}
@@ -163,7 +163,7 @@ export default function Almacenes() {
           <strong> WIP es solo lectura</strong>: no aparece en ajustes ni recepciones, solo se mueve por
           producción.
         </p>
-      </div>
+      </CollapsibleHelp>
 
       {/* ── Filtros ───────────────────────────────────────────────────── */}
       <div className="flex flex-wrap gap-3 items-center">

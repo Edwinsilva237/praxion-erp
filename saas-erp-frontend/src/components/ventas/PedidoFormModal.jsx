@@ -7,7 +7,7 @@ import { productsApi } from '@/api/products'
 import { exchangeRatesApi } from '@/api/exchangeRates'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
-import { fmtMXN, fmtNum, fmtDate } from '@/utils/fmt'
+import { fmtMXN, fmtNum, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
 const EMPTY_LINE = () => ({
@@ -475,7 +475,7 @@ function PedidoForm({ onClose, onCreated }) {
                     {' × TC '}
                     <span className="font-mono">${Number(line.applied_exchange_rate).toFixed(4)}</span>
                     {line.applied_exchange_rate_date && (
-                      <span className="text-ink-muted"> ({fmtDate(line.applied_exchange_rate_date)})</span>
+                      <span className="text-ink-muted"> ({fmtDateOnly(line.applied_exchange_rate_date)})</span>
                     )}
                     <br />
                     <span className="text-ink-muted">Se revaluará al timbrar.</span>
@@ -525,8 +525,8 @@ function PedidoForm({ onClose, onCreated }) {
 
       {error && <p className="field-error">{error}</p>}
       <div className="flex gap-2 pt-1">
-        <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancelar</button>
-        <button type="submit" disabled={mutation.isPending} className="btn-primary flex-1">
+        <button type="button" onClick={onClose} className="btn-secondary flex-1 justify-center">Cancelar</button>
+        <button type="submit" disabled={mutation.isPending} className="btn-primary flex-1 justify-center">
           {mutation.isPending ? <Spinner size="sm" /> : 'Crear pedido'}
         </button>
       </div>

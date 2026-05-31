@@ -11,7 +11,15 @@ import Can from '@/components/auth/Can'
 import clsx from 'clsx'
 
 const fmtMXN  = (n) => n == null ? '—' : `$${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`
-const fmtDate = (d) => d ? new Date(d).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'
+// Fechas de calendario sin desfase de zona horaria (ver utils/fmt fmtDateOnly).
+const fmtDate = (d) => {
+  if (!d) return '—'
+  const s = String(d).slice(0, 10)
+  const [y, m, day] = s.split('-').map(Number)
+  if (s.length === 10 && y && m && day)
+    return new Date(Date.UTC(y, m - 1, day)).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' })
+  return new Date(d).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
+}
 
 const RECON_LABEL = { reconciled: 'Conciliada', with_diff: 'Con diferencia', pending: 'Pendiente' }
 const RECON_COLOR = { reconciled: 'green', with_diff: 'amber', pending: 'gray' }

@@ -8,7 +8,7 @@ import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
 import { FacturaFormModal } from '@/components/facturacion/FacturaFormModal'
 import { FacturaDetallePanel } from '@/components/facturacion/FacturaDetallePanel'
-import { fmtMXN, fmtDate } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
 const STATUS_OPTS = [
@@ -208,7 +208,7 @@ export default function Facturacion() {
                         <span className="text-ink-muted italic">Directa</span>
                       )}
                     </td>
-                    <td className="text-xs text-ink-secondary">{fmtDate(i.issue_date)}</td>
+                    <td className="text-xs text-ink-secondary">{fmtDateOnly(i.issue_date)}</td>
                     <td>
                       <span className={clsx(
                         'text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full',

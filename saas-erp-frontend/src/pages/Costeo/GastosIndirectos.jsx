@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { overheadApi } from '@/api/overhead'
 import Spinner from '@/components/ui/Spinner'
+import CollapsibleHelp from '@/components/ui/CollapsibleHelp'
 import Badge from '@/components/ui/Badge'
 import HelpTip from '@/components/ui/HelpTip'
 import { ORDEN_HELP } from '@/pages/SuperAdmin/tenant-process/helpTexts'
@@ -254,8 +255,7 @@ export default function GastosIndirectos() {
         )}
       </div>
 
-      <div className="bg-status-info/10 border border-status-info/40 rounded-xl px-4 py-3 text-sm text-status-info">
-        <p className="font-medium mb-1">¿Qué es esto?</p>
+      <CollapsibleHelp title="¿Qué es esto?">
         <p className="leading-relaxed">
           Catálogo de tus <strong>gastos fijos</strong> (renta, luz, sueldos administrativos…). Cada gasto genera un
           renglón por mes en "Períodos del mes". Al cerrar el mes capturas los montos reales y el sistema recostea
@@ -264,7 +264,7 @@ export default function GastosIndirectos() {
         <p className="leading-relaxed mt-1">
           <Link to="/costeo" className="underline hover:no-underline">Ver el flujo completo →</Link>
         </p>
-      </div>
+      </CollapsibleHelp>
 
       {successMsg && (
         <div className="bg-status-success/10 border border-status-success/40 rounded-xl px-4 py-3 text-sm text-status-success flex items-center justify-between">

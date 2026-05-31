@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { Capacitor } from '@capacitor/core'
 import useServerStatus from '@/store/useServerStatus'
 
 // ── Detección de tenant slug por subdomain ────────────────────────────────
@@ -44,10 +45,20 @@ if (subdomainSlug) {
 }
 
 // En dev: VITE_API_URL vacío → usa '/api' y el proxy de Vite forwardea a :3000.
-// En prod: VITE_API_URL=https://api.tu-dominio.com/api → llamadas directas al
-// backend (CORS abre el dominio + subdominios).
+// En prod web: VITE_API_URL=https://api.tu-dominio.com/api → llamadas directas
+// al backend (CORS abre el dominio + subdominios).
+//
+// En la app nativa (Capacitor) NO hay proxy de Vite ni subdominio: el webview
+// corre en `https://localhost`, así que un baseURL relativo `/api` apuntaría al
+// propio bundle. Por eso en nativo SIEMPRE usamos una URL absoluta — la del
+// build si se definió, o el backend de producción como red de seguridad.
+const NATIVE_FALLBACK_API = 'https://praxion-api.onrender.com/api'
+const baseURL = Capacitor.isNativePlatform()
+  ? (import.meta.env.VITE_API_URL || NATIVE_FALLBACK_API)
+  : (import.meta.env.VITE_API_URL || '/api')
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api',
+  baseURL,
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 })

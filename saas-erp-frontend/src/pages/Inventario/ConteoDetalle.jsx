@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { countsApi } from '@/api/counts'
 import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
+import ScanButton from '@/components/scanner/ScanButton'
 import { fmtMXN, fmtNum, fmtDate } from '@/utils/fmt'
 import clsx from 'clsx'
 
@@ -65,7 +66,7 @@ function CaptureRow({ line, countId, readOnly }) {
           </span>
         )}
       </td>
-      <td className="text-xs text-ink-muted">{line.warehouse_name}</td>
+      <td className="text-xs text-ink-muted hidden sm:table-cell">{line.warehouse_name}</td>
       <td className="text-right tabular-nums text-sm text-ink-secondary">
         {fmtNum(line.system_qty, 2)} <span className="text-[10px] text-ink-muted">{line.unit}</span>
       </td>
@@ -82,7 +83,7 @@ function CaptureRow({ line, countId, readOnly }) {
           disabled={readOnly}
         />
       </td>
-      <td className="text-right tabular-nums text-sm">
+      <td className="text-right tabular-nums text-sm hidden sm:table-cell">
         {diff != null && physical !== '' ? (
           <span className={clsx(
             'font-mono font-semibold',
@@ -92,14 +93,14 @@ function CaptureRow({ line, countId, readOnly }) {
           </span>
         ) : <span className="text-ink-muted">—</span>}
       </td>
-      <td className="text-right tabular-nums text-xs">
+      <td className="text-right tabular-nums text-xs hidden sm:table-cell">
         {diffValue != null && physical !== '' && diff !== 0 ? (
           <span className={diffValue >= 0 ? 'text-status-success' : 'text-status-danger'}>
             {fmtMXN(diffValue)}
           </span>
         ) : <span className="text-ink-muted">—</span>}
       </td>
-      <td className="w-[180px]">
+      <td className="w-[180px] hidden sm:table-cell">
         <input
           type="text"
           className="input input-sm text-xs"
@@ -323,10 +324,11 @@ export default function ConteoDetalle() {
         <input
           type="text"
           className="input input-sm flex-1 min-w-[200px]"
-          placeholder="Buscar artículo o SKU…"
+          placeholder="Buscar o escanear artículo / SKU…"
           value={searchTerm}
           onChange={e => setSearchTerm(e.target.value)}
         />
+        <ScanButton onScan={code => setSearchTerm(code)} title="Escanear artículo a contar" />
         <div className="flex gap-1">
           {[
             ['all',      'Todos',           summary?.total],
@@ -381,12 +383,12 @@ export default function ConteoDetalle() {
             <thead>
               <tr>
                 <th>Artículo</th>
-                <th>Almacén</th>
+                <th className="hidden sm:table-cell">Almacén</th>
                 <th className="text-right">Sistema</th>
                 <th className="text-right">Físico</th>
-                <th className="text-right">Diferencia</th>
-                <th className="text-right">Impacto $</th>
-                <th>Notas</th>
+                <th className="text-right hidden sm:table-cell">Diferencia</th>
+                <th className="text-right hidden sm:table-cell">Impacto $</th>
+                <th className="hidden sm:table-cell">Notas</th>
                 <th className="text-center w-[60px]"></th>
               </tr>
             </thead>

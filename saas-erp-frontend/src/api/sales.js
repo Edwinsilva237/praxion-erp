@@ -29,8 +29,11 @@ export const salesApi = {
   createDeliveryNote: (body) => api.post(`${B}/delivery-notes`, body).then(r => r.data),
   sendEmail:          (id, emails) =>
     api.post(`${B}/delivery-notes/${id}/send-email`, emails ? { emails } : {}).then(r => r.data),
-  downloadPdf:        (id) =>
-    api.get(`${B}/delivery-notes/${id}/pdf`, { responseType: 'blob' }),
+  downloadPdf:        (id, { showPrices = true } = {}) =>
+    api.get(`${B}/delivery-notes/${id}/pdf`, {
+      responseType: 'blob',
+      params: showPrices ? undefined : { precios: 0 },
+    }),
   setNoInvoice:       (id, noInvoice) =>
     api.post(`${B}/delivery-notes/${id}/no-invoice`, { noInvoice }).then(r => r.data),
   recordDelivery:     (id, formData) =>

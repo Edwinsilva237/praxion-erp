@@ -1069,7 +1069,11 @@ function GridCell({ shift, isToday, isPast, onEdit, onEditActive, onNew, shiftNu
 // ── Página principal ─────────────────────────────────────────────────────────
 export default function ProduccionProgramacion() {
   const qc = useQueryClient()
-  const [viewMode, setViewMode]     = useState('grid') // 'grid' | 'list'
+  // En móvil arrancamos en Lista (la cuadrícula semanal requiere scroll
+  // horizontal y se ve mal en pantallas angostas). El usuario puede cambiar.
+  const [viewMode, setViewMode]     = useState(
+    () => (typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches ? 'list' : 'grid')
+  ) // 'grid' | 'list'
   const [weekOffset, setWeekOffset] = useState(0)
   const [editingShift, setEditing]  = useState(null)
   const [newShiftCtx, setNewCtx]    = useState(null) // { shiftNum, dateStr }
@@ -1175,7 +1179,7 @@ export default function ProduccionProgramacion() {
           <h1 className="page-title">Programación de turnos</h1>
           <p className="page-subtitle">Plan semanal de producción</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Toggle vista */}
           <div className="flex bg-surface-elevated/60 rounded-lg p-1 gap-1">
             <button onClick={() => setViewMode('grid')}
@@ -1238,11 +1242,11 @@ export default function ProduccionProgramacion() {
 
       {/* Navegación de semana */}
       <div className="flex items-center justify-between bg-surface-primary border border-line-subtle rounded-xl px-4 py-2.5">
-        <button onClick={() => setWeekOffset(w => w - 1)} className="btn-ghost btn-sm">
-          ← Anterior
+        <button onClick={() => setWeekOffset(w => w - 1)} className="btn-ghost btn-sm shrink-0">
+          ←<span className="hidden sm:inline"> Anterior</span>
         </button>
-        <div className="flex items-center gap-2 text-sm font-medium text-ink-secondary">
-          <svg className="w-4 h-4 text-ink-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div className="flex items-center gap-2 text-xs sm:text-sm font-medium text-ink-secondary min-w-0 px-1 text-center">
+          <svg className="w-4 h-4 text-ink-muted hidden sm:block shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/>
           </svg>
           {weekLabel}
@@ -1250,8 +1254,8 @@ export default function ProduccionProgramacion() {
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-brand-600 text-white font-medium">Esta semana</span>
           )}
         </div>
-        <button onClick={() => setWeekOffset(w => w + 1)} className="btn-ghost btn-sm">
-          Siguiente →
+        <button onClick={() => setWeekOffset(w => w + 1)} className="btn-ghost btn-sm shrink-0">
+          <span className="hidden sm:inline">Siguiente </span>→
         </button>
       </div>
 
@@ -1361,7 +1365,7 @@ export default function ProduccionProgramacion() {
                     const s = allShifts.find(x => String(x.shift_number) === sh.number)
                     const sc = s ? STATUS_CONFIG[s.status] : null
                     return (
-                      <div key={sh.number} className="flex items-center gap-4 px-4 py-3">
+                      <div key={sh.number} className="flex items-start gap-3 px-4 py-3">
                         <div className="w-20 shrink-0">
                           <p className="text-xs font-mono font-medium text-ink-secondary">{sh.hour}</p>
                           <p className="text-[10px] text-ink-muted">{sh.label}</p>
@@ -1369,23 +1373,23 @@ export default function ProduccionProgramacion() {
                         {s ? (
                           <>
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1.5 flex-wrap">
+                              <div className="flex items-center gap-1.5 min-w-0">
                                 <p className="text-sm font-medium text-ink-primary truncate">
                                   {s.product_name || <span className="text-ink-muted italic">Sin orden asignada</span>}
                                 </p>
+                                <span className="shrink-0"><Badge variant={sc?.badge} label={sc?.label} /></span>
                                 {s.is_overtime && (
-                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-status-warning/15 text-status-warning">+Extra</span>
+                                  <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded bg-status-warning/15 text-status-warning">+Extra</span>
                                 )}
                                 {s.absence_registered && (
-                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-status-danger/15 text-status-danger">Ausencia</span>
+                                  <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded bg-status-danger/15 text-status-danger">Ausencia</span>
                                 )}
                               </div>
-                              <p className="text-xs text-ink-muted mt-0.5">
+                              <p className="text-xs text-ink-muted mt-0.5 break-words">
                                 Op: {s.operator_name}{s.order_number ? ` · ${s.order_number}` : ''}
                               </p>
-                              {s.notes && <p className="text-xs text-blue-500 mt-0.5">📝 {s.notes}</p>}
+                              {s.notes && <p className="text-xs text-blue-500 mt-0.5 break-words">📝 {s.notes}</p>}
                             </div>
-                            <Badge variant={sc?.badge} label={sc?.label} />
                             {!isPast && s.status === 'scheduled' && (
                               <button onClick={() => setEditing(s)}
                                 className="btn-ghost btn-sm text-ink-muted hover:text-brand-300 shrink-0">

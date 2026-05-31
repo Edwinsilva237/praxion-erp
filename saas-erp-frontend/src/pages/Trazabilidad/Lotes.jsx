@@ -4,6 +4,7 @@ import { traceabilityApi } from '@/api/traceability'
 import { processConfigApi } from '@/api/processConfig'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
+import CollapsibleHelp from '@/components/ui/CollapsibleHelp'
 import clsx from 'clsx'
 
 const KIND_LABEL   = { raw_material: 'Materia prima', packaging: 'Embalaje', additive: 'Aditivo' }
@@ -15,6 +16,15 @@ const fmtNum = (n, d = 2) =>
 const fmtDate = (d) => d
   ? new Date(d).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' })
   : '—'
+
+const fmtDateOnly = (d) => {
+  if (!d) return '—'
+  const s = String(d).slice(0, 10)
+  const [y, m, day] = s.split('-').map(Number)
+  if (s.length === 10 && y && m && day)
+    return new Date(Date.UTC(y, m - 1, day)).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
+  return new Date(d).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' })
+}
 
 const fmtDateTime = (d) => d
   ? new Date(d).toLocaleString('es-MX', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -79,8 +89,7 @@ export default function Trazabilidad() {
         </div>
       </div>
 
-      <div className="bg-status-info/10 border border-status-info/40 rounded-xl px-4 py-3 text-sm text-status-info mb-5">
-        <p className="font-medium mb-1">¿Cómo funciona?</p>
+      <CollapsibleHelp title="¿Cómo funciona?" className="mb-5">
         <p className="leading-relaxed">
           Busca un lote por su número (de MP o de PT). Te muestra:
         </p>
@@ -88,7 +97,7 @@ export default function Trazabilidad() {
           <li><strong>Si es un lote de PT:</strong> qué materia prima entró + qué clientes lo recibieron.</li>
           <li><strong>Si es un lote de MP:</strong> qué productos terminados se hicieron con él + lista completa de clientes finales (para recall).</li>
         </ul>
-      </div>
+      </CollapsibleHelp>
 
       <div className="mb-5">
         <input
@@ -158,8 +167,8 @@ function SearchResults({ results, isLoading, onSelect }) {
                       {l.quality_grade_name && <> · {l.quality_grade_name}</>}
                     </p>
                     <p className="text-[11px] text-ink-muted mt-1">
-                      Producido {fmtDate(l.production_date)}
-                      {l.expiry_date && <> · vence {fmtDate(l.expiry_date)}</>}
+                      Producido {fmtDateOnly(l.production_date)}
+                      {l.expiry_date && <> · vence {fmtDateOnly(l.expiry_date)}</>}
                     </p>
                   </div>
                   <div className="text-right shrink-0">
@@ -192,7 +201,7 @@ function SearchResults({ results, isLoading, onSelect }) {
                     <p className="text-[11px] text-ink-muted mt-1">
                       Recibido {fmtDate(l.received_at)}
                       {l.supplier_name && <> · de {l.supplier_name}</>}
-                      {l.expiry_date && <> · vence {fmtDate(l.expiry_date)}</>}
+                      {l.expiry_date && <> · vence {fmtDateOnly(l.expiry_date)}</>}
                     </p>
                   </div>
                   <div className="text-right shrink-0">
@@ -241,8 +250,8 @@ function ProductLotDetail({ id, onClose, onJumpToRawLot }) {
             )}
           </div>
           <div className="text-right text-sm">
-            <p><span className="text-ink-muted">Producido:</span> {fmtDate(lot.production_date)}</p>
-            {lot.expiry_date && <p><span className="text-ink-muted">Vence:</span> {fmtDate(lot.expiry_date)}</p>}
+            <p><span className="text-ink-muted">Producido:</span> {fmtDateOnly(lot.production_date)}</p>
+            {lot.expiry_date && <p><span className="text-ink-muted">Vence:</span> {fmtDateOnly(lot.expiry_date)}</p>}
             <p className="mt-1"><span className="text-ink-muted">Cantidad:</span> <strong>{fmtNum(lot.quantity_remaining, 2)} / {fmtNum(lot.quantity_produced, 2)}</strong></p>
             <Badge variant={lot.status === 'active' ? 'green' : 'gray'} label={lot.status} className="mt-1" />
           </div>
@@ -251,7 +260,7 @@ function ProductLotDetail({ id, onClose, onJumpToRawLot }) {
         {(lot.order_number || lot.shift_number) && (
           <div className="mt-3 pt-3 border-t border-line-subtle text-xs text-ink-muted flex flex-wrap gap-x-4 gap-y-1">
             {lot.order_number && <span>Orden: <strong className="text-ink-secondary">{lot.order_number}</strong></span>}
-            {lot.shift_number && <span>Turno: <strong className="text-ink-secondary">{lot.shift_number} · {fmtDate(lot.shift_date)}</strong></span>}
+            {lot.shift_number && <span>Turno: <strong className="text-ink-secondary">{lot.shift_number} · {fmtDateOnly(lot.shift_date)}</strong></span>}
             {lot.operator_name && <span>Operador: <strong className="text-ink-secondary">{lot.operator_name}</strong></span>}
             {lot.warehouse_name && <span>Almacén: <strong className="text-ink-secondary">{lot.warehouse_name}</strong></span>}
           </div>
@@ -297,7 +306,7 @@ function ProductLotDetail({ id, onClose, onJumpToRawLot }) {
                         <p className="text-[10px] text-ink-muted">prov: {b.manufacturer_lot}</p>
                       )}
                       {b.expiry_date && (
-                        <p className="text-[10px] text-ink-muted">vence {fmtDate(b.expiry_date)}</p>
+                        <p className="text-[10px] text-ink-muted">vence {fmtDateOnly(b.expiry_date)}</p>
                       )}
                     </td>
                     <td className="text-xs text-ink-secondary">{b.supplier_name || '—'}</td>
@@ -347,7 +356,7 @@ function ProductLotDetail({ id, onClose, onJumpToRawLot }) {
                     <td className="text-right tabular-nums">
                       {fmtNum(f.quantity_base || f.quantity_delivered, 2)} {f.unit}
                     </td>
-                    <td className="text-xs text-ink-muted">{fmtDate(f.issue_date)}</td>
+                    <td className="text-xs text-ink-muted">{fmtDateOnly(f.issue_date)}</td>
                     <td><Badge status={f.status} /></td>
                   </tr>
                 ))}
@@ -400,7 +409,7 @@ function RawLotDetail({ id, onClose, onJumpToProductLot }) {
           </div>
           <div className="text-right text-sm">
             <p><span className="text-ink-muted">Recibido:</span> {fmtDate(lot.received_at)}</p>
-            {lot.expiry_date && <p><span className="text-ink-muted">Vence:</span> {fmtDate(lot.expiry_date)}</p>}
+            {lot.expiry_date && <p><span className="text-ink-muted">Vence:</span> {fmtDateOnly(lot.expiry_date)}</p>}
             {lot.supplier_name && <p><span className="text-ink-muted">Proveedor:</span> <strong>{lot.supplier_name}</strong></p>}
             <p className="mt-1"><span className="text-ink-muted">Saldo:</span> <strong>{fmtNum(lot.quantity_remaining, 2)} / {fmtNum(lot.quantity_received, 2)}</strong></p>
             <Badge variant={lot.status === 'active' ? 'green' : 'gray'} label={lot.status} className="mt-1" />
@@ -450,7 +459,7 @@ function RawLotDetail({ id, onClose, onJumpToProductLot }) {
                         {p.lot_number}
                       </button>
                     </td>
-                    <td className="text-xs text-ink-muted">{fmtDate(p.production_date)}</td>
+                    <td className="text-xs text-ink-muted">{fmtDateOnly(p.production_date)}</td>
                     <td className="text-right tabular-nums">{fmtNum(p.total_consumed_from_this_mp_lot, 3)}</td>
                     <td><Badge variant={p.status === 'active' ? 'green' : 'gray'} label={p.status} /></td>
                   </tr>
@@ -480,7 +489,7 @@ function RawLotDetail({ id, onClose, onJumpToProductLot }) {
                       <span className="font-mono">{d.document_number}</span>
                       <span>{d.product_name} · lote <span className="font-mono">{d.product_lot_number}</span></span>
                       <span className="tabular-nums">{fmtNum(d.quantity_base, 2)} {d.unit}</span>
-                      <span>{fmtDate(d.issue_date)}</span>
+                      <span>{fmtDateOnly(d.issue_date)}</span>
                     </div>
                   ))}
                 </div>

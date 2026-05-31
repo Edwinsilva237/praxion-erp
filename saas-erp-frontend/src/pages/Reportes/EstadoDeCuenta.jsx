@@ -10,7 +10,15 @@ import clsx from 'clsx'
 const fmtMXN  = (n) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(n || 0)
 const fmtMXNf = (n) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n || 0)
 const fmtNum  = (n) => new Intl.NumberFormat('es-MX').format(n || 0)
-const fmtDate = (d) => d ? new Date(d).toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
+// Fechas de calendario sin desfase de zona horaria (ver utils/fmt fmtDateOnly).
+const fmtDate = (d) => {
+  if (!d) return '—'
+  const s = String(d).slice(0, 10)
+  const [y, m, day] = s.split('-').map(Number)
+  if (s.length === 10 && y && m && day)
+    return new Date(Date.UTC(y, m - 1, day)).toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' })
+  return new Date(d).toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
 
 const STATUS_META = {
   overdue:  { label: 'Vencido',           rowClass: 'bg-status-danger/[0.08] hover:bg-status-danger/[0.15]',  pillClass: 'bg-status-danger/15 text-status-danger' },

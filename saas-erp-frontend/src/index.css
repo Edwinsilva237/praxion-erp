@@ -248,7 +248,7 @@
 
   /* ── Page header ─────────────────────────────────────────────────────── */
   .page-header {
-    @apply flex items-center justify-between mb-6 gap-4;
+    @apply flex flex-col gap-3 mb-6 sm:flex-row sm:items-center sm:justify-between sm:gap-4;
   }
   .page-title {
     @apply text-xl font-semibold text-ink-primary;

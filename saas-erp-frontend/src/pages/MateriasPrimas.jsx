@@ -95,9 +95,9 @@ function Field({ label, error, required, hint, children, className }) {
   )
 }
 
-function Section({ number, title, children }) {
+function Section({ number, title, children, className }) {
   return (
-    <div className="border border-line-subtle rounded-xl overflow-hidden">
+    <div className={clsx('border border-line-subtle rounded-xl overflow-hidden', className)}>
       <div className="flex items-center gap-2.5 px-4 py-3 bg-surface-elevated/40 border-b border-line-subtle">
         <span className="w-5 h-5 rounded-full bg-brand-600 text-white text-[10px] font-medium flex items-center justify-center shrink-0">
           {number}
@@ -197,12 +197,18 @@ function RawMaterialModal({ item, onClose }) {
 
         <form onSubmit={handleSubmit((d) => mutation.mutate(d))} className="px-6 py-5 space-y-4">
 
+          {/* Aviso de captura rápida — solo en móvil */}
+          <div className="sm:hidden rounded-lg bg-status-info/10 border border-status-info/30 px-3 py-2 text-xs text-status-info flex items-start gap-2">
+            <span className="text-sm leading-none mt-0.5">⚡</span>
+            <span><strong>Captura rápida.</strong> Registra lo esencial para que el insumo exista. El código, especificaciones, descripción y niveles se completan en la versión de escritorio.</span>
+          </div>
+
           {/* ── 1. Identificación ── */}
           <Section number="1" title="Identificación">
             {/* Tipo de item — distingue MP principal, empaques y aditivos. */}
             <div>
               <label className="label">Tipo<span className="text-status-danger ml-0.5">*</span></label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 {ITEM_KINDS.map((k) => (
                   <button key={k.value} type="button"
                     disabled={isEditing}
@@ -224,6 +230,7 @@ function RawMaterialModal({ item, onClose }) {
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Field label="Código" error={errors.code?.message}
+                className="hidden sm:block"
                 hint={codeSug.canSuggest && !isEditing ? `Sugerencia: ${codeSug.code}` : undefined}>
                 <div className="flex gap-2">
                   <input {...register('code')}
@@ -251,7 +258,7 @@ function RawMaterialModal({ item, onClose }) {
 
             {/* Atributos plástico: solo si MP + flag uses_resin_types ON */}
             {showResinField && (
-              <div>
+              <div className="hidden sm:block">
                 <label className="label">Tipo de resina<span className="text-status-danger ml-0.5">*</span></label>
                 <div className="flex gap-2">
                   {RESIN_TYPES.map((r) => (
@@ -276,7 +283,7 @@ function RawMaterialModal({ item, onClose }) {
 
             {/* Virgen / Regrind: solo si MP + flag tracks_material_origin ON */}
             {showMaterialField && (
-              <div>
+              <div className="hidden sm:block">
                 <label className="label">Tipo de material<span className="text-status-danger ml-0.5">*</span></label>
                 <div className="flex gap-2">
                   {MATERIAL_TYPES.map((m) => (
@@ -295,7 +302,7 @@ function RawMaterialModal({ item, onClose }) {
               </div>
             )}
 
-            <Field label="Descripción" hint="Opcional — proveedor, grado, especificación">
+            <Field label="Descripción" hint="Opcional — proveedor, grado, especificación" className="hidden sm:block">
               <textarea {...register('description')} rows={2}
                 placeholder={selectedKind === 'packaging' ? 'Ej: Polietileno transparente, proveedor X...'
                   : 'Ej: MFI 50, proveedor Braskem...'}
@@ -305,7 +312,7 @@ function RawMaterialModal({ item, onClose }) {
 
           {/* ── 2. Parámetros de uso ── */}
           <Section number="2" title="Parámetros de uso en producción">
-            <div className={clsx('grid gap-3', showMaterialField ? 'grid-cols-3' : 'grid-cols-2')}>
+            <div className={clsx('grid gap-3 grid-cols-1', showMaterialField ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}>
               <Field label="Unidad" required error={errors.unit?.message}>
                 <select {...register('unit')} className={clsx('select', errors.unit && 'input-error')}>
                   {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
@@ -313,7 +320,7 @@ function RawMaterialModal({ item, onClose }) {
               </Field>
               {showMaterialField && (
                 <Field label="% máx. regrind" error={errors.maxRegrindPct?.message}
-                  hint="Mezcla máxima permitida">
+                  hint="Mezcla máxima permitida" className="hidden sm:block">
                   <div className="relative">
                     <input {...register('maxRegrindPct')} type="number" min="0" max="100" step="1"
                       className={clsx('input pr-6', errors.maxRegrindPct && 'input-error')} />
@@ -336,7 +343,7 @@ function RawMaterialModal({ item, onClose }) {
           </Section>
 
           {/* ── 3. Niveles de inventario y reposición ── */}
-          <Section number="3" title="Niveles de inventario y reposición">
+          <Section number="3" title="Niveles de inventario y reposición" className="hidden sm:block">
             <InventoryLevelsPanel
               itemType="raw_material"
               itemId={item?.id}

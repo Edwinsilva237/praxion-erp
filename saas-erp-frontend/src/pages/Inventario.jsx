@@ -7,6 +7,7 @@ import Badge from '@/components/ui/Badge'
 import AdjustmentModal        from '@/components/inventario/AdjustmentModal'
 import AdjustmentDetallePanel from '@/components/inventario/AdjustmentDetallePanel'
 import ItemDetailPanel        from '@/components/inventario/ItemDetailPanel'
+import ScanButton             from '@/components/scanner/ScanButton'
 import clsx from 'clsx'
 
 // ── Catálogos ─────────────────────────────────────────────────────────────────
@@ -304,6 +305,12 @@ export default function Inventario() {
     setSearch(searchInput)
   }
 
+  // Escaneo: el código leído se vuelve el término de búsqueda y filtra de una vez.
+  const handleScan = (code) => {
+    setSearchInput(code)
+    setSearch(code)
+  }
+
   function handleAdjustmentSaved(adj) {
     setCreatedMsg(`Ajuste ${adj.adjustment_number} guardado correctamente.`)
     setTimeout(() => setCreatedMsg(null), 5000)
@@ -411,7 +418,7 @@ export default function Inventario() {
       {/* ── Filtros ──────────────────────────────────────────────────── */}
       <div className="flex flex-wrap gap-3">
         <select
-          className="select w-44"
+          className="select w-44 hidden sm:block"
           value={warehouseFilter}
           onChange={e => { setWH(e.target.value); setMovPage(1); setAdjPage(1) }}
         >
@@ -424,7 +431,7 @@ export default function Inventario() {
         {tab === 'stock' && (
           <>
             <select
-              className="select w-44"
+              className="select w-44 hidden sm:block"
               value={itemTypeFilter}
               onChange={e => setItemType(e.target.value)}
             >
@@ -433,7 +440,7 @@ export default function Inventario() {
               <option value="product">Producto terminado</option>
             </select>
             <select
-              className="select w-44"
+              className="select w-44 hidden sm:block"
               value={levelFilter}
               onChange={e => setLevelFilter(e.target.value)}
             >
@@ -443,13 +450,14 @@ export default function Inventario() {
               <option value="normal">🟢 Normal</option>
               <option value="overstock">🔵 Sobrestock</option>
             </select>
-            <form onSubmit={handleSearch} className="flex gap-2">
+            <form onSubmit={handleSearch} className="flex gap-2 w-full sm:w-auto">
               <input
-                className="input w-52"
-                placeholder="Buscar artículo..."
+                className="input flex-1 sm:w-52"
+                placeholder="Buscar o escanear artículo..."
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
               />
+              <ScanButton onScan={handleScan} title="Escanear código de barras" />
               <button type="submit" className="btn-secondary btn-sm">Buscar</button>
             </form>
           </>
@@ -535,7 +543,69 @@ export default function Inventario() {
             </p>
           </div>
         ) : (
-          <div className="table-wrap">
+          <>
+          {/* ── Móvil: tarjetas (la tabla ancha vive solo en escritorio) ── */}
+          <div className="md:hidden flex flex-col gap-2">
+            {filteredStockData.data.map(row => {
+              const lvlKey = `${row.item_type}|${row.item_id}|${row.warehouse_id}`
+              const lvlInfo = levelStatusMap[lvlKey]
+              const inTransit = lvlInfo?.inTransit || 0
+              const statusVariant =
+                row.status === 'available' ? 'green'
+                : row.status === 'wip'     ? 'blue'
+                : row.status === 'blocked' ? 'red'
+                : 'gray'
+              const statusLabel =
+                row.status === 'available' ? 'Disponible'
+                : row.status === 'wip'     ? 'En proceso'
+                : row.status === 'blocked' ? 'Bloqueado'
+                : row.status
+              return (
+                <button
+                  key={row.id}
+                  type="button"
+                  onClick={() => setSelectedStockItem({
+                    itemType: row.item_type, itemId: row.item_id, warehouseId: row.warehouse_id,
+                  })}
+                  className="w-full text-left bg-surface-primary border border-line-subtle rounded-xl p-3 hover:bg-surface-elevated/40 transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex items-center gap-2">
+                      {lvlInfo && <LevelDot status={lvlInfo.status} />}
+                      <div className="min-w-0">
+                        <p className="font-medium text-ink-primary truncate">
+                          {row.item_name}
+                          {row.sku && <span className="ml-1 text-xs text-ink-muted">#{row.sku}</span>}
+                        </p>
+                        <p className="text-xs text-ink-muted truncate">{row.warehouse_name}</p>
+                      </div>
+                    </div>
+                    <Badge
+                      variant={row.item_type === 'raw_material' ? 'amber' : 'blue'}
+                      label={row.item_type === 'raw_material' ? 'MP' : 'PT'}
+                    />
+                  </div>
+                  <div className="mt-2 flex items-end justify-between gap-2">
+                    <div>
+                      <p className="font-mono text-base font-semibold text-ink-primary">
+                        {fmtNum(row.quantity)} <span className="text-ink-muted text-xs">{row.unit}</span>
+                      </p>
+                      {inTransit > 0 && (
+                        <p className="text-[11px] text-status-warning">+{fmtNum(inTransit)} en tránsito</p>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <Badge variant={statusVariant} label={statusLabel} />
+                      <p className="text-xs text-ink-secondary font-mono mt-1">{fmtMXN(row.total_value)}</p>
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* ── Escritorio: tabla completa ── */}
+          <div className="table-wrap hidden md:block">
             <table className="table">
               <thead>
                 <tr>
@@ -620,6 +690,7 @@ export default function Inventario() {
               </tbody>
             </table>
           </div>
+          </>
         )
       )}
 
@@ -634,7 +705,45 @@ export default function Inventario() {
           </div>
         ) : (
           <>
-            <div className="table-wrap">
+            {/* ── Móvil: tarjetas de movimiento ── */}
+            <div className="md:hidden flex flex-col gap-2">
+              {movData.data.map(m => {
+                const isPositive = parseFloat(m.quantity) >= 0
+                return (
+                  <div key={m.id} className="bg-surface-primary border border-line-subtle rounded-xl p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="font-medium text-ink-primary text-sm truncate min-w-0">{m.item_name}</p>
+                      <span className={clsx(
+                        'font-mono text-sm font-semibold shrink-0',
+                        isPositive ? 'text-status-success' : 'text-status-danger'
+                      )}>
+                        {isPositive ? '+' : ''}{fmtNum(m.quantity, 4)} <span className="text-xs font-normal text-ink-muted">{m.unit}</span>
+                      </span>
+                    </div>
+                    <div className="mt-1.5 flex items-center justify-between gap-2 flex-wrap">
+                      <Badge
+                        variant={MOVEMENT_BADGE[m.movement_type] || MOVEMENT_BADGE.default}
+                        label={MOVEMENT_LABELS[m.movement_type] || m.movement_type}
+                      />
+                      <span className="text-[11px] text-ink-muted">{fmtDate(m.created_at)}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-ink-muted">
+                      <span className="truncate min-w-0">
+                        {m.warehouse_name}
+                        {m.reference_type ? ` · ${REFERENCE_LABELS[m.reference_type] || m.reference_type}` : ''}
+                      </span>
+                      <span className="font-mono shrink-0">Saldo: {fmtNum(m.balance_after, 4)}</span>
+                    </div>
+                    {m.notes && (
+                      <p className="mt-1 text-[11px] text-ink-muted truncate" title={m.notes}>{m.notes}</p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* ── Escritorio: tabla completa ── */}
+            <div className="table-wrap hidden md:block">
               <table className="table">
                 <thead>
                   <tr>

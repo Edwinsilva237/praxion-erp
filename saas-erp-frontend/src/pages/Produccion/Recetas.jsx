@@ -8,6 +8,7 @@ import { processConfigApi } from '@/api/processConfig'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import HelpTip from '@/components/ui/HelpTip'
+import CollapsibleHelp from '@/components/ui/CollapsibleHelp'
 import useAuthStore from '@/store/useAuthStore'
 import clsx from 'clsx'
 
@@ -61,15 +62,14 @@ export default function Recetas() {
         )}
       </div>
 
-      <div className="bg-status-info/10 border border-status-info/40 rounded-xl px-4 py-3 text-sm text-status-info mb-5">
-        <p className="font-medium mb-1">¿Para qué sirve esto?</p>
+      <CollapsibleHelp title="¿Para qué sirve esto?" className="mb-5">
         <p className="leading-relaxed">
           Define una vez los ingredientes (MP + empaque + aditivos) que componen un producto.
           Al crear una orden de producción de ese producto, los componentes se cargan automáticamente y solo
           ajustas cantidades si el lote es distinto. Cada vez que cambies la receta se crea una nueva versión —
           las órdenes ya creadas mantienen la versión bajo la que se generaron.
         </p>
-      </div>
+      </CollapsibleHelp>
 
       <div className="flex gap-3 mb-5">
         <input value={search} onChange={(e) => setSearch(e.target.value)}
@@ -253,9 +253,10 @@ function RecipeModal({ recipeId, onClose }) {
   const componentsTotal = components.reduce((s, c) => s + (parseFloat(c.quantity) || 0), 0)
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-surface-primary rounded-2xl shadow-xl w-full max-w-3xl max-h-[92vh] overflow-hidden flex flex-col border border-line-subtle">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-line-subtle">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-0 sm:p-4">
+      <div className="bg-surface-primary shadow-xl border border-line-subtle w-full max-w-3xl flex flex-col overflow-hidden rounded-none sm:rounded-2xl h-[100dvh] max-h-[100dvh] sm:h-auto sm:max-h-[92vh]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-line-subtle"
+          style={{ paddingTop: 'max(1rem, env(safe-area-inset-top))' }}>
           <div>
             <h2 className="text-base font-semibold text-ink-primary">
               {isEditing
@@ -301,7 +302,7 @@ function RecipeModal({ recipeId, onClose }) {
                 placeholder="Ej: Receta estándar, Versión otoño 2026..." className="input" />
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="label flex items-center gap-1">
                   Rendimiento <span className="text-status-danger">*</span>
@@ -354,7 +355,7 @@ function RecipeModal({ recipeId, onClose }) {
                 const kind = rm?.item_kind || 'raw_material'
                 return (
                   <div key={i} className="border border-line-subtle rounded-lg p-3 space-y-2">
-                    <div className="flex items-start gap-3">
+                    <div className="flex flex-col sm:flex-row sm:items-start gap-3">
                       <div className="flex-1 min-w-0">
                         <label className="label">
                           {rm && <Badge variant={KIND_VARIANT[kind]} label={KIND_LABEL[kind]} className="mr-2" />}
@@ -371,31 +372,33 @@ function RecipeModal({ recipeId, onClose }) {
                           ))}
                         </select>
                       </div>
-                      <div className="w-28 shrink-0">
-                        <label className="label">Cantidad</label>
-                        <input type="number" step="0.001" min="0" value={c.quantity}
-                          onChange={e => updateComponent(i, 'quantity', e.target.value)}
-                          placeholder="0.000" className="input text-right" />
+                      <div className="flex items-start gap-3">
+                        <div className="w-24 sm:w-28 shrink-0">
+                          <label className="label">Cantidad</label>
+                          <input type="number" step="0.001" min="0" value={c.quantity}
+                            onChange={e => updateComponent(i, 'quantity', e.target.value)}
+                            placeholder="0.000" className="input text-right" />
+                        </div>
+                        <div className="flex-1 sm:flex-none sm:w-32 min-w-0">
+                          <label className="label">Unidad</label>
+                          <select value={c.unitId}
+                            onChange={e => updateComponent(i, 'unitId', e.target.value)}
+                            className="select">
+                            <option value="">—</option>
+                            {units.map(u => (
+                              <option key={u.id} value={u.id}>{u.symbol || u.code}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <button onClick={() => removeComponent(i)}
+                          disabled={components.length === 1}
+                          className="btn-ghost btn-icon text-ink-muted hover:text-status-danger mt-6 shrink-0"
+                          title="Quitar componente">
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                          </svg>
+                        </button>
                       </div>
-                      <div className="w-32 shrink-0">
-                        <label className="label">Unidad</label>
-                        <select value={c.unitId}
-                          onChange={e => updateComponent(i, 'unitId', e.target.value)}
-                          className="select">
-                          <option value="">—</option>
-                          {units.map(u => (
-                            <option key={u.id} value={u.id}>{u.symbol || u.code}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <button onClick={() => removeComponent(i)}
-                        disabled={components.length === 1}
-                        className="btn-ghost btn-icon text-ink-muted hover:text-status-danger mt-6"
-                        title="Quitar componente">
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                        </svg>
-                      </button>
                     </div>
                     <input value={c.notes} onChange={e => updateComponent(i, 'notes', e.target.value)}
                       placeholder="Notas (opcional): proveedor preferido, especificación, etc."
@@ -421,7 +424,8 @@ function RecipeModal({ recipeId, onClose }) {
           )}
         </div>
 
-        <div className="px-5 py-3 border-t border-line-subtle flex justify-end gap-2">
+        <div className="px-5 py-3 border-t border-line-subtle flex justify-end gap-2"
+          style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
           <button onClick={onClose} disabled={submitMut.isPending} className="btn-ghost btn-sm">Cancelar</button>
           <button onClick={() => { setError(null); submitMut.mutate() }}
             disabled={submitMut.isPending} className="btn-primary btn-sm">

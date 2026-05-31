@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { inventoryApi } from '@/api/inventory'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
+import { genId } from '@/utils/genId'
 import clsx from 'clsx'
 
 // ── Helpers de formato locales ────────────────────────────────────────────────
@@ -17,7 +18,7 @@ const fmtNum = (n, decimals = 2) => {
 }
 
 const EMPTY_LINE = () => ({
-  uid:       crypto.randomUUID(),
+  uid:       genId(),
   itemType:  'raw_material',
   item:      null,
   direction: 'in',
@@ -300,12 +301,12 @@ export default function AdjustmentModal({ warehouses = [], onClose, onSaved }) {
           <div className="border-t border-line-subtle pt-4 mt-4 grid grid-cols-3 gap-3">
             <div className="bg-status-success/10 border border-status-success/40 rounded-xl p-3">
               <p className="text-[10px] uppercase font-semibold text-status-success tracking-wider">Entradas</p>
-              <p className="text-base font-bold text-status-success mt-1">+{fmtMXN(summary.inValue)}</p>
+              <p className="text-sm sm:text-base font-bold text-status-success mt-1 tabular-nums break-all">+{fmtMXN(summary.inValue)}</p>
               <p className="text-[10px] text-green-500 mt-0.5">{summary.inLines} línea{summary.inLines !== 1 && 's'}</p>
             </div>
             <div className="bg-status-danger/10 border border-status-danger/40 rounded-xl p-3">
               <p className="text-[10px] uppercase font-semibold text-status-danger tracking-wider">Salidas</p>
-              <p className="text-base font-bold text-status-danger mt-1">−{fmtMXN(summary.outValue)}</p>
+              <p className="text-sm sm:text-base font-bold text-status-danger mt-1 tabular-nums break-all">−{fmtMXN(summary.outValue)}</p>
               <p className="text-[10px] text-status-danger mt-0.5">{summary.outLines} línea{summary.outLines !== 1 && 's'}</p>
             </div>
             <div className={clsx(
@@ -317,7 +318,7 @@ export default function AdjustmentModal({ warehouses = [], onClose, onSaved }) {
                 summary.net >= 0 ? 'text-status-info' : 'text-status-warning'
               )}>Neto</p>
               <p className={clsx(
-                'text-base font-bold mt-1',
+                'text-sm sm:text-base font-bold mt-1 tabular-nums break-all',
                 summary.net >= 0 ? 'text-status-info' : 'text-status-warning'
               )}>
                 {summary.net >= 0 ? '+' : '−'}{fmtMXN(Math.abs(summary.net))}

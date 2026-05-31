@@ -7,7 +7,7 @@ import { bankAccountsApi } from '@/api/bankAccounts'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
 import Badge from '@/components/ui/Badge'
-import { fmtMXN, fmtDate } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
 const METHOD_OPTS = [
@@ -347,9 +347,9 @@ export function PagoProveedorModal({ onClose, onSaved, initialPartnerId = null, 
                               <span className="font-mono font-semibold text-brand-300">{d.document_number}</span>
                             </div>
                           </td>
-                          <td className="text-ink-secondary">{fmtDate(d.issue_date)}</td>
+                          <td className="text-ink-secondary">{fmtDateOnly(d.issue_date)}</td>
                           <td className={clsx(d.is_overdue ? 'text-status-danger font-semibold' : 'text-ink-secondary')}>
-                            {fmtDate(d.due_date)}
+                            {fmtDateOnly(d.due_date)}
                           </td>
                           <td><Badge status={d.is_overdue ? 'overdue' : d.status} /></td>
                           <td className="text-right font-mono tabular-nums font-semibold text-status-warning">

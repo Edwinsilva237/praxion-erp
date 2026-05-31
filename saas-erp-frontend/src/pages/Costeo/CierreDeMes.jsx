@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { overheadApi } from '@/api/overhead'
 import Spinner from '@/components/ui/Spinner'
+import CollapsibleHelp from '@/components/ui/CollapsibleHelp'
 import Badge from '@/components/ui/Badge'
 import useAuthStore from '@/store/useAuthStore'
 import { useNavigate } from 'react-router-dom'
@@ -16,15 +17,14 @@ function StepSelectMonth({ year, month, setYear, setMonth, onNext }) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="bg-status-info/10 border border-status-info/40 rounded-xl px-4 py-3 text-sm text-status-info">
-        <p className="font-medium mb-1">¿Qué pasa en el cierre de mes?</p>
+      <CollapsibleHelp title="¿Qué pasa en el cierre de mes?">
         <ol className="list-decimal list-inside leading-relaxed space-y-0.5">
           <li>Eliges el mes a cerrar (típicamente el mes que terminó).</li>
           <li>Capturas <strong>cuánto realmente gastaste</strong> en cada rubro (puedes copiarlo de tu contabilidad o estados de cuenta).</li>
           <li>Revisas el resumen y confirmas.</li>
           <li>El sistema <strong>recostea</strong> automáticamente todas las órdenes producidas en el mes para usar el costo real en vez del estimado.</li>
         </ol>
-      </div>
+      </CollapsibleHelp>
       <div className="bg-status-warning/10 border border-status-warning/40 rounded-xl px-4 py-3 text-sm text-status-warning">
         ⚠ El cierre es <strong>irreversible</strong>. Asegúrate de tener los montos reales antes de confirmar. Si necesitas corregir después, contacta al admin.
       </div>

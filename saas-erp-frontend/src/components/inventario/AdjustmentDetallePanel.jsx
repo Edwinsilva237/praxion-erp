@@ -59,7 +59,8 @@ export default function AdjustmentDetallePanel({ adjustmentId, onClose }) {
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-6 py-4 flex items-center justify-between z-10">
+        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-6 py-4 flex items-center justify-between z-10"
+          style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top))' }}>
           <div className="min-w-0 flex items-center gap-3">
             <div>
               <p className="text-[10px] uppercase tracking-widest text-ink-muted font-semibold">Detalle de ajuste</p>
@@ -400,7 +401,7 @@ function SummaryBox({ label, value, variant, dimmed }) {
   return (
     <div className={clsx('border rounded-xl p-3', styles[variant], dimmed && 'opacity-50')}>
       <p className={clsx('text-[10px] uppercase font-semibold tracking-wider', labelStyles[variant])}>{label}</p>
-      <p className="text-base font-bold mt-1">{value}</p>
+      <p className="text-sm sm:text-base font-bold mt-1 tabular-nums break-all">{value}</p>
     </div>
   )
 }

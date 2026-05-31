@@ -7,7 +7,7 @@ import { bankAccountsApi } from '@/api/bankAccounts'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
 import Badge from '@/components/ui/Badge'
-import { fmtMXN, fmtDate } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
 const METHOD_OPTS = [
@@ -409,7 +409,7 @@ export function PagoModal({ onClose, onSaved, prefilledPartnerId = null, prefill
                               <span className="font-mono text-brand-300">{d.document_number}</span>
                               {ppd && <span className="ml-1.5 badge-amber text-[10px]">PPD</span>}
                             </p>
-                            <p className="text-[10px] text-ink-muted mt-0.5">Emitida {fmtDate(d.issue_date)}</p>
+                            <p className="text-[10px] text-ink-muted mt-0.5">Emitida {fmtDateOnly(d.issue_date)}</p>
                             {ppd && applied > 0 && (
                               <p className="text-[10px] text-teal-300 mt-0.5">
                                 Al guardar se emitirá un complemento de pago (CFDI tipo P).
@@ -417,7 +417,7 @@ export function PagoModal({ onClose, onSaved, prefilledPartnerId = null, prefill
                             )}
                           </td>
                           <td className={clsx('whitespace-nowrap', d.is_overdue ? 'text-status-danger font-semibold' : 'text-ink-secondary')}>
-                            {fmtDate(d.due_date)}
+                            {fmtDateOnly(d.due_date)}
                           </td>
                           <td><Badge status={d.is_overdue ? 'overdue' : d.status} /></td>
                           <td className="text-right font-mono tabular-nums font-medium">
@@ -484,7 +484,7 @@ export function PagoModal({ onClose, onSaved, prefilledPartnerId = null, prefill
             </p>
             {statement.advances.map(a => (
               <p key={a.id} className="text-xs text-status-warning">
-                {fmtDate(a.receipt_date)} · {fmtMXN(a.amount_available)} disponibles de {fmtMXN(a.amount)}
+                {fmtDateOnly(a.receipt_date)} · {fmtMXN(a.amount_available)} disponibles de {fmtMXN(a.amount)}
               </p>
             ))}
             <p className="text-[11px] text-status-warning mt-1 italic">

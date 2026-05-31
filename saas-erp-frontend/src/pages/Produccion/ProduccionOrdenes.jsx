@@ -104,8 +104,8 @@ function CustomItemsSection({ control, register, errors, watch, setValue }) {
 
       {hasItems && (
         <div className="mb-2 rounded-xl overflow-hidden border border-line-subtle bg-surface-elevated">
-          {/* Cabecera */}
-          <div className="grid grid-cols-[1fr_120px_120px_28px] gap-2 px-3 py-1.5 bg-surface-secondary/40 border-b border-line-subtle">
+          {/* Cabecera — solo en escritorio (en móvil cada item es una tarjeta) */}
+          <div className="hidden sm:grid grid-cols-[1fr_120px_120px_28px] gap-2 px-3 py-1.5 bg-surface-secondary/40 border-b border-line-subtle">
             <span className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">Descripción</span>
             <span className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">Tipo</span>
             <span className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide text-right">Costo $</span>
@@ -120,61 +120,65 @@ function CustomItemsSection({ control, register, errors, watch, setValue }) {
               const cost = parseFloat(it.cost) || 0
               const showBreakdown = isPerUnit && cost > 0 && qty > 0
               return (
-                <div key={field.id} className="px-3 py-2 grid grid-cols-[1fr_120px_120px_28px] gap-2 items-center">
+                <div key={field.id} className="px-3 py-2 flex flex-col gap-2 sm:grid sm:grid-cols-[1fr_120px_120px_28px] sm:gap-2 sm:items-center">
                   <input
                     {...register(`customItems.${idx}.description`)}
                     type="text"
                     placeholder="Ej: Texto feliz cumpleaños"
                     className={clsx(
-                      'input input-sm text-sm',
+                      'input input-sm text-sm w-full',
                       errors.customItems?.[idx]?.description && 'input-error'
                     )}
                   />
 
-                  {/* Toggle Fijo / Por unidad */}
-                  <div className="flex bg-surface-secondary/40 rounded-md p-0.5 text-[11px] font-medium">
-                    <button type="button"
-                      onClick={() => setValue(`customItems.${idx}.costType`, 'per_unit', { shouldDirty: true })}
-                      className={clsx(
-                        'flex-1 py-1 rounded transition',
-                        isPerUnit ? 'bg-purple-500/20 text-purple-300' : 'text-ink-muted hover:text-ink-primary'
-                      )}
+                  {/* En móvil: tipo + costo + X en una fila. En escritorio: celdas
+                      de la tabla (display:contents deja que entren a la rejilla). */}
+                  <div className="flex items-center gap-2 sm:contents">
+                    {/* Toggle Fijo / Por unidad */}
+                    <div className="flex bg-surface-secondary/40 rounded-md p-0.5 text-[11px] font-medium flex-1 sm:flex-none">
+                      <button type="button"
+                        onClick={() => setValue(`customItems.${idx}.costType`, 'per_unit', { shouldDirty: true })}
+                        className={clsx(
+                          'flex-1 py-1 rounded transition',
+                          isPerUnit ? 'bg-purple-500/20 text-purple-300' : 'text-ink-muted hover:text-ink-primary'
+                        )}
+                      >
+                        Por unidad
+                      </button>
+                      <button type="button"
+                        onClick={() => setValue(`customItems.${idx}.costType`, 'fixed', { shouldDirty: true })}
+                        className={clsx(
+                          'flex-1 py-1 rounded transition',
+                          !isPerUnit ? 'bg-purple-500/20 text-purple-300' : 'text-ink-muted hover:text-ink-primary'
+                        )}
+                      >
+                        Fijo
+                      </button>
+                    </div>
+
+                    <div className="relative flex-1 sm:flex-none">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-ink-muted">$</span>
+                      <input
+                        {...register(`customItems.${idx}.cost`)}
+                        type="number" step="0.01" min="0"
+                        placeholder="0.00"
+                        className="input input-sm text-sm pl-5 text-right w-full"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => remove(idx)}
+                      className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-status-danger shrink-0"
+                      title="Quitar"
                     >
-                      Por unidad
-                    </button>
-                    <button type="button"
-                      onClick={() => setValue(`customItems.${idx}.costType`, 'fixed', { shouldDirty: true })}
-                      className={clsx(
-                        'flex-1 py-1 rounded transition',
-                        !isPerUnit ? 'bg-purple-500/20 text-purple-300' : 'text-ink-muted hover:text-ink-primary'
-                      )}
-                    >
-                      Fijo
+                      <IconX />
                     </button>
                   </div>
-
-                  <div className="relative">
-                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-ink-muted">$</span>
-                    <input
-                      {...register(`customItems.${idx}.cost`)}
-                      type="number" step="0.01" min="0"
-                      placeholder="0.00"
-                      className="input input-sm text-sm pl-5 text-right"
-                    />
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => remove(idx)}
-                    className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-status-danger"
-                    title="Quitar"
-                  >
-                    <IconX />
-                  </button>
 
                   {/* Breakdown del cálculo cuando es por unidad */}
                   {showBreakdown && (
-                    <div className="col-span-4 text-[10px] text-ink-muted -mt-0.5 pl-1">
+                    <div className="text-[10px] text-ink-muted pl-1 sm:col-span-4 sm:-mt-0.5">
                       {cost.toFixed(2)} × {qty} paq = <span className="text-purple-300 font-semibold">${lineTotal(it).toFixed(2)}</span>
                     </div>
                   )}
@@ -256,9 +260,9 @@ function MpFormulaSection({ control, register, errors, mps, watch, canSeeCosts =
 
       <div className="space-y-2 mb-2">
         {fields.map((field, idx) => (
-          <div key={field.id} className="flex items-center gap-2">
+          <div key={field.id} className="flex flex-col sm:flex-row sm:items-center gap-2">
             <select {...register(`mpFormula.${idx}.rawMaterialId`)}
-              className={clsx('select flex-1', errors.mpFormula?.[idx]?.rawMaterialId && 'input-error')}>
+              className={clsx('select flex-1 min-w-0', errors.mpFormula?.[idx]?.rawMaterialId && 'input-error')}>
               <option value="">Seleccionar material...</option>
               {mps.filter(m => m.id === formula[idx]?.rawMaterialId || !usedIds.includes(m.id)).map(m => (
                 <option key={m.id} value={m.id}>
@@ -267,16 +271,18 @@ function MpFormulaSection({ control, register, errors, mps, watch, canSeeCosts =
                 </option>
               ))}
             </select>
-            <div className="relative w-24">
-              <input {...register(`mpFormula.${idx}.percentage`)} type="number" step="0.01" min="0.01" max="100"
-                placeholder="0"
-                className={clsx('input pr-5', errors.mpFormula?.[idx]?.percentage && 'input-error')} />
-              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-ink-muted">%</span>
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1 sm:flex-none sm:w-24">
+                <input {...register(`mpFormula.${idx}.percentage`)} type="number" step="0.01" min="0.01" max="100"
+                  placeholder="0"
+                  className={clsx('input pr-6 w-full', errors.mpFormula?.[idx]?.percentage && 'input-error')} />
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-ink-muted">%</span>
+              </div>
+              <button type="button" onClick={() => remove(idx)}
+                className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-status-danger shrink-0">
+                <IconX />
+              </button>
             </div>
-            <button type="button" onClick={() => remove(idx)}
-              className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-status-danger shrink-0">
-              <IconX />
-            </button>
           </div>
         ))}
       </div>
@@ -775,7 +781,7 @@ function OrderModal({ order, onClose }) {
           {/* Prioridad */}
           <div>
             <label className="label">Prioridad<span className="text-status-danger ml-0.5">*</span></label>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {Object.entries(PRIORITY_COLOR).map(([key, c]) => (
                 <button key={key} type="button" onClick={() => setValue('priority', key)}
                   style={selectedPriority===key ? { background:c.bg, borderColor:c.border, color:c.text } : {}}

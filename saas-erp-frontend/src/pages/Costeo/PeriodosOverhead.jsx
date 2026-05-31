@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { overheadApi } from '@/api/overhead'
 import Spinner from '@/components/ui/Spinner'
+import CollapsibleHelp from '@/components/ui/CollapsibleHelp'
 import Badge from '@/components/ui/Badge'
 import HelpTip from '@/components/ui/HelpTip'
 import useAuthStore from '@/store/useAuthStore'
@@ -110,14 +111,13 @@ export default function PeriodosOverhead() {
         </div>
       </div>
 
-      <div className="bg-status-info/10 border border-status-info/40 rounded-xl px-4 py-3 text-sm text-status-info">
-        <p className="font-medium mb-1">¿Cómo lo uso?</p>
+      <CollapsibleHelp title="¿Cómo lo uso?">
         <ol className="list-decimal list-inside leading-relaxed space-y-0.5">
           <li>Elige el mes y haz clic en <strong>"Crear períodos del mes"</strong> — el sistema genera un renglón por cada gasto activo del catálogo.</li>
           <li>Ajusta el <strong>estimado</strong> de cada renglón si difiere del default. Los turnos producidos en el mes irán absorbiendo este monto.</li>
           <li>Al final del mes ve a <Link to="/costeo/cierre" className="underline hover:no-underline">Cierre de mes</Link> para capturar los <strong>reales</strong>.</li>
         </ol>
-      </div>
+      </CollapsibleHelp>
 
       {/* Selector de mes */}
       <div className="flex items-center gap-3 flex-wrap">

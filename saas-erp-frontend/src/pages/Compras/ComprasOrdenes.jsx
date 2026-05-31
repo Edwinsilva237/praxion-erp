@@ -7,7 +7,8 @@ import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
 import { OCTypeSelector, OCFormModal } from '@/components/compras/OCFormModal'
 import { OCDetallePanel } from '@/components/compras/OCDetallePanel'
-import { fmtMXN, fmtDate, fmtNum } from '@/utils/fmt'
+import ScanButton from '@/components/scanner/ScanButton'
+import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
 // ── Mini barra de progreso de recepción ───────────────────────────────────────
@@ -171,11 +172,13 @@ export default function ComprasOrdenes() {
           <input
             type="text"
             className="input pl-9"
-            placeholder="Buscar por número o proveedor..."
+            placeholder="Buscar o escanear (número / proveedor)..."
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(1) }}
           />
         </div>
+
+        <ScanButton onScan={code => { setSearch(code); setPage(1) }} title="Escanear código" />
 
         <select className="select w-44" value={typeFilter} onChange={e => { setTypeFilter(e.target.value); setPage(1) }}>
           {TYPE_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
@@ -227,7 +230,49 @@ export default function ComprasOrdenes() {
         </div>
       ) : (
         <>
-          <div className="table-wrap">
+          {/* ── Móvil: tarjetas de orden de compra ── */}
+          <div className="md:hidden flex flex-col gap-2">
+            {orders.map(o => {
+              const isUSD = o.currency === 'USD'
+              const isMP  = o.order_type === 'raw_material' || (!o.order_type && o.lines?.some?.(l => l.item_type === 'raw_material'))
+              return (
+                <button
+                  key={o.id}
+                  type="button"
+                  onClick={() => setSelectedOcId(o.id)}
+                  className="w-full text-left bg-surface-primary border border-line-subtle rounded-xl p-3 hover:bg-surface-elevated/40 transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-mono text-sm font-semibold text-brand-300">{o.order_number}</span>
+                    <Badge status={o.status} />
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <span className="font-medium text-ink-primary truncate min-w-0">
+                      {o.partner_name || <span className="text-ink-muted font-normal">Sin proveedor</span>}
+                    </span>
+                    <TipoChip type={isMP ? 'raw_material' : 'product'} />
+                  </div>
+                  <div className="mt-1.5 flex items-end justify-between gap-2">
+                    <div className="text-[11px] text-ink-muted">
+                      <p>Entrega: {fmtDateOnly(o.expected_date)}</p>
+                      <p>Creada: {fmtDate(o.created_at)}</p>
+                    </div>
+                    <div className="text-right">
+                      <span className="font-mono text-sm font-medium">
+                        {fmtMXN(o.total_mxn || o.total, isUSD ? 'USD' : 'MXN')}
+                      </span>
+                      {isUSD && o.total_mxn_converted && (
+                        <p className="font-mono text-[11px] text-ink-muted">≈ {fmtMXN(o.total_mxn_converted, 'MXN')}</p>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* ── Escritorio: tabla completa ── */}
+          <div className="table-wrap hidden md:block">
             <table className="table">
               <thead>
                 <tr>
@@ -255,7 +300,7 @@ export default function ComprasOrdenes() {
                       <td className="font-medium text-ink-primary">
                         {o.partner_name || <span className="text-ink-muted font-normal">Sin proveedor</span>}
                       </td>
-                      <td className="text-ink-muted text-sm">{fmtDate(o.expected_date)}</td>
+                      <td className="text-ink-muted text-sm">{fmtDateOnly(o.expected_date)}</td>
                       <td>
                         <div className="flex flex-col">
                           <span className="font-mono text-sm font-medium">

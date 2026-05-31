@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { processConfigApi } from '@/api/processConfig'
 import Spinner from '@/components/ui/Spinner'
+import CollapsibleHelp from '@/components/ui/CollapsibleHelp'
 import HelpTip from '@/components/ui/HelpTip'
 import useAuthStore from '@/store/useAuthStore'
 import clsx from 'clsx'
@@ -238,14 +239,13 @@ export default function Flags() {
         </div>
       )}
 
-      <div className="bg-status-info/10 border border-status-info/40 rounded-xl px-4 py-3 text-sm text-status-info">
-        <p className="font-medium mb-1">¿Qué es esto?</p>
+      <CollapsibleHelp title="¿Qué es esto?">
         <p className="leading-relaxed">
           Estos ajustes controlan cómo funciona tu producción: si manejas lotes, cómo se valora la materia prima,
           quién valida los turnos, qué pasa con la merma… Cada opción tiene su explicación — haz clic en el ⓘ junto
           a cada nombre para ver detalles y ejemplos.
         </p>
-      </div>
+      </CollapsibleHelp>
 
       <ValidationBanner warnings={validateConfig(values)} />
 

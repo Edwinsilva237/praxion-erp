@@ -171,10 +171,11 @@ async function generateRemisionPDF({ tenantId, noteId, showPrices = true }) {
     y += 14
     doc.rect(40, y, W, 16).fill(azul)
     doc.fillColor('white').fontSize(7.5).font('Helvetica-Bold')
-    // Sin precios, la descripción se ensancha pero Cant./Unidad se quedan a una
-    // distancia legible del borde (no pegadas a la orilla) para no partir "Unidad".
+    // Anchos de columna. Deben sumar <= 522 (de cx=45 al borde de la tabla en
+    // x≈567) para que "Importe" NO se salga del margen derecho de la hoja.
+    // Sin precios, la descripción absorbe el espacio de P. Unitario / Importe.
     const cw = showPrices
-      ? { sku: 70, desc: 245, cant: 50, unit: 55, precio: 70, importe: 75 }
+      ? { sku: 58, desc: 216, cant: 48, unit: 46, precio: 70, importe: 84 }
       : { sku: 70, desc: 330, cant: 60, unit: 62 }
     let cx = 45
     doc.text('SKU', cx, y + 4); cx += cw.sku

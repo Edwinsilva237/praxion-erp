@@ -7,7 +7,7 @@ import Can from '@/components/auth/Can'
 import CollapsibleFilters from '@/components/ui/CollapsibleFilters'
 import { CotizacionFormModal } from '@/components/cotizaciones/CotizacionFormModal'
 import { CotizacionDetallePanel } from '@/components/cotizaciones/CotizacionDetallePanel'
-import { fmtMXN, fmtDate } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
 const STATUS_OPTS = [
@@ -107,7 +107,7 @@ export default function VentasCotizaciones() {
   return (
     <div className="page-enter flex flex-col gap-4">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold text-ink-primary">Cotizaciones</h1>
           <p className="text-xs text-ink-muted mt-0.5">
@@ -115,7 +115,7 @@ export default function VentasCotizaciones() {
           </p>
         </div>
         <Can do="sales:create">
-          <button onClick={() => setShowForm(true)} className="btn-primary">
+          <button onClick={() => setShowForm(true)} className="btn-primary w-full justify-center sm:w-auto">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/>
             </svg>
@@ -142,8 +142,8 @@ export default function VentasCotizaciones() {
       {/* Filtros colapsables en móvil */}
       <CollapsibleFilters
         activeCount={[search, statusFilter, from, to].filter(Boolean).length}>
-        <div className="card p-4 flex flex-wrap gap-3 items-end">
-          <div className="flex-1 min-w-[200px]">
+        <div className="card p-4 flex flex-col sm:flex-row sm:flex-wrap gap-3 sm:items-end">
+          <div className="sm:flex-1 sm:min-w-[200px]">
             <label className="label">Buscar</label>
             <input className="input" placeholder="Número, cliente o RFC..."
               value={search} onChange={e => setSearch(e.target.value)} />
@@ -155,19 +155,22 @@ export default function VentasCotizaciones() {
               {STATUS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           </div>
-          <div>
-            <label className="label">Desde</label>
-            <input type="date" className="input" value={from}
-              onChange={e => { setFrom(e.target.value); setPage(1) }} />
-          </div>
-          <div>
-            <label className="label">Hasta</label>
-            <input type="date" className="input" value={to}
-              onChange={e => { setTo(e.target.value); setPage(1) }} />
+          {/* Desde + Hasta: par de 2 columnas en móvil, campos sueltos en escritorio */}
+          <div className="grid grid-cols-2 gap-3 sm:contents">
+            <div>
+              <label className="label">Desde</label>
+              <input type="date" className="input" value={from}
+                onChange={e => { setFrom(e.target.value); setPage(1) }} />
+            </div>
+            <div>
+              <label className="label">Hasta</label>
+              <input type="date" className="input" value={to}
+                onChange={e => { setTo(e.target.value); setPage(1) }} />
+            </div>
           </div>
           {(statusFilter || from || to || search) && (
             <button onClick={() => { setStatusFilter(''); setFrom(''); setTo(''); setSearch(''); setPage(1) }}
-              className="btn-ghost btn-sm text-ink-muted">
+              className="btn-ghost btn-sm text-ink-muted self-start sm:self-auto">
               Limpiar filtros
             </button>
           )}
@@ -247,7 +250,7 @@ export default function VentasCotizaciones() {
                         urgency === 'overdue' ? 'text-status-danger' :
                         urgency === 'today' || urgency === 'soon' ? 'text-status-warning' :
                         urgency === 'future' ? 'text-status-success' : 'text-ink-muted')}>
-                        {q.valid_until ? fmtDate(q.valid_until) : 'Sin vigencia'}
+                        {q.valid_until ? fmtDateOnly(q.valid_until) : 'Sin vigencia'}
                       </td>
                       <td><Badge status={q.status} /></td>
                       <td className="text-right font-mono tabular-nums font-medium"
@@ -279,7 +282,7 @@ export default function VentasCotizaciones() {
                       {q.partner_rfc && <p className="text-[10px] text-ink-muted font-mono">{q.partner_rfc}</p>}
                     </td>
                     <td className="text-xs text-ink-secondary">{fmtDate(q.created_at)}</td>
-                    <td className="text-xs text-ink-muted">{q.valid_until ? fmtDate(q.valid_until) : '—'}</td>
+                    <td className="text-xs text-ink-muted">{q.valid_until ? fmtDateOnly(q.valid_until) : '—'}</td>
                     <td>
                       <div className="flex flex-wrap items-center gap-1.5">
                         <Badge status={q.status} />

@@ -8,7 +8,8 @@ import { ProductImageThumb } from '@/components/productos/ProductImageThumb'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import useAuthStore from '@/store/useAuthStore'
-import { fmtMXN, fmtDate, fmtNum, fmtDateInput } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtNum, fmtDateInput, fmtDateOnly} from '@/utils/fmt'
+import { downloadBlob, printBlob } from '@/utils/downloadBlob'
 import clsx from 'clsx'
 
 // ── Datos generales — vista ─────────────────────────────────────────────────
@@ -19,7 +20,7 @@ function DatosGeneralesView({ q }) {
         ['Cliente',     q.partner_name || '—'],
         ['RFC',         q.partner_rfc || '—'],
         ['Moneda',      q.currency || 'MXN'],
-        ['Vigencia',    q.valid_until ? fmtDate(q.valid_until) : 'Sin vigencia'],
+        ['Vigencia',    q.valid_until ? fmtDateOnly(q.valid_until) : 'Sin vigencia'],
         ['Creada por',  q.created_by_name || '—'],
         ['Enviada',     q.sent_at ? `${fmtDate(q.sent_at)}${q.sent_by_name ? ` · ${q.sent_by_name}` : ''}` : '—'],
         q.converted_at ? ['Convertida', `${fmtDate(q.converted_at)} · ${q.converted_by_name || '—'}`] : null,
@@ -371,12 +372,20 @@ export function CotizacionDetallePanel({ quotationId, onClose, onConverted }) {
     try {
       setError(null)
       const res = await quotationsApi.downloadPdf(quotationId)
-      const url = URL.createObjectURL(res.data)
-      window.open(url, '_blank')
-      // Liberar después de un rato (la pestaña ya cargó el blob)
-      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      // Web: descarga normal. Nativo: guarda + abre menú compartir/guardar.
+      await downloadBlob(res.data, `Cotizacion-${q?.quotation_number || quotationId}.pdf`)
     } catch (e) {
       setError(e.response?.data?.error || e.message || 'No se pudo generar el PDF')
+    }
+  }
+
+  async function handlePrintPdf() {
+    try {
+      setError(null)
+      const res = await quotationsApi.downloadPdf(quotationId)
+      await printBlob(res.data, `Cotizacion-${q?.quotation_number || quotationId}`)
+    } catch (e) {
+      setError(e.response?.data?.error || e.message || 'No se pudo imprimir el PDF')
     }
   }
 
@@ -394,7 +403,8 @@ export function CotizacionDetallePanel({ quotationId, onClose, onConverted }) {
       <div className="w-full max-w-2xl bg-surface-primary h-full overflow-y-auto shadow-card flex flex-col">
 
         {/* Header */}
-        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10">
+        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10"
+          style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top))' }}>
           <div className="flex-1 min-w-0">
             {isLoading || !q ? (
               <div className="flex flex-col gap-2">
@@ -491,6 +501,13 @@ export function CotizacionDetallePanel({ quotationId, onClose, onConverted }) {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
                     </svg>
                     Descargar PDF
+                  </button>
+
+                  <button onClick={handlePrintPdf} className="btn-secondary btn-sm">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+                    </svg>
+                    Imprimir
                   </button>
 
                   {canSendByEmail && (

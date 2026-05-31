@@ -1335,12 +1335,12 @@ export default function Socios() {
           <p className="page-subtitle">{isLoading ? '...' : `${total} registros`}</p>
         </div>
         <Can do="business_partners:create">
-          <div className="flex gap-2">
-            <button className="btn-secondary" onClick={() => setModal('new')}
+          <div className="flex gap-2 w-full sm:w-auto">
+            <button className="btn-secondary flex-1 justify-center sm:flex-none" onClick={() => setModal('new')}
               title="Form completo con datos fiscales y comerciales">
               Captura completa
             </button>
-            <button className="btn-primary" onClick={() => setModal('quick')}
+            <button className="btn-primary flex-1 justify-center sm:flex-none" onClick={() => setModal('quick')}
               title="Cliente sin RFC, solo para remisión">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />

@@ -407,12 +407,12 @@ export function CotizacionFormModal({ onClose, onCreated }) {
             </div>
           )}
 
-          <div className="flex justify-end gap-2 sticky bottom-0 bg-surface-primary pt-2">
-            <button type="button" onClick={onClose} className="btn-secondary">
+          <div className="flex gap-2 sticky bottom-0 bg-surface-primary pt-2">
+            <button type="button" onClick={onClose} className="btn-secondary flex-1 justify-center">
               Cancelar
             </button>
             <button type="submit" disabled={createMut.isPending}
-              className={clsx('btn-primary', createMut.isPending && 'opacity-60 cursor-wait')}>
+              className={clsx('btn-primary flex-1 justify-center', createMut.isPending && 'opacity-60 cursor-wait')}>
               {createMut.isPending ? <Spinner size="sm" /> : 'Crear cotización'}
             </button>
           </div>

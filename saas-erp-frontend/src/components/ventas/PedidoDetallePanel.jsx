@@ -10,7 +10,7 @@ import { RemisionDetallePanel } from '@/components/ventas/RemisionDetallePanel'
 import { ProductImageThumb } from '@/components/productos/ProductImageThumb'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
-import { fmtMXN, fmtDate, fmtNum, fmtDateInput } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtNum, fmtDateInput, fmtDateOnly } from '@/utils/fmt'
 import clsx from 'clsx'
 
 // ── Tabla de líneas — read-only + acciones edit/delete cuando editable ──────
@@ -127,7 +127,7 @@ function DatosGeneralesView({ order }) {
           ? `USD (TC $${order.exchange_rate_value ? fmtNum(order.exchange_rate_value, 4) : '—'})`
           : 'MXN'],
         ['F. creación',     fmtDate(order.created_at)],
-        ['F. programada',   fmtDate(order.scheduled_date)],
+        ['F. programada',   fmtDateOnly(order.scheduled_date)],
         ['F. confirmación', fmtDate(order.confirmed_at)],
         ['OC del cliente',  order.po_number || '—'],
         ['Factura directa', order.direct_invoice ? 'Sí' : 'No'],
@@ -415,7 +415,7 @@ function RepartidorSection({ order, editable }) {
           )}
           {order.scheduled_date && (
             <p className="text-[11px] text-ink-muted mt-0.5">
-              Programada: {fmtDate(order.scheduled_date)}
+              Programada: {fmtDateOnly(order.scheduled_date)}
             </p>
           )}
         </div>
@@ -574,7 +574,8 @@ export function PedidoDetallePanel({ orderId, onClose }) {
       <div className="w-full max-w-2xl bg-surface-primary h-full overflow-y-auto shadow-card flex flex-col">
 
         {/* Header */}
-        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10">
+        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10"
+          style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top))' }}>
           <div className="flex-1 min-w-0">
             {isLoading ? (
               <div className="flex flex-col gap-2">
@@ -754,7 +755,7 @@ export function PedidoDetallePanel({ orderId, onClose }) {
                             onClick={() => setViewingNoteId(n.id)}
                             className="cursor-pointer hover:bg-purple-500/10 transition-colors">
                             <td className="font-mono font-semibold text-purple-300">{n.document_number}</td>
-                            <td className="text-ink-secondary">{fmtDate(n.issue_date)}</td>
+                            <td className="text-ink-secondary">{fmtDateOnly(n.issue_date)}</td>
                             <td><Badge status={n.status} /></td>
                             <td className="text-ink-secondary">{n.receiver_name || '—'}</td>
                             <td className="text-right font-mono tabular-nums font-medium">

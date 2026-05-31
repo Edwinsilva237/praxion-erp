@@ -5,6 +5,7 @@ import { productsApi } from '@/api/products'
 import { processConfigApi } from '@/api/processConfig'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
+import CollapsibleHelp from '@/components/ui/CollapsibleHelp'
 import HelpTip from '@/components/ui/HelpTip'
 import useAuthStore from '@/store/useAuthStore'
 import clsx from 'clsx'
@@ -66,8 +67,7 @@ export default function Especificaciones() {
         </div>
       </div>
 
-      <div className="bg-status-info/10 border border-status-info/40 rounded-xl px-4 py-3 text-sm text-status-info mb-5">
-        <p className="font-medium mb-1">¿Qué es esto?</p>
+      <CollapsibleHelp title="¿Qué es esto?" className="mb-5">
         <p className="leading-relaxed">
           Para cada producto que fabricas, defines los <strong>parámetros de calidad esperados</strong>: peso teórico,
           tolerancia, piezas por paquete. Durante la captura del turno, el sistema usa estos valores para calcular el
@@ -76,7 +76,7 @@ export default function Especificaciones() {
         <p className="leading-relaxed mt-1">
           Cada cambio crea una <strong>nueva versión</strong>. Las órdenes ya creadas mantienen la versión bajo la que se generaron.
         </p>
-      </div>
+      </CollapsibleHelp>
 
       <div className="flex gap-3 mb-5 flex-wrap">
         <input value={search} onChange={(e) => setSearch(e.target.value)}
@@ -102,7 +102,51 @@ export default function Especificaciones() {
           </p>
         </div>
       ) : (
-        <div className="card p-0 overflow-x-auto">
+        <>
+        {/* Móvil: tarjetas — tocar el producto abre crear/editar */}
+        <div className="md:hidden flex flex-col gap-2">
+          {filtered.map(p => {
+            const lengthM = p.length_mm > 0 ? (p.length_mm / 1000).toFixed(2) : null
+            return (
+              <div key={p.id}
+                onClick={canManage ? () => setEditing(p) : undefined}
+                className={clsx('card p-3 flex items-center gap-3', canManage && 'cursor-pointer active:bg-surface-elevated/40')}>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-medium text-sm text-ink-primary truncate">{p.name}</p>
+                    {p.has_quality_spec
+                      ? <Badge variant="green" label="Configurada" />
+                      : <Badge variant="amber" label="Sin spec" />}
+                  </div>
+                  <p className="text-xs font-mono text-ink-muted">{p.sku}</p>
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-xs text-ink-muted tabular-nums">
+                    {lengthM && <span>Largo: {lengthM} m</span>}
+                    {p.grams_per_linear_meter && <span>{fmtNum(p.grams_per_linear_meter, 2)} g/m</span>}
+                    <span>Tol: {p.tolerance_pct ? `±${fmtNum(p.tolerance_pct, 1)}%` : '—'}</span>
+                    <span>Pzas/paq: {p.spec_units_per_package || p.units_per_package || '—'}</span>
+                  </div>
+                  {p.has_quality_spec && canManage && (
+                    <button onClick={(e) => { e.stopPropagation(); setHistory(p) }}
+                      className="text-xs text-brand-300 mt-1.5 hover:underline">
+                      Ver historial
+                    </button>
+                  )}
+                </div>
+                {canManage && (
+                  <div className="shrink-0 flex items-center gap-1 text-brand-300">
+                    <span className="text-xs font-medium">{p.has_quality_spec ? 'Editar' : 'Crear'}</span>
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Escritorio: tabla */}
+        <div className="hidden md:block card p-0 overflow-x-auto">
           <table className="table">
             <thead>
               <tr>
@@ -163,6 +207,7 @@ export default function Especificaciones() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {editing && (

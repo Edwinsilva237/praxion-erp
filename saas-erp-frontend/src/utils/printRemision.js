@@ -27,6 +27,11 @@ function fmtQty(n, decimals = 3) {
 
 function fmtDate(d) {
   if (!d) return '—'
+  // Fechas de calendario (emisión, vencimiento) sin desfase de zona horaria.
+  const s = String(d).slice(0, 10)
+  const [y, m, day] = s.split('-').map(Number)
+  if (s.length === 10 && y && m && day)
+    return new Date(Date.UTC(y, m - 1, day)).toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric', timeZone: 'UTC' })
   return new Date(d).toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' })
 }
 

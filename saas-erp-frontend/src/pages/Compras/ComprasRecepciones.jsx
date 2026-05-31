@@ -9,7 +9,8 @@ import Autocomplete from '@/components/ui/Autocomplete'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
-import { fmtMXN, fmtDate, fmtNum } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
+import { downloadBlob, printBlob } from '@/utils/downloadBlob'
 import clsx from 'clsx'
 import api from '@/api/axios'
 
@@ -221,7 +222,7 @@ async function generateReceiptPDF(receipt) {
   doc.setFontSize(10).setFont(undefined, 'normal')
   doc.text(`N°: ${receipt.receipt_number}`, pageW / 2, y, { align: 'center' })
   y += 5
-  doc.text(`Fecha: ${fmtDate(receipt.received_date)}`, pageW / 2, y, { align: 'center' })
+  doc.text(`Fecha: ${fmtDateOnly(receipt.received_date)}`, pageW / 2, y, { align: 'center' })
   y += 10
 
   doc.setDrawColor(200).line(marginL, y, pageW - marginL, y)
@@ -295,7 +296,7 @@ async function generateReceiptPDF(receipt) {
   doc.text(`Recibió: ${receipt.created_by_name || ''}`,   marginL,              y)
   doc.text(`Confirmó: ${receipt.confirmed_by_name || ''}`, pageW - marginL - 60, y)
 
-  doc.save(`${receipt.receipt_number}.pdf`)
+  return doc
 }
 
 // ── Panel de detalle lateral ──────────────────────────────────────────────────
@@ -330,8 +331,23 @@ function DetallePanel({ receiptId, onClose }) {
   async function handlePDF() {
     if (!receipt) return
     setGenPdf(true)
-    try { await generateReceiptPDF(receipt) }
+    try {
+      const doc = await generateReceiptPDF(receipt)
+      // downloadBlob: web descarga normal; nativo guarda + comparte.
+      await downloadBlob(doc.output('blob'), `${receipt.receipt_number}.pdf`)
+    }
     catch (e) { alert('Error generando PDF: ' + e.message) }
+    finally { setGenPdf(false) }
+  }
+
+  async function handlePrint() {
+    if (!receipt) return
+    setGenPdf(true)
+    try {
+      const doc = await generateReceiptPDF(receipt)
+      await printBlob(doc.output('blob'), receipt.receipt_number || 'Recepcion')
+    }
+    catch (e) { alert('Error al imprimir: ' + e.message) }
     finally { setGenPdf(false) }
   }
 
@@ -359,7 +375,7 @@ function DetallePanel({ receiptId, onClose }) {
                   )}
                 </div>
                 <p className="text-xs text-ink-muted mt-1">
-                  {receipt.partner_name || '—'} · {fmtDate(receipt.received_date)} · {receipt.warehouse_name}
+                  {receipt.partner_name || '—'} · {fmtDateOnly(receipt.received_date)} · {receipt.warehouse_name}
                 </p>
               </>
             ) : null}
@@ -473,6 +489,13 @@ function DetallePanel({ receiptId, onClose }) {
                     </svg>
                   )}
                   Descargar PDF
+                </button>
+                <button onClick={handlePrint} disabled={genPdf}
+                  className="btn-secondary btn-sm">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+                  </svg>
+                  Imprimir
                 </button>
                 {receipt.status === 'draft' && (
                   <button onClick={() => setConf(true)} className="btn-primary btn-sm">
@@ -1146,7 +1169,7 @@ export default function ComprasRecepciones() {
                     <td className="text-sm text-ink-secondary">{r.created_by_name || '—'}</td>
                     <td className="text-sm text-ink-muted">{r.confirmed_by_name || <span className="text-ink-muted">—</span>}</td>
                     <td><Badge status={r.status} /></td>
-                    <td className="text-sm text-ink-muted">{fmtDate(r.received_date)}</td>
+                    <td className="text-sm text-ink-muted">{fmtDateOnly(r.received_date)}</td>
                     <td className="text-right font-mono text-sm font-medium">{fmtMXN(r.total_mxn)}</td>
                     <td onClick={e => e.stopPropagation()}>
                       {r.status === 'draft' && (

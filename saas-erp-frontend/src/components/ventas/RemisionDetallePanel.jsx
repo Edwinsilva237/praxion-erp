@@ -8,8 +8,10 @@ import { DeliveryPhoto } from '@/components/ventas/DeliveryPhoto'
 import { ProductImageThumb } from '@/components/productos/ProductImageThumb'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
-import { fmtMXN, fmtDate, fmtNum } from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import { printRemision } from '@/utils/printRemision'
+import { printBlob } from '@/utils/downloadBlob'
+import { Capacitor } from '@capacitor/core'
 import useAuthStore from '@/store/useAuthStore'
 import clsx from 'clsx'
 
@@ -20,8 +22,8 @@ function DatosGenerales({ note }) {
       {[
         ['Cliente',         note.partner_name || '—'],
         ['RFC',             note.rfc || '—'],
-        ['F. emisión',      fmtDate(note.issue_date)],
-        ['F. vencimiento',  fmtDate(note.credit_due_date)],
+        ['F. emisión',      fmtDateOnly(note.issue_date)],
+        ['F. vencimiento',  fmtDateOnly(note.credit_due_date)],
         ['F. entrega',      fmtDate(note.delivered_at)],
         ['Receptor',        note.receiver_name || '—'],
         ['Moneda',          note.currency === 'USD'
@@ -126,21 +128,21 @@ function AccionesRemision({ note, onSendEmail, onDeliver, onCancel, canceling })
   const { status } = note
 
   if (status === 'issued' || status === 'sent_by_email' || status === 'partially_delivered') return (
-    <div className="flex flex-wrap gap-2 border-t border-line-subtle pt-4 mt-2">
-      <button onClick={onDeliver} className="btn-primary btn-sm">
+    <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 border-t border-line-subtle pt-4 mt-2">
+      <button onClick={onDeliver} className="btn-primary btn-sm justify-center">
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7"/>
         </svg>
         {status === 'partially_delivered' ? 'Completar entrega' : 'Registrar entrega'}
       </button>
-      <button onClick={onSendEmail} className="btn-secondary btn-sm">
+      <button onClick={onSendEmail} className="btn-secondary btn-sm justify-center">
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
         </svg>
         {status === 'sent_by_email' ? 'Reenviar por correo' : 'Enviar por correo'}
       </button>
       <button onClick={onCancel} disabled={canceling}
-        className="btn-ghost btn-sm text-status-danger hover:bg-status-danger/10 ml-auto">
+        className="btn-ghost btn-sm text-status-danger hover:bg-status-danger/10 justify-center sm:ml-auto">
         {canceling ? <Spinner size="sm" /> : (
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
@@ -350,6 +352,18 @@ export function RemisionDetallePanel({ noteId, onClose }) {
     cancelMutation.mutate(reason.trim() || null)
   }
 
+  // En nativo se imprime el PDF formal del backend (el HTML del cliente no
+  // funciona en el webview). El parámetro showPrices pide la versión sin precios.
+  async function handleNativePrint(showPrices) {
+    try {
+      const r = await salesApi.downloadPdf(note.id, { showPrices })
+      const base = note.document_number || 'Remision'
+      await printBlob(r.data, showPrices ? base : `${base}-sin-precios`)
+    } catch (e) {
+      alert('No se pudo imprimir: ' + (e.response?.data?.error || e.message))
+    }
+  }
+
   return createPortal(
     <div className="fixed inset-0 z-[9998] flex">
       <div className="hidden sm:block flex-1 bg-black/30" onClick={onClose} />
@@ -357,7 +371,8 @@ export function RemisionDetallePanel({ noteId, onClose }) {
       <div className="w-full max-w-2xl bg-surface-primary h-full overflow-y-auto shadow-card flex flex-col">
 
         {/* Header */}
-        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10">
+        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10"
+          style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top))' }}>
           <div className="flex-1 min-w-0">
             {isLoading ? (
               <div className="flex flex-col gap-2">
@@ -388,7 +403,7 @@ export function RemisionDetallePanel({ noteId, onClose }) {
                   })()}
                 </div>
                 <p className="text-xs text-ink-muted mt-1">
-                  {note.partner_name} · Emitida {fmtDate(note.issue_date)}
+                  {note.partner_name} · Emitida {fmtDateOnly(note.issue_date)}
                 </p>
               </>
             ) : null}
@@ -464,22 +479,45 @@ export function RemisionDetallePanel({ noteId, onClose }) {
                 </label>
               )}
 
-              {/* Botones de impresión — disponibles en cualquier estado */}
+              {/* Botones de impresión — disponibles en cualquier estado.
+                  En la app (nativo) la impresión HTML con/sin precios no funciona
+                  en el webview, así que ahí imprimimos el PDF formal del backend. */}
               <div className="flex flex-wrap gap-2">
-                <button onClick={() => printRemision(note, { showPrices: true })}
-                  className="btn-secondary btn-sm flex-1">
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
-                  </svg>
-                  Imprimir con precios
-                </button>
-                <button onClick={() => printRemision(note, { showPrices: false })}
-                  className="btn-secondary btn-sm flex-1">
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
-                  </svg>
-                  Imprimir sin precios
-                </button>
+                {Capacitor.isNativePlatform() ? (
+                  <>
+                    <button onClick={() => handleNativePrint(true)}
+                      className="btn-secondary btn-sm flex-1">
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+                      </svg>
+                      Imprimir con precios
+                    </button>
+                    <button onClick={() => handleNativePrint(false)}
+                      className="btn-secondary btn-sm flex-1">
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+                      </svg>
+                      Imprimir sin precios
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={() => printRemision(note, { showPrices: true })}
+                      className="btn-secondary btn-sm flex-1">
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+                      </svg>
+                      Imprimir con precios
+                    </button>
+                    <button onClick={() => printRemision(note, { showPrices: false })}
+                      className="btn-secondary btn-sm flex-1">
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+                      </svg>
+                      Imprimir sin precios
+                    </button>
+                  </>
+                )}
               </div>
 
               <DatosGenerales note={note} />
