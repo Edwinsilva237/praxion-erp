@@ -310,6 +310,7 @@ export default function GastosIndirectos() {
                 <th>Prorrateo</th>
                 <th>Frecuencia</th>
                 <th className="text-right">Estimado/período</th>
+                <th className="text-right">Esperados/mes</th>
                 <th>Estado</th>
                 {canManage && <th className="w-16"></th>}
               </tr>
@@ -330,6 +331,11 @@ export default function GastosIndirectos() {
                     />
                   </td>
                   <td className="text-right font-mono text-sm">{fmtMoney(item.default_estimated_amount)}</td>
+                  <td className="text-right font-mono text-sm">
+                    {item.default_expected_basis_divisor != null
+                      ? `${parseFloat(item.default_expected_basis_divisor)} ${BASIS_UNIT[item.allocation_base] || 'turnos'}`
+                      : <span className="text-ink-muted">—</span>}
+                  </td>
                   <td><Badge variant={item.is_active ? 'green' : 'gray'} label={item.is_active ? 'Activo' : 'Inactivo'} /></td>
                   {canManage && (
                     <td>
