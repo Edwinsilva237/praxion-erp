@@ -22,6 +22,7 @@ const qualityGradesSvc         = require('./qualityGradesService')
 const shiftRolesSvc            = require('./shiftRolesService')
 const productKindsSvc          = require('./productKindsService')
 const tenantAllergensSvc       = require('./tenantAllergensService')
+const expenseCategoriesSvc     = require('./expenseCategoriesService')
 
 const router = express.Router()
 router.use(tenantResolver)
@@ -588,6 +589,60 @@ router.patch('/allergens/:id', checkPermission('tenant_catalogs', 'update'), asy
       isActive:    req.body.is_active   ?? req.body.isActive,
     })
     res.json(a)
+  } catch (err) { handleSvcError(err, res, next) }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// tenant_expense_categories (módulo de Gastos)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** GET /api/process-config/expense-categories */
+router.get('/expense-categories', checkPermission('tenant_catalogs', 'read'), async (req, res, next) => {
+  try {
+    const { isActive } = req.query
+    const items = await expenseCategoriesSvc.listCategories({
+      tenantId: tid(req),
+      isActive: isActive !== undefined ? isActive === 'true' : undefined,
+    })
+    res.json(items)
+  } catch (err) { next(err) }
+})
+
+/** GET /api/process-config/expense-categories/:id */
+router.get('/expense-categories/:id', checkPermission('tenant_catalogs', 'read'), async (req, res, next) => {
+  try {
+    const c = await expenseCategoriesSvc.getCategory({ tenantId: tid(req), id: req.params.id })
+    if (!c) return res.status(404).json({ error: 'Categoría de gasto no encontrada.' })
+    res.json(c)
+  } catch (err) { next(err) }
+})
+
+/** POST /api/process-config/expense-categories */
+router.post('/expense-categories', checkPermission('tenant_catalogs', 'update'), async (req, res, next) => {
+  try {
+    const c = await expenseCategoriesSvc.createCategory({
+      tenantId: tid(req), userId: uid(req), ipAddress: ip(req), userAgent: ua(req),
+      code:        req.body.code,
+      name:        req.body.name,
+      affectsCost: req.body.affects_cost ?? req.body.affectsCost ?? false,
+      sortOrder:   req.body.sort_order ?? req.body.sortOrder ?? 0,
+    })
+    res.status(201).json(c)
+  } catch (err) { handleSvcError(err, res, next) }
+})
+
+/** PATCH /api/process-config/expense-categories/:id */
+router.patch('/expense-categories/:id', checkPermission('tenant_catalogs', 'update'), async (req, res, next) => {
+  try {
+    const c = await expenseCategoriesSvc.updateCategory({
+      tenantId: tid(req), userId: uid(req), id: req.params.id,
+      ipAddress: ip(req), userAgent: ua(req),
+      name:        req.body.name,
+      affectsCost: req.body.affects_cost ?? req.body.affectsCost,
+      sortOrder:   req.body.sort_order ?? req.body.sortOrder,
+      isActive:    req.body.is_active ?? req.body.isActive,
+    })
+    res.json(c)
   } catch (err) { handleSvcError(err, res, next) }
 })
 

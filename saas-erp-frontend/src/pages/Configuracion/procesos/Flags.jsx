@@ -372,6 +372,16 @@ export default function Flags() {
             </div>
           </div>
         </div>
+
+        {/* ── Módulos opcionales ───────────────────────────────────────── */}
+        <div className="card p-4 lg:col-span-2">
+          <h2 className="text-sm font-semibold text-ink-primary mb-3 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-status-info inline-block" />
+            Módulos opcionales
+            <HelpTip text="Activa módulos adicionales del ERP. Al prenderlos aparecen sus pantallas en el menú." />
+          </h2>
+          <FlagRow field="expenses_enabled" values={values} onChange={handleChange} disabled={disabled} />
+        </div>
       </div>
     </div>
   )

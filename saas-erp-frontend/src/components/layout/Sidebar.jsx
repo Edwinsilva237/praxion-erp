@@ -295,6 +295,10 @@ export default function Sidebar({ onClose }) {
   // que ocultamos los menús de planeación de turnos (Programación, Mis turnos).
   const selfStartOn = tenantInfo?.allow_self_start_shift === true
 
+  // Flags booleanos del tenant que ocultan items (ej. expenses_enabled para el
+  // módulo de Gastos). Un item con `flag: 'x'` solo se ve si tenantInfo.x === true.
+  const flagOn = (key) => tenantInfo?.[key] === true
+
   // Construye las secciones con permisos + módulos aplicados. En modo
   // plataforma SOLO se muestran las secciones marcadas platformAdminOnly.
   // En modo normal se ocultan ESAS secciones (la entrada al panel está en
@@ -308,6 +312,7 @@ export default function Sidebar({ onClose }) {
       const visible = section.items.filter(it => {
         if (it.hideWhenSelfStart && selfStartOn) return false
         if (it.module && !moduleEnabled(it.module)) return false
+        if (it.flag && !flagOn(it.flag)) return false
         if (!it.permission) return true
         if (isSuperAdmin) return true
         return can(...it.permission.split(':'))

@@ -67,6 +67,8 @@ const CosteoVarianza          = lazy(() => import('@/pages/Costeo/VarianceReport
 const CajaChica               = lazy(() => import('@/pages/CajaChica'))
 const CajaChicaFondos         = lazy(() => import('@/pages/Configuracion/CajaChicaFondos'))
 const CajaChicaCategorias     = lazy(() => import('@/pages/Configuracion/CajaChicaCategorias'))
+const Gastos                  = lazy(() => import('@/pages/Gastos'))
+const ConfigCategoriasGasto   = lazy(() => import('@/pages/Configuracion/CategoriasGasto'))
 const MiPerfil                = lazy(() => import('@/pages/MiPerfil'))
 const PlatformTenantsList     = lazy(() => import('@/pages/SuperAdmin/TenantsList'))
 const PlatformTenantDetail    = lazy(() => import('@/pages/SuperAdmin/TenantDetail'))
@@ -222,6 +224,8 @@ const router = createBrowserRouter([
       { path: '/costeo/cierre',             element: <CosteoCierre /> },
       { path: '/costeo/varianza',           element: <CosteoVarianza /> },
       { path: '/caja-chica',                      element: <CajaChica /> },
+      { path: '/gastos',                          element: <Gastos /> },
+      { path: '/configuracion/categorias-gasto',  element: <ConfigCategoriasGasto /> },
       { path: '/mi-perfil',                       element: <MiPerfil /> },
 
       // Panel cross-tenant (dueños de Praxion)

@@ -89,4 +89,14 @@ export const processConfigApi = {
 
   updateAllergen: (id, patch) =>
     api.patch(`${BASE}/allergens/${id}`, patch).then(r => r.data),
+
+  // ── Categorías de gasto (módulo de Gastos) ─────────────────────────────
+  listExpenseCategories: (params) =>
+    api.get(`${BASE}/expense-categories`, { params }).then(r => r.data),
+
+  createExpenseCategory: (body) =>
+    api.post(`${BASE}/expense-categories`, body).then(r => r.data),
+
+  updateExpenseCategory: (id, patch) =>
+    api.patch(`${BASE}/expense-categories/${id}`, patch).then(r => r.data),
 }

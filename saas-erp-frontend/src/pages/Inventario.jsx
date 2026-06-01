@@ -87,13 +87,13 @@ function SummaryCard({ warehouse, rows }) {
   const total = rows.reduce((s, r) => s + parseFloat(r.total_value || 0), 0)
   const items = rows.reduce((s, r) => s + parseInt(r.item_count || 0), 0)
   return (
-    <div className="card p-4 flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-semibold text-ink-primary">{warehouse}</p>
+    <div className="card p-4 flex flex-col gap-3 col-span-2 md:col-span-1">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-ink-primary break-words">{warehouse}</p>
           <p className="text-xs text-ink-muted">{items} artículo{items !== 1 ? 's' : ''}</p>
         </div>
-        <span className="text-base font-bold text-ink-primary">{fmtMXN(total)}</span>
+        <span className="text-base font-bold text-ink-primary whitespace-nowrap shrink-0">{fmtMXN(total)}</span>
       </div>
       {rows.map((r) => (
         <div

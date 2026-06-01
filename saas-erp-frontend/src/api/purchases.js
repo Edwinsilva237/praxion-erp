@@ -40,4 +40,8 @@ export const purchasesApi = {
   listInvoices:  (p) => api.get(`${B}/invoices`, { params: p }).then(r => r.data),
   getInvoice:    (id) => api.get(`${B}/invoices/${id}`).then(r => r.data),
   createInvoice: (body) => api.post(`${B}/invoices`, body).then(r => r.data),
+
+  // ── Gastos (módulo de Gastos, Fase 1) ──────────────────────────────────
+  listExpenses:  (p) => api.get(`${B}/expenses`, { params: p }).then(r => r.data),
+  createExpense: (body) => api.post(`${B}/expenses`, body).then(r => r.data),
 }

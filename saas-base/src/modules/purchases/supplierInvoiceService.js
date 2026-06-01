@@ -37,6 +37,7 @@ async function registerInvoice({
   purchaseOrderId,
   creditDays = 0, notes,
   xmlContent = null,
+  isExpense = false, expenseCategoryId = null,  // módulo de Gastos (Fase 1)
   userId, ipAddress, userAgent,
 }) {
   return withTransaction(async (client) => {
@@ -119,6 +120,15 @@ async function registerInvoice({
                       : Math.abs(reconDiff) < 0.01  ? 'reconciled'
                       : 'with_diff'
 
+    // Validar categoría de gasto si viene (debe pertenecer al tenant).
+    if (expenseCategoryId) {
+      const { rows: catRows } = await client.query(
+        `SELECT 1 FROM tenant_expense_categories WHERE id = $1 AND tenant_id = $2`,
+        [expenseCategoryId, tenantId]
+      )
+      if (catRows.length === 0) throw createError(400, 'La categoría de gasto no existe en este tenant.')
+    }
+
     // Insertar factura
     const { rows: invRows } = await client.query(
       `INSERT INTO supplier_invoices
@@ -130,8 +140,9 @@ async function registerInvoice({
           subtotal, tax, total, total_mxn, balance,
           invoice_date, due_date, received_date,
           reconciliation_status, reconciliation_diff,
+          is_expense, expense_category_id,
           xml_content, notes, created_by)
-       VALUES ($1,$2,$3,'pending',$4,$5,$6,$7,$8::uuid,$8::varchar,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18,$19::date,$20::date,$19::date,$21,$22,$23,$24,$25)
+       VALUES ($1,$2,$3,'pending',$4,$5,$6,$7,$8::uuid,$8::varchar,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18,$19::date,$20::date,$19::date,$21,$22,$23,$24,$25,$26,$27)
        RETURNING *`,
       [tenantId, documentNumber,
        documentType === 'remission' ? 'remission' : 'invoice',
@@ -142,6 +153,7 @@ async function registerInvoice({
        subtotal || 0, tax || 0, total, totalMxn,
        issueDate, dueDate,
        reconStatus, reconDiff,
+       !!isExpense, expenseCategoryId || null,
        xmlContent || null, notes || null, userId]
     )
     const invoice = invRows[0]
@@ -482,6 +494,64 @@ async function getSupplierStatement({ tenantId, supplierId, from, to }) {
   return { documents: cxp, summary: totals[0] }
 }
 
+/**
+ * Lista GASTOS (supplier_invoices con is_expense=true) con su categoría y los
+ * dos semáforos: CFDI (¿tiene uuid_sat?) y pago (status del CXP).
+ * Filtros: categoryId, status (pago), hasCfdi ('yes'|'no'), from, to, search.
+ */
+async function listExpenses({ tenantId, categoryId, status, hasCfdi, from, to, search, page = 1, limit = 50 }) {
+  const offset = (page - 1) * limit
+  const params = [tenantId]
+  const filters = ['si.is_expense = true']
+
+  if (categoryId) { params.push(categoryId); filters.push(`si.expense_category_id = $${params.length}`) }
+  if (status)     { params.push(status);     filters.push(`si.status = $${params.length}`) }
+  if (hasCfdi === 'yes') filters.push(`si.uuid_sat IS NOT NULL`)
+  if (hasCfdi === 'no')  filters.push(`si.uuid_sat IS NULL`)
+  if (from)       { params.push(from);       filters.push(`si.invoice_date >= $${params.length}`) }
+  if (to)         { params.push(to);         filters.push(`si.invoice_date <= $${params.length}`) }
+  if (search) {
+    params.push(`%${search}%`)
+    const s = params.length
+    filters.push(`(si.invoice_number ILIKE $${s} OR bp.name ILIKE $${s} OR si.generic_supplier ILIKE $${s})`)
+  }
+
+  const where = `WHERE si.tenant_id = $1 AND ${filters.join(' AND ')}`
+  params.push(limit, offset)
+
+  const { rows } = await query(
+    `SELECT si.id, si.invoice_number, si.status,
+            si.uuid_sat, si.invoice_date, si.due_date,
+            si.currency, si.subtotal, si.tax, si.total, si.total_mxn,
+            si.generic_supplier, si.notes,
+            si.expense_category_id,
+            ec.name AS expense_category_name,
+            bp.name AS partner_name, bp.rfc AS partner_rfc,
+            ap.id AS ap_id, ap.status AS ap_status,
+            ap.amount_paid AS ap_amount_paid, ap.amount_pending AS ap_amount_pending,
+            (si.uuid_sat IS NOT NULL) AS has_cfdi,
+            CASE WHEN si.due_date < CURRENT_DATE AND si.status NOT IN ('paid','cancelled')
+                 THEN true ELSE false END AS is_overdue
+     FROM supplier_invoices si
+     LEFT JOIN business_partners bp ON bp.id = si.partner_id
+     LEFT JOIN tenant_expense_categories ec ON ec.id = si.expense_category_id
+     LEFT JOIN accounts_payable ap ON ap.document_id = si.id AND ap.tenant_id = si.tenant_id
+     ${where}
+     ORDER BY si.invoice_date DESC, si.created_at DESC
+     LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  )
+
+  const { rows: countRows } = await query(
+    `SELECT COUNT(*) FROM supplier_invoices si
+     LEFT JOIN business_partners bp ON bp.id = si.partner_id
+     ${where}`,
+    params.slice(0, params.length - 2)
+  )
+
+  return { data: rows, total: parseInt(countRows[0].count, 10), page, limit }
+}
+
 function createError(status, message) {
   const err = new Error(message)
   err.status = status
@@ -489,6 +559,6 @@ function createError(status, message) {
 }
 
 module.exports = {
-  registerInvoice, listInvoices, getInvoice,
+  registerInvoice, listInvoices, getInvoice, listExpenses,
   registerPayment, getSupplierStatement,
 }

@@ -426,6 +426,54 @@ router.get('/receipts/:id/evidence',
 // ─── Facturas y CXP de proveedor ─────────────────────────────────────────────
 
 /**
+ * GET /api/purchases/expenses
+ * Lista GASTOS (facturas de proveedor con is_expense=true) con su categoría y
+ * los dos semáforos (CFDI / pago). Query: categoryId, status, hasCfdi, from, to,
+ * search, page, limit.
+ */
+router.get('/expenses', checkPermission('expenses', 'read'), async (req, res, next) => {
+  try {
+    const { categoryId, status, hasCfdi, from, to, search, page, limit } = req.query
+    const result = await supplierInvoiceService.listExpenses({
+      tenantId: req.tenant.id,
+      categoryId, status, hasCfdi, from, to, search,
+      page:  parseInt(page || 1, 10),
+      limit: Math.min(parseInt(limit || 50, 10), 100),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/expenses
+ * Registra un GASTO de proveedor (sin recepción). Reusa registerInvoice con
+ * is_expense=true. Body: { supplierId|genericSupplier, expenseCategoryId,
+ * documentNumber?, uuidSat?, invoiceDate, subtotal, tax, total, creditDays?, notes? }
+ */
+router.post('/expenses', checkPermission('expenses', 'create'), async (req, res, next) => {
+  try {
+    const { total } = req.body
+    if (!total) return res.status(400).json({ error: 'total es requerido.' })
+    const expense = await supplierInvoiceService.registerInvoice({
+      tenantId: req.tenant.id, ...req.body,
+      // Un gasto puede no tener folio fiscal aún (lo registras esperando el CFDI).
+      documentNumber: req.body.documentNumber || `GASTO-${Date.now()}`,
+      isExpense: true,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.status(201).json(expense)
+  } catch (err) {
+    if (err.code === '23505') {
+      if (err.constraint?.includes('uuid_sat')) {
+        return res.status(409).json({ error: 'Ya existe una factura registrada con ese UUID SAT.' })
+      }
+      return res.status(409).json({ error: 'Documento duplicado.' })
+    }
+    next(err)
+  }
+})
+
+/**
  * GET /api/purchases/invoices
  * Query: type, status, supplierId, from, to, page, limit
  */

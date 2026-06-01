@@ -179,6 +179,14 @@ export const HELP = {
       { label: 'Actívalo si',           value: 'Operación micro sin tiempo de manejar el cierre mensual.' },
     ],
   },
+  expenses_enabled: {
+    title: 'Módulo de Gastos',
+    body: 'Habilita la pantalla de Gastos: registra gastos de proveedor que no son mercancía (fletes, luz, renta, combustible, servicios, etc.), clasifícalos por categoría y concílialos contra su factura y pago. Su IVA cuenta como acreditable en el resumen.',
+    examples: [
+      { label: 'Actívalo si',  value: 'Llevas el control de tus gastos operativos y su deducibilidad dentro del ERP.' },
+      { label: 'Apágalo si',   value: 'Operación micro que solo factura mercancía y no necesita gestionar gastos aquí.' },
+    ],
+  },
 
   // ── Atributos de materias primas específicos de plástico ─────────────
   uses_resin_types: {
@@ -294,4 +302,5 @@ export const FIELD_LABELS = {
   block_revert_if_order_fulfilled: 'Bloquear si la orden ya cerró',
   block_revert_if_period_closed:   'Bloquear si el periodo contable cerró',
   require_revert_dual_approval:    'Requerir doble aprobación',
+  expenses_enabled:                'Módulo de Gastos',
 }
