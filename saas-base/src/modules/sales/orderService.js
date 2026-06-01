@@ -54,7 +54,7 @@ async function listOrders({ tenantId, status, partnerId, from, to, page = 1, lim
             so.scheduled_date, so.direct_invoice, so.po_number,
             so.created_at, so.confirmed_at, so.partner_id,
             so.driver_id, so.pickup_in_warehouse,
-            bp.name AS partner_name, bp.rfc AS partner_rfc,
+            bp.name AS partner_name, bp.tax_name AS partner_tax_name, bp.rfc AS partner_rfc,
             bp.requires_po, bp.billing_notes,
             u.full_name AS created_by_name,
             udrv.full_name AS driver_name,

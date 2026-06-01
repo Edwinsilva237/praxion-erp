@@ -98,6 +98,9 @@ export default function VentasPedidos() {
   const [from, setFrom]                 = useState('')
   const [to, setTo]                     = useState('')
   const [page, setPage]                 = useState(1)
+  // Los entregados/cerrados arrancan COLAPSADOS para no abrumar — el foco son los
+  // pendientes. El usuario los muestra con el toggle de la sección.
+  const [showDone, setShowDone]         = useState(false)
 
   // Modal y panel
   const [showForm, setShowForm]         = useState(false)
@@ -126,6 +129,7 @@ export default function VentasPedidos() {
     return list.filter(o =>
       (o.order_number || '').toLowerCase().includes(q) ||
       (o.partner_name || '').toLowerCase().includes(q) ||
+      (o.partner_tax_name || '').toLowerCase().includes(q) ||
       (o.partner_rfc  || '').toLowerCase().includes(q)
     )
   }, [data, search])
@@ -147,6 +151,9 @@ export default function VentasPedidos() {
     })
     return { pendingOrders: pending, doneOrders: done }
   }, [orders])
+
+  // Si no hay pendientes, mostramos los entregados de una (si no, se vería vacío).
+  const showDoneEffective = showDone || pendingOrders.length === 0
 
   const total = data?.total || 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
@@ -259,67 +266,40 @@ export default function VentasPedidos() {
             <div className="md:hidden flex flex-col gap-3">
               {pendingOrders.length > 0 && (
                 <div className="flex flex-col gap-2">
-                  <p className="text-xs font-bold text-brand-300 uppercase tracking-wider px-1">
-                    ⏳ Pendientes de entrega · {pendingOrders.length}
-                  </p>
-                  {pendingOrders.map(o => {
-                    const urgency = getDeliveryUrgency(o.scheduled_date)
-                    return (
-                      <button key={o.id} type="button" onClick={() => setSelectedId(o.id)}
-                        className={clsx('w-full text-left border rounded-xl p-3 transition-colors',
-                          selectedId === o.id ? 'border-brand-500 bg-brand-500/10'
-                            : 'border-line-subtle bg-surface-primary hover:bg-surface-elevated/40')}>
-                        <div className="flex items-start justify-between gap-2">
-                          <span className="font-mono font-semibold text-brand-300">{o.order_number}</span>
-                          <Badge status={o.status} />
-                        </div>
-                        <p className="mt-1 font-medium text-ink-primary truncate">{o.partner_name}</p>
-                        <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-                          {o.pickup_in_warehouse && (
-                            <span className="text-[10px] font-bold bg-amber-200 text-status-warning px-1.5 py-0.5 rounded-full">🏪 Recoge</span>
-                          )}
-                          {!o.pickup_in_warehouse && o.driver_name && (
-                            <span className="text-[10px] font-bold bg-purple-200 text-purple-300 px-1.5 py-0.5 rounded-full">🚚 {o.driver_name.split(' ')[0]}</span>
-                          )}
-                        </div>
-                        <div className="mt-1.5 flex items-end justify-between gap-2">
-                          <span className={clsx('text-xs font-semibold',
-                            urgency === 'overdue' ? 'text-status-danger'
-                            : urgency === 'today' ? 'text-status-warning'
-                            : urgency === 'future' ? 'text-status-success' : 'text-ink-muted')}>
-                            Entrega: {fmtDateOnly(o.scheduled_date)}
-                          </span>
-                          <span className="font-mono tabular-nums font-medium">{fmtMXN(o.subtotal_mxn ?? o.total_mxn, o.currency)}</span>
-                        </div>
-                        {(o.status === 'in_delivery' || o.status === 'partially_delivered') && (
-                          <div className="mt-1.5">
-                            <DeliveryProgress delivered={o.delivered_total_mxn} remisioned={o.remisioned_total_mxn} total={o.total_mxn} />
-                          </div>
-                        )}
-                      </button>
-                    )
-                  })}
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-brand-500/10 border border-brand-500/30">
+                    <span className="text-sm font-bold text-brand-300 uppercase tracking-wider">⏳ Por entregar · {pendingOrders.length}</span>
+                  </div>
+                  {pendingOrders.map(o => (
+                    <button key={o.id} type="button" onClick={() => setSelectedId(o.id)}
+                      className={clsx('w-full text-left border rounded-xl px-3 py-2.5 transition-colors',
+                        selectedId === o.id ? 'border-brand-500 bg-brand-500/10'
+                          : 'border-line-subtle bg-surface-primary hover:bg-surface-elevated/40')}>
+                      <span className="font-mono font-semibold text-brand-300">{o.order_number}</span>
+                      <p className="mt-0.5 font-medium text-ink-primary truncate">{o.partner_name}</p>
+                      {o.partner_tax_name && o.partner_tax_name !== o.partner_name && (
+                        <p className="text-[11px] text-ink-muted truncate">{o.partner_tax_name}</p>
+                      )}
+                    </button>
+                  ))}
                 </div>
               )}
               {doneOrders.length > 0 && (
                 <div className="flex flex-col gap-2">
-                  <p className="text-xs font-bold text-ink-muted uppercase tracking-wider px-1">
-                    ✓ Entregados y cerrados · {doneOrders.length}
-                  </p>
-                  {doneOrders.map(o => (
+                  <button type="button" onClick={() => setShowDone(s => !s)}
+                    className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-surface-elevated/50 hover:bg-surface-elevated/70">
+                    <span className="text-xs font-bold text-ink-muted uppercase tracking-wider">✓ Entregados y cerrados · {doneOrders.length}</span>
+                    <span className="text-[11px] font-semibold text-ink-muted">{showDoneEffective ? '▾ ocultar' : '▸ mostrar'}</span>
+                  </button>
+                  {showDoneEffective && doneOrders.map(o => (
                     <button key={o.id} type="button" onClick={() => setSelectedId(o.id)}
-                      className={clsx('w-full text-left border rounded-xl p-3 transition-colors',
+                      className={clsx('w-full text-left border rounded-xl px-3 py-2.5 transition-colors',
                         selectedId === o.id ? 'border-brand-500 bg-brand-500/10'
                           : 'border-line-subtle bg-surface-elevated/30 opacity-60 hover:opacity-100')}>
-                      <div className="flex items-start justify-between gap-2">
-                        <span className="font-mono font-semibold text-brand-300">{o.order_number}</span>
-                        <Badge status={o.status} />
-                      </div>
-                      <p className="mt-1 font-medium text-ink-primary truncate">{o.partner_name}</p>
-                      <div className="mt-1.5 flex items-end justify-between gap-2 text-xs">
-                        <span className="text-ink-muted">Entrega: {fmtDateOnly(o.scheduled_date)}</span>
-                        <span className="font-mono tabular-nums font-medium text-ink-secondary">{fmtMXN(o.subtotal_mxn ?? o.total_mxn, o.currency)}</span>
-                      </div>
+                      <span className="font-mono font-semibold text-brand-300">{o.order_number}</span>
+                      <p className="mt-0.5 font-medium text-ink-primary truncate">{o.partner_name}</p>
+                      {o.partner_tax_name && o.partner_tax_name !== o.partner_name && (
+                        <p className="text-[11px] text-ink-muted truncate">{o.partner_tax_name}</p>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -342,9 +322,9 @@ export default function VentasPedidos() {
               <tbody>
                 {/* ── Sección: Pendientes de entrega ──────────────────── */}
                 {pendingOrders.length > 0 && (
-                  <tr className="bg-surface-elevated/60">
-                    <td colSpan={6} className="px-4 py-2 text-xs font-bold text-brand-300 uppercase tracking-wider">
-                      ⏳ Pendientes de entrega · {pendingOrders.length}
+                  <tr className="bg-brand-500/10">
+                    <td colSpan={6} className="px-4 py-2.5 text-sm font-bold text-brand-300 uppercase tracking-wider">
+                      ⏳ Por entregar · {pendingOrders.length}
                       <span className="ml-3 text-[10px] font-medium text-ink-muted normal-case tracking-normal">
                         🔴 atrasado · 🟡 entrega hoy · 🟢 entrega futura
                       </span>
@@ -378,6 +358,9 @@ export default function VentasPedidos() {
                             </span>
                           )}
                         </div>
+                        {o.partner_tax_name && o.partner_tax_name !== o.partner_name && (
+                          <p className="text-[11px] text-ink-secondary">{o.partner_tax_name}</p>
+                        )}
                         {o.partner_rfc && <p className="text-[10px] text-ink-muted font-mono">{o.partner_rfc}</p>}
                       </td>
                       <td className="text-xs text-ink-secondary">{fmtDate(o.created_at)}</td>
@@ -413,13 +396,18 @@ export default function VentasPedidos() {
 
                 {/* ── Sección: Entregados / cerrados ───────────────────── */}
                 {doneOrders.length > 0 && (
-                  <tr className="bg-surface-elevated/60">
+                  <tr className="bg-surface-elevated/60 cursor-pointer hover:bg-surface-elevated/80"
+                    onClick={() => setShowDone(s => !s)}>
                     <td colSpan={6} className="px-4 py-2 text-xs font-bold text-ink-muted uppercase tracking-wider">
+                      <span className="inline-block w-4">{showDoneEffective ? '▾' : '▸'}</span>
                       ✓ Entregados, facturados y cerrados · {doneOrders.length}
+                      <span className="ml-2 text-[10px] font-medium text-ink-muted normal-case tracking-normal">
+                        ({showDoneEffective ? 'clic para ocultar' : 'clic para mostrar'})
+                      </span>
                     </td>
                   </tr>
                 )}
-                {doneOrders.map(o => {
+                {showDoneEffective && doneOrders.map(o => {
                   const late = isOrderLate(o)
                   return (
                     <tr key={o.id}
@@ -433,6 +421,9 @@ export default function VentasPedidos() {
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <p className="font-medium text-ink-primary">{o.partner_name}</p>
                         </div>
+                        {o.partner_tax_name && o.partner_tax_name !== o.partner_name && (
+                          <p className="text-[11px] text-ink-secondary">{o.partner_tax_name}</p>
+                        )}
                         {o.partner_rfc && <p className="text-[10px] text-ink-muted font-mono">{o.partner_rfc}</p>}
                       </td>
                       <td className="text-xs text-ink-secondary">{fmtDate(o.created_at)}</td>

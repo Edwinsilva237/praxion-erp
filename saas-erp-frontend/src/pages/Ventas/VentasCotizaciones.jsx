@@ -79,6 +79,7 @@ export default function VentasCotizaciones() {
     return list.filter(o =>
       (o.quotation_number || '').toLowerCase().includes(q) ||
       (o.partner_name     || '').toLowerCase().includes(q) ||
+      (o.partner_tax_name || '').toLowerCase().includes(q) ||
       (o.partner_rfc      || '').toLowerCase().includes(q)
     )
   }, [data, search])
@@ -243,6 +244,9 @@ export default function VentasCotizaciones() {
                       <td className="font-mono font-semibold text-brand-300">{q.quotation_number}</td>
                       <td>
                         <p className="font-medium text-ink-primary">{q.partner_name}</p>
+                        {q.partner_tax_name && q.partner_tax_name !== q.partner_name && (
+                          <p className="text-[11px] text-ink-secondary">{q.partner_tax_name}</p>
+                        )}
                         {q.partner_rfc && <p className="text-[10px] text-ink-muted font-mono">{q.partner_rfc}</p>}
                       </td>
                       <td className="text-xs text-ink-secondary">{fmtDate(q.created_at)}</td>
@@ -279,6 +283,9 @@ export default function VentasCotizaciones() {
                     <td className="font-mono font-semibold text-brand-300">{q.quotation_number}</td>
                     <td>
                       <p className="font-medium text-ink-primary">{q.partner_name}</p>
+                      {q.partner_tax_name && q.partner_tax_name !== q.partner_name && (
+                        <p className="text-[11px] text-ink-secondary">{q.partner_tax_name}</p>
+                      )}
                       {q.partner_rfc && <p className="text-[10px] text-ink-muted font-mono">{q.partner_rfc}</p>}
                     </td>
                     <td className="text-xs text-ink-secondary">{fmtDate(q.created_at)}</td>

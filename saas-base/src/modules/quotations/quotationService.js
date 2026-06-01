@@ -83,7 +83,7 @@ async function listQuotations({ tenantId, status, partnerId, from, to, page = 1,
            q.subtotal_mxn, q.tax_mxn, q.total_mxn,
            q.valid_until, q.sent_at, q.converted_at, q.converted_order_id,
            q.rejected_at, q.cancelled_at, q.expired_at, q.created_at,
-           bp.name AS partner_name, bp.rfc AS partner_rfc,
+           bp.name AS partner_name, bp.tax_name AS partner_tax_name, bp.rfc AS partner_rfc,
            so.order_number AS converted_order_number
       FROM quotations q
       JOIN business_partners bp ON bp.id = q.partner_id

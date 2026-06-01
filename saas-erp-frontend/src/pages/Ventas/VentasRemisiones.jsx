@@ -75,6 +75,7 @@ export default function VentasRemisiones() {
     return list.filter(n =>
       (n.document_number || '').toLowerCase().includes(q) ||
       (n.partner_name    || '').toLowerCase().includes(q) ||
+      (n.partner_tax_name || '').toLowerCase().includes(q) ||
       (n.order_number    || '').toLowerCase().includes(q) ||
       (n.receiver_name   || '').toLowerCase().includes(q)
     )
@@ -198,6 +199,48 @@ export default function VentasRemisiones() {
           </div>
         ) : (
           <>
+            {/* ── Móvil: tarjetas (folio + cliente + razón social). Detalle al tocar. ── */}
+            <div className="md:hidden flex flex-col gap-3">
+              {pendingNotes.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-brand-500/10 border border-brand-500/30">
+                    <span className="text-sm font-bold text-brand-300 uppercase tracking-wider">⏳ Por entregar · {pendingNotes.length}</span>
+                  </div>
+                  {pendingNotes.map(n => (
+                    <button key={n.id} type="button" onClick={() => setSelectedId(n.id)}
+                      className={clsx('w-full text-left border rounded-xl px-3 py-2.5 transition-colors',
+                        selectedId === n.id ? 'border-brand-500 bg-brand-500/10'
+                          : 'border-line-subtle bg-surface-primary hover:bg-surface-elevated/40')}>
+                      <span className="font-mono font-semibold text-purple-300">{n.document_number}</span>
+                      <p className="mt-0.5 font-medium text-ink-primary truncate">{n.partner_name}</p>
+                      {n.partner_tax_name && n.partner_tax_name !== n.partner_name && (
+                        <p className="text-[11px] text-ink-muted truncate">{n.partner_tax_name}</p>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {doneNotes.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <p className="text-xs font-bold text-ink-muted uppercase tracking-wider px-1">✓ Entregadas y cerradas · {doneNotes.length}</p>
+                  {doneNotes.map(n => (
+                    <button key={n.id} type="button" onClick={() => setSelectedId(n.id)}
+                      className={clsx('w-full text-left border rounded-xl px-3 py-2.5 transition-colors opacity-60',
+                        selectedId === n.id ? 'border-brand-500 bg-brand-500/10 opacity-100'
+                          : 'border-line-subtle bg-surface-elevated/30 hover:opacity-100')}>
+                      <span className="font-mono font-semibold text-purple-300">{n.document_number}</span>
+                      <p className="mt-0.5 font-medium text-ink-primary truncate">{n.partner_name}</p>
+                      {n.partner_tax_name && n.partner_tax_name !== n.partner_name && (
+                        <p className="text-[11px] text-ink-muted truncate">{n.partner_tax_name}</p>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* ── Escritorio: tabla completa ── */}
+            <div className="table-wrap hidden md:block">
             <table className="table">
               <thead>
                 <tr>
@@ -232,7 +275,12 @@ export default function VentasRemisiones() {
                         selectedId === n.id ? 'bg-brand-500/15' : URGENCY_ROW_CLASS[urgency]
                       )}>
                       <td className="font-mono font-semibold text-purple-300">{n.document_number}</td>
-                      <td className="font-medium text-ink-primary">{n.partner_name}</td>
+                      <td>
+                        <p className="font-medium text-ink-primary">{n.partner_name}</p>
+                        {n.partner_tax_name && n.partner_tax_name !== n.partner_name && (
+                          <p className="text-[11px] text-ink-secondary">{n.partner_tax_name}</p>
+                        )}
+                      </td>
                       <td className="font-mono text-xs text-ink-muted">{n.order_number || '—'}</td>
                       <td className={clsx('text-xs font-semibold',
                         urgency === 'overdue' ? 'text-status-danger' :
@@ -272,7 +320,12 @@ export default function VentasRemisiones() {
                       selectedId === n.id ? 'bg-brand-500/15 opacity-100' : 'hover:bg-surface-elevated/40 hover:opacity-100'
                     )}>
                     <td className="font-mono font-semibold text-purple-300">{n.document_number}</td>
-                    <td className="font-medium text-ink-primary">{n.partner_name}</td>
+                    <td>
+                      <p className="font-medium text-ink-primary">{n.partner_name}</p>
+                      {n.partner_tax_name && n.partner_tax_name !== n.partner_name && (
+                        <p className="text-[11px] text-ink-secondary">{n.partner_tax_name}</p>
+                      )}
+                    </td>
                     <td className="font-mono text-xs text-ink-muted">{n.order_number || '—'}</td>
                     <td className="text-xs text-ink-secondary">{fmtDateOnly(n.issue_date)}</td>
                     <td className="text-xs text-ink-secondary">{n.receiver_name || '—'}</td>
@@ -291,6 +344,7 @@ export default function VentasRemisiones() {
                 ))}
               </tbody>
             </table>
+            </div>
 
             {totalPages > 1 && (
               <div className="border-t border-line-subtle px-4 py-3 flex items-center justify-between">
