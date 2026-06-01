@@ -56,7 +56,19 @@ router.post('/invite', checkPermission('users', 'create'), async (req, res, next
       userAgent:     req.get('user-agent'),
     })
 
-    res.status(201).json({ user: result.user, message: 'Invitation sent by email.' })
+    res.status(201).json({
+      user:      result.user,
+      emailSent: result.emailSent,
+      message:   result.emailSent
+        ? 'Invitación enviada por correo.'
+        : 'Usuario creado, pero el correo de invitación no pudo enviarse. Comparte las credenciales manualmente.',
+      // Solo si el correo NO salió, devolvemos las credenciales para que el admin
+      // se las pase al invitado a mano (si no, quedaría sin poder entrar).
+      ...(result.emailSent ? {} : {
+        emailError:  result.emailError,
+        credentials: { email: result.user.email, tempPassword: result.tempPassword },
+      }),
+    })
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'A user with that email already exists.' })
     next(err)

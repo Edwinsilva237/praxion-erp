@@ -73,6 +73,15 @@ const config = {
   // OJO: NO es la URL del backend (Express) — esa es PORT + bind local.
   appUrl: optional('APP_URL', 'http://localhost:5173'),
 
+  // URL pública del BACKEND (Express) — para links que apuntan al propio API,
+  // como la descarga de la app Android en correos de invitación/bienvenida.
+  apiPublicUrl: optional('API_PUBLIC_URL', 'https://praxion-api.onrender.com'),
+
+  // App Android: cuando la app esté en Play Store, setear ANDROID_APP_URL a su
+  // liga y el endpoint /app/android redirige ahí (los correos viejos también).
+  // Vacío => /app/android sirve el APK auto-hospedado en R2.
+  androidAppUrl: optional('ANDROID_APP_URL', ''),
+
   sentry: {
     // Si vacío, Sentry queda en no-op (seguro por defecto en dev/test).
     dsn:               optional('SENTRY_DSN', ''),

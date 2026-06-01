@@ -78,9 +78,26 @@ function invitationEmail({ fullName, email, tempPassword, tenantName, invitedByN
       </div>
       <p>Te recomendamos cambiar tu contraseña después de iniciar sesión.</p>
       <a href="${loginUrl}" class="btn">Iniciar sesión</a>
+      ${androidDownloadBlock(tenantName)}
       <p style="font-size:13px;color:#6b7280;">Si no esperabas esta invitación, puedes ignorar este correo.</p>
     `,
   })
+}
+
+/**
+ * Bloque "Descargar app Android" para los correos de onboarding. Apunta a una
+ * URL ESTABLE del backend (/app/android) que sirve el APK auto-hospedado hoy y
+ * redirige a Play Store cuando ANDROID_APP_URL esté configurada — sin reenviar
+ * correos ni cambiar la plantilla.
+ */
+function androidDownloadBlock(tenantName) {
+  const androidUrl = `${config.apiPublicUrl}/app/android`
+  return `
+      <div style="margin:8px 0 24px;padding:16px 20px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;">
+        <p style="margin:0 0 6px;font-size:14px;color:#111827;"><strong>📱 ¿Operas desde el celular?</strong></p>
+        <p style="margin:0 0 12px;font-size:13px;color:#6b7280;">Instala la app Android de ${tenantName} para vender, surtir, producir y comprar desde tu teléfono — con escáner de código de barras.</p>
+        <a href="${androidUrl}" style="display:inline-block;background:#111827;color:#ffffff !important;text-decoration:none;padding:10px 22px;border-radius:8px;font-weight:600;font-size:14px;">⬇ Descargar app Android</a>
+      </div>`
 }
 
 /**
@@ -110,6 +127,7 @@ function welcomeEmail({ fullName, email, tenantName, tenantSlug, tempPassword = 
         ? `<p>Por seguridad, te recomendamos cambiar tu contraseña al entrar por primera vez (Mi perfil → Cambiar contraseña).</p>`
         : `<p>Ya puedes iniciar sesión y comenzar a configurar tu espacio de trabajo.</p>`}
       <a href="${loginUrl}" class="btn">Ir al panel</a>
+      ${androidDownloadBlock(tenantName)}
     `,
   })
 }

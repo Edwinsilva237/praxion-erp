@@ -18,6 +18,9 @@ function InvitarModal({ roles, onClose, onSaved }) {
   const [fullName, setFullName] = useState('')
   const [roleIds, setRoleIds]   = useState([])
   const [error, setError]       = useState(null)
+  // Si el correo de invitación no se pudo enviar, guardamos la respuesta para
+  // mostrar las credenciales y que el admin las comparta a mano.
+  const [failResult, setFailResult] = useState(null)
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -30,14 +33,66 @@ function InvitarModal({ roles, onClose, onSaved }) {
     },
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ['users'] })
-      onSaved?.(r)
-      onClose()
+      if (r?.emailSent === false) {
+        // El usuario se creó pero el correo no salió → mostramos credenciales.
+        setFailResult(r)
+      } else {
+        onSaved?.(r)
+        onClose()
+      }
     },
     onError: (e) => setError(e.response?.data?.error || e.message || 'Error al invitar'),
   })
 
   function toggleRole(id) {
     setRoleIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
+
+  // El correo no se pudo enviar: mostramos las credenciales para compartir a mano.
+  if (failResult) {
+    const c = failResult.credentials || {}
+    return createPortal(
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
+        <div className="card w-full max-w-md p-6 flex flex-col gap-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-ink-primary">Usuario creado ✓</h2>
+            <button type="button" onClick={onClose} className="btn-ghost btn-icon text-ink-muted">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <div className="bg-status-warning/10 border border-status-warning/40 rounded-lg px-3 py-2.5 text-sm text-status-warning">
+            ⚠ El correo de invitación <strong>no se pudo enviar</strong>. Comparte estas credenciales
+            con el usuario para que pueda entrar:
+          </div>
+          <div className="bg-surface-elevated/60 border border-line-subtle rounded-lg p-4 flex flex-col gap-2 text-sm">
+            <div className="flex justify-between gap-3">
+              <span className="text-ink-muted">Email</span>
+              <code className="text-ink-primary font-mono break-all">{c.email}</code>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-ink-muted">Contraseña temporal</span>
+              <code className="text-ink-primary font-mono break-all">{c.tempPassword}</code>
+            </div>
+          </div>
+          <button type="button"
+            onClick={() => navigator.clipboard?.writeText(`Email: ${c.email}\nContraseña temporal: ${c.tempPassword}`)}
+            className="btn-secondary btn-sm self-start">Copiar credenciales</button>
+          <p className="text-xs text-ink-muted">
+            El usuario debe cambiar su contraseña al iniciar sesión. Revisa la configuración de correo
+            (SMTP) para que las próximas invitaciones se envíen automáticamente.
+          </p>
+          {failResult.emailError && (
+            <p className="text-[11px] text-ink-muted">Detalle técnico: {failResult.emailError}</p>
+          )}
+          <button type="button" onClick={onClose} className="btn-primary w-full justify-center">
+            Entendido, cerrar
+          </button>
+        </div>
+      </div>,
+      document.body
+    )
   }
 
   return createPortal(

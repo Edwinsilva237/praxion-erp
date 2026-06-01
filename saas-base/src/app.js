@@ -82,6 +82,24 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', ts: new Date().toISOString(), sentry: sentryReady() })
 })
 
+// Descarga pública de la app Android (sin auth) — URL ESTABLE para los correos
+// de invitación/bienvenida. Si ANDROID_APP_URL está configurada (la app ya está
+// en Play Store) redirige ahí, así los correos viejos también llevan a la tienda.
+// Si no, sirve el APK auto-hospedado en R2 (key public/praxion-app.apk). Swap a
+// Play Store = setear la env var, sin tocar código ni reenviar invitaciones.
+app.get('/app/android', async (_req, res, next) => {
+  try {
+    if (config.androidAppUrl) return res.redirect(302, config.androidAppUrl)
+    const storage = require('./utils/storage')
+    await storage.serve(res, 'public/praxion-app.apk', {
+      filename: 'Praxion.apk',
+      mimeType: 'application/vnd.android.package-archive',
+      disposition: 'attachment',
+      proxy: true,
+    })
+  } catch (err) { next(err) }
+})
+
 // Rutas
 app.use('/api/auth',  require('./modules/auth/routes'))
 app.use('/api/memberships', require('./modules/memberships/routes'))

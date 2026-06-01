@@ -112,7 +112,13 @@ async function inviteUser({ tenantId, tenantName, email, fullName, roleIds = [],
   )
   const brandColor = trows[0]?.brand_color_primary || null
 
-  // Enviar email de invitación
+  // Enviar email de invitación. Si falla (SMTP mal configurado, rechazo del
+  // proveedor, etc.) NO tiramos —el usuario ya fue creado— pero SÍ lo reportamos
+  // al caller (emailSent=false) para que el admin lo sepa y comparta las
+  // credenciales a mano. Antes se tragaba en silencio y el invitado quedaba sin
+  // poder entrar sin que nadie se enterara.
+  let emailSent = true
+  let emailError = null
   try {
     await enqueueEmail({
       to:      user.email,
@@ -127,7 +133,8 @@ async function inviteUser({ tenantId, tenantName, email, fullName, roleIds = [],
       }),
     })
   } catch (err) {
-    // El email falla silenciosamente — el usuario ya fue creado
+    emailSent = false
+    emailError = err.message
     logger.warn('Invitation email failed', { userId: user.id, error: err.message })
   }
 
@@ -137,12 +144,14 @@ async function inviteUser({ tenantId, tenantName, email, fullName, roleIds = [],
     action: 'user.invited',
     resource: 'users',
     resourceId: user.id,
-    payload: { email: user.email, fullName: user.full_name },
+    payload: { email: user.email, fullName: user.full_name, emailSent },
     ipAddress,
     userAgent,
   })
 
-  return { user }
+  // tempPassword se devuelve para que el caller pueda mostrarla SOLO si el correo
+  // falló (recuperación manual). El route decide no exponerla cuando emailSent.
+  return { user, emailSent, emailError, tempPassword }
 }
 
 async function updateUser({ userId, tenantId, fullName, isActive, requesterId, ipAddress, userAgent }) {
