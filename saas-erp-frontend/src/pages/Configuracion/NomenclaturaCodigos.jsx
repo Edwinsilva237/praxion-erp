@@ -69,7 +69,7 @@ function FormatModal({ entityType, format, onClose }) {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="label">Ceros a la izquierda</label>
             <select className="select" value={padding} onChange={e => setPadding(e.target.value)}>
@@ -167,8 +167,8 @@ export default function NomenclaturaCodigos() {
         </p>
       </div>
 
-      <div className="card p-5">
-        <table className="w-full text-sm">
+      <div className="card p-5 overflow-x-auto">
+        <table className="w-full text-sm min-w-[520px]">
           <thead className="text-[10px] uppercase tracking-wide text-ink-muted">
             <tr className="border-b border-border">
               <th className="text-left py-2 px-2">Catálogo</th>

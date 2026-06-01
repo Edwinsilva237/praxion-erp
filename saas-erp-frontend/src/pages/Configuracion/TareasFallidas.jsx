@@ -52,20 +52,21 @@ export default function TareasFallidas() {
         </p>
       </div>
 
-      <div className="flex flex-wrap gap-3 items-end">
-        <label className="flex flex-col text-sm">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 sm:items-end">
+        <label className="flex flex-col text-sm flex-1 min-w-[10rem]">
           <span className="text-ink-secondary mb-1">Tipo de tarea</span>
-          <select className="select" value={queue} onChange={e => setQueue(e.target.value)}>
+          <select className="select w-full" value={queue} onChange={e => setQueue(e.target.value)}>
             {QUEUES.map(q => <option key={q.value} value={q.value}>{q.label}</option>)}
           </select>
         </label>
-        <label className="flex flex-col text-sm">
+        <label className="flex flex-col text-sm flex-1 min-w-[10rem]">
           <span className="text-ink-secondary mb-1">Estado</span>
-          <select className="select" value={status} onChange={e => setStatus(e.target.value)}>
+          <select className="select w-full" value={status} onChange={e => setStatus(e.target.value)}>
             {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
         </label>
-        <button className="btn-secondary" onClick={() => refetch()}>Recargar</button>
+        <button className="btn-secondary w-full sm:w-auto shrink-0 whitespace-nowrap"
+          onClick={() => refetch()}>Recargar</button>
       </div>
 
       {msg   && <div className="alert-success text-sm">{msg}</div>}
@@ -81,7 +82,7 @@ export default function TareasFallidas() {
               : `No hay tareas ${STATUSES.find(s => s.value === status)?.label.toLowerCase()}.`}
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[640px]">
             <thead className="bg-surface-elevated/40 text-left text-xs font-medium uppercase text-ink-secondary">
               <tr>
                 <th className="px-3 py-2">ID</th>

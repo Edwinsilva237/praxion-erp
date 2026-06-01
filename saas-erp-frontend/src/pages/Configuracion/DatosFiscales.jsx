@@ -367,17 +367,17 @@ export default function DatosFiscales() {
 
       {/* Preferencia: retenciones en todas las modalidades de factura */}
       <Can do="process_config:update">
-        <div className="card p-5 flex items-start justify-between gap-4">
+        <div className="card p-5 flex flex-col gap-3">
           <div>
             <p className="text-sm font-semibold text-ink-primary">Retenciones en todas las facturas</p>
-            <p className="text-xs text-ink-muted mt-1 max-w-xl leading-relaxed">
+            <p className="text-xs text-ink-muted mt-1 leading-relaxed">
               Si lo activas, el editor de <strong>retenciones (ISR / IVA)</strong> aparece también en la factura
               <strong> directa</strong> y <strong>desde remisión</strong>, no solo en la ocasional. Útil para
               servicios (honorarios, fletes, arrendamiento). La venta de bienes normalmente no lleva retención.
             </p>
           </div>
-          <label className="flex items-center gap-2 text-sm shrink-0 cursor-pointer">
-            <input type="checkbox" className="w-5 h-5 accent-brand-600"
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" className="w-5 h-5 accent-brand-600 shrink-0"
               checked={!!procCfg?.enable_retentions}
               disabled={retentionsMutation.isPending}
               onChange={e => retentionsMutation.mutate(e.target.checked)} />
@@ -415,7 +415,7 @@ export default function DatosFiscales() {
           />
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
               <div>
                 <p className="text-[10px] text-ink-muted uppercase tracking-wide">Razón social</p>
                 <p className="font-medium text-ink-primary">{profile.tax_name}</p>
@@ -443,7 +443,7 @@ export default function DatosFiscales() {
       {/* Card: integración Facturapi (estado interno) */}
       <div className="card p-5">
         <h2 className="text-base font-semibold text-ink-primary mb-3">⚙ Estado del servicio de timbrado</h2>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className={clsx('rounded-lg border p-3',
             profile.facturapi_organization_id
               ? 'border-emerald-200 bg-emerald-50'

@@ -107,8 +107,8 @@ function CaptureSchemaEditor({ schema, onChange }) {
 
       {err && <p className="text-xs text-status-danger">{err}</p>}
 
-      <div className="grid grid-cols-2 gap-2 border-t border-line-subtle pt-3">
-        <div className="col-span-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 border-t border-line-subtle pt-3">
+        <div className="sm:col-span-2">
           <label className="label">Nombre del atributo</label>
           <input className="input text-sm" placeholder="Ej: Color, Sabor, Talla"
             value={draft.label}
@@ -129,21 +129,21 @@ function CaptureSchemaEditor({ schema, onChange }) {
             onChange={e => setDraft(d => ({ ...d, unit_code: e.target.value }))} />
         </div>
         {(draft.type === 'select' || draft.type === 'multiselect') && (
-          <div className="col-span-2">
+          <div className="sm:col-span-2">
             <label className="label">Opciones (separadas por coma)</label>
             <input className="input text-sm" placeholder="Rojo, Verde, Azul"
               value={draft.options}
               onChange={e => setDraft(d => ({ ...d, options: e.target.value }))} />
           </div>
         )}
-        <label className="col-span-2 flex items-center gap-2 text-sm cursor-pointer">
+        <label className="sm:col-span-2 flex items-center gap-2 text-sm cursor-pointer">
           <input type="checkbox" className="w-4 h-4 accent-brand-600"
             checked={draft.required}
             onChange={e => setDraft(d => ({ ...d, required: e.target.checked }))} />
           <span className="text-ink-secondary">Obligatorio</span>
         </label>
         <button type="button" onClick={add}
-          className="btn-secondary btn-sm col-span-2">
+          className="btn-secondary btn-sm sm:col-span-2">
           + Agregar atributo
         </button>
       </div>
@@ -188,7 +188,7 @@ function ProductKindModal({ item, onClose, onSaved }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-bg-primary/80 backdrop-blur-sm">
-      <div className="bg-surface-primary rounded-2xl shadow-xl w-full max-w-xl border border-line-subtle max-h-[90vh] overflow-y-auto">
+      <div className="card w-full max-w-xl p-0 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-5 py-4 border-b border-line-subtle">
           <h3 className="text-sm font-semibold text-ink-primary">
             {isNew ? 'Nuevo tipo de producto' : `Editar · ${item.name}`}
@@ -201,7 +201,7 @@ function ProductKindModal({ item, onClose, onSaved }) {
         </div>
         <div className="p-5 flex flex-col gap-4">
           {error && <div className="bg-status-danger/10 border border-status-danger/40 rounded-lg px-3 py-2 text-sm text-status-danger">{error}</div>}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label flex items-center gap-1">
                 Código

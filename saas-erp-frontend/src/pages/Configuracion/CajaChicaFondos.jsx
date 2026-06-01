@@ -19,15 +19,16 @@ export default function CajaChicaFondos() {
 
   return (
     <div className="page-enter max-w-5xl mx-auto py-6 px-4 flex flex-col gap-5">
-      <div className="flex items-start justify-between gap-4">
+      <div className="page-header">
         <div>
-          <h1 className="text-xl font-semibold text-ink-primary">Cajas chicas</h1>
-          <p className="text-sm text-ink-muted mt-1">
+          <h1 className="page-title">Cajas chicas</h1>
+          <p className="page-subtitle">
             Configura una o varias cajas (por sucursal, departamento o responsable).
             Cada caja tiene saldo independiente.
           </p>
         </div>
-        <button onClick={() => setEditing('new')} className="btn-primary">+ Nueva caja</button>
+        <button onClick={() => setEditing('new')}
+          className="btn-primary w-full sm:w-auto shrink-0 whitespace-nowrap">+ Nueva caja</button>
       </div>
 
       <div className="card overflow-hidden">

@@ -201,7 +201,7 @@ function RolEditorModal({ role, onClose }) {
           </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="label">Nombre <span className="text-status-danger">*</span></label>
             <input className="input" value={name} onChange={e => setName(e.target.value)}

@@ -42,7 +42,7 @@ function UnitModal({ item, onClose, onSaved }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-bg-primary/80 backdrop-blur-sm">
-      <div className="bg-surface-primary rounded-2xl shadow-xl w-full max-w-md border border-line-subtle">
+      <div className="card w-full max-w-md p-0 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-5 py-4 border-b border-line-subtle">
           <h3 className="text-sm font-semibold text-ink-primary">
             {isNew ? 'Nueva unidad' : `Editar · ${item.name}`}
@@ -57,7 +57,7 @@ function UnitModal({ item, onClose, onSaved }) {
           {error && (
             <div className="bg-status-danger/10 border border-status-danger/40 rounded-lg px-3 py-2 text-sm text-status-danger">{error}</div>
           )}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label flex items-center gap-1">
                 Código
@@ -80,7 +80,7 @@ function UnitModal({ item, onClose, onSaved }) {
               {UNIT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">Decimales</label>
               <input type="number" min={0} max={6} className="input" value={form.decimals} onChange={e => set('decimals', parseInt(e.target.value) || 0)} />

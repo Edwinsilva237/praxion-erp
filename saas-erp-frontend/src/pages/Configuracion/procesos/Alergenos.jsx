@@ -30,7 +30,7 @@ function AllergenModal({ item, onClose, onSaved }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-bg-primary/80 backdrop-blur-sm">
-      <div className="bg-surface-primary rounded-2xl shadow-xl w-full max-w-md border border-line-subtle">
+      <div className="card w-full max-w-md p-0">
         <div className="flex items-center justify-between px-5 py-4 border-b border-line-subtle">
           <h3 className="text-sm font-semibold text-ink-primary">{isNew ? 'Nuevo alérgeno' : `Editar · ${item.name}`}</h3>
           <button onClick={onClose} className="text-ink-muted hover:text-ink-primary">
@@ -41,7 +41,7 @@ function AllergenModal({ item, onClose, onSaved }) {
         </div>
         <div className="p-5 flex flex-col gap-4">
           {error && <div className="bg-status-danger/10 border border-status-danger/40 rounded-lg px-3 py-2 text-sm text-status-danger">{error}</div>}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label flex items-center gap-1">
                 Código

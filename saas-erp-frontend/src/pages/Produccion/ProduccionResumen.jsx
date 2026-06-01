@@ -256,28 +256,29 @@ export default function ProduccionResumen() {
             Operador: {shift.operatorName} · Duración: {durationStr}
           </p>
         </div>
-        <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:6 }}>
-          <span style={{
-            fontSize:11, fontWeight:500, padding:'3px 10px', borderRadius:20,
-            background: STATUS_BG[shift.status] || '#F1EFE8',
-            color: STATUS_COLOR[shift.status] || '#5F5E5A',
-          }}>
-            {STATUS_LABEL[shift.status] || shift.status}
-          </span>
-          <div style={{ display:'flex', gap:6 }}>
-            <button onClick={() => handlePdf(false)} disabled={genPdf} className="btn-secondary btn-sm">
-              {genPdf ? '…' : 'PDF'}
-            </button>
-            <button onClick={() => handlePdf(true)} disabled={genPdf} className="btn-secondary btn-sm">
-              Imprimir
-            </button>
-          </div>
-          {shift.status === 'reviewed' && can('production', 'revert_validation') && (
-            <button onClick={() => setShowRevert(true)} className="btn-secondary btn-sm">
-              ⚠ Revertir validación
-            </button>
-          )}
-        </div>
+        <span style={{
+          flexShrink:0, whiteSpace:'nowrap',
+          fontSize:11, fontWeight:500, padding:'3px 10px', borderRadius:20,
+          background: STATUS_BG[shift.status] || '#F1EFE8',
+          color: STATUS_COLOR[shift.status] || '#5F5E5A',
+        }}>
+          {STATUS_LABEL[shift.status] || shift.status}
+        </span>
+      </div>
+
+      {/* Barra de acciones en su propia fila — evita que se amontonen en móvil */}
+      <div className="flex flex-wrap gap-2 mb-5">
+        <button onClick={() => handlePdf(false)} disabled={genPdf} className="btn-secondary btn-sm">
+          {genPdf ? '…' : 'PDF'}
+        </button>
+        <button onClick={() => handlePdf(true)} disabled={genPdf} className="btn-secondary btn-sm">
+          Imprimir
+        </button>
+        {shift.status === 'reviewed' && can('production', 'revert_validation') && (
+          <button onClick={() => setShowRevert(true)} className="btn-secondary btn-sm">
+            ⚠ Revertir validación
+          </button>
+        )}
       </div>
 
       {showRevert && (

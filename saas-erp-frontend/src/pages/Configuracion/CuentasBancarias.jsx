@@ -228,7 +228,7 @@ function BankAccountModal({ account, onClose, onSaved }) {
             placeholder="Operativa MXN, Nómina USD, etc." />
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="label">No. cuenta</label>
             <input className="input font-mono" value={form.accountNumber}

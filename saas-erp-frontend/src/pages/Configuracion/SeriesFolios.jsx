@@ -75,7 +75,7 @@ function SerieModal({ series, entityType, fiscalProfile, onClose }) {
           )}
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="label">Serie <span className="text-status-danger">*</span></label>
             <input className="input font-mono uppercase" value={serie}

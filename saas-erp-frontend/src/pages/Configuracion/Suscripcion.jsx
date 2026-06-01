@@ -131,23 +131,23 @@ export default function Suscripcion() {
 
       <section className="card p-5 flex flex-col gap-3">
         <h2 className="font-semibold text-ink-primary">Acciones</h2>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-col gap-2">
           <Can do="billing:manage">
-            <Link to="/configuracion/planes" className="btn-secondary">
+            <Link to="/configuracion/planes" className="btn-secondary w-full justify-center">
               Cambiar de plan
             </Link>
           </Can>
           {!isOwner && sub.stripe_customer_id && (
             <Can do="billing:manage">
               <button
-                className="btn-secondary"
+                className="btn-secondary w-full justify-center"
                 disabled={portal.isPending}
                 onClick={() => { setError(null); portal.mutate() }}>
                 {portal.isPending ? 'Abriendo portal…' : 'Gestionar tarjeta y facturas'}
               </button>
             </Can>
           )}
-          <button className="btn-secondary" onClick={() => refetch()}>
+          <button className="btn-secondary w-full justify-center" onClick={() => refetch()}>
             Actualizar estado
           </button>
         </div>

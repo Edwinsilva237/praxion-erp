@@ -168,7 +168,7 @@ export default function Almacenes() {
       {/* ── Filtros ───────────────────────────────────────────────────── */}
       <div className="flex flex-wrap gap-3 items-center">
         <select
-          className="select w-52"
+          className="select w-full sm:w-52"
           value={filterType}
           onChange={e => setFilterType(e.target.value)}
         >

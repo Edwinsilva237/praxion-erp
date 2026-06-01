@@ -44,7 +44,7 @@ function QualityGradeModal({ item, onClose, onSaved }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-bg-primary/80 backdrop-blur-sm">
-      <div className="bg-surface-primary rounded-2xl shadow-xl w-full max-w-md border border-line-subtle">
+      <div className="card w-full max-w-md p-0 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-5 py-4 border-b border-line-subtle">
           <h3 className="text-sm font-semibold text-ink-primary">
             {isNew ? 'Nuevo grado de calidad' : `Editar · ${item.name}`}
@@ -63,7 +63,7 @@ function QualityGradeModal({ item, onClose, onSaved }) {
             </div>
           )}
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="label flex items-center gap-1">
                 Nro. grado

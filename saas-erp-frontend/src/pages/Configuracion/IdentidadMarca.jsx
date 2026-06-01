@@ -162,7 +162,7 @@ export default function IdentidadMarca() {
               <p className="text-[10px] font-semibold uppercase tracking-widest text-ink-muted mb-2">
                 {preview ? 'Vista previa' : 'Logo actual'}
               </p>
-              <div className="w-40 h-40 rounded-md border border-line-subtle bg-bg-tertiary flex items-center justify-center overflow-hidden">
+              <div className="w-32 h-32 sm:w-40 sm:h-40 rounded-md border border-line-subtle bg-bg-tertiary flex items-center justify-center overflow-hidden">
                 {preview ? (
                   <img src={preview} alt="Vista previa" className="max-w-full max-h-full object-contain" />
                 ) : currentLogo ? (
@@ -187,8 +187,8 @@ export default function IdentidadMarca() {
 
               {pendingFile ? (
                 <>
-                  <div className="text-sm text-ink-secondary">
-                    Archivo: <strong className="text-ink-primary">{pendingFile.name}</strong>{' '}
+                  <div className="text-sm text-ink-secondary break-words min-w-0">
+                    Archivo: <strong className="text-ink-primary break-all">{pendingFile.name}</strong>{' '}
                     ({(pendingFile.size / 1024).toFixed(0)} KB)
                   </div>
                   <Can do="settings:update">
@@ -339,7 +339,10 @@ function InvoicePreview({ logo, name, primary, secondary }) {
   return (
     <div>
       <p className="eyebrow mb-2">VISTA PREVIA EN FACTURA</p>
-      <div className="rounded-md border border-line-subtle overflow-hidden bg-white text-gray-800">
+      {/* La preview replica el layout del PDF (12 columnas). En móvil no se
+          comprime — se permite scroll horizontal con un ancho mínimo legible. */}
+      <div className="overflow-x-auto">
+      <div className="rounded-md border border-line-subtle overflow-hidden bg-white text-gray-800 min-w-[480px]">
         {/* Banner con color primario */}
         <div className="flex items-center justify-between px-4 py-3" style={{ background: primary }}>
           <div className="flex items-center gap-3">
@@ -380,6 +383,7 @@ function InvoicePreview({ logo, name, primary, secondary }) {
             </div>
           </div>
         </div>
+      </div>
       </div>
       <p className="text-[10px] text-ink-muted mt-2">
         Vista previa del banner y los detalles. Tras Guardar, así salen los PDFs del
