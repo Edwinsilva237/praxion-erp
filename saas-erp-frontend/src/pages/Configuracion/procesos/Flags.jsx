@@ -152,6 +152,9 @@ export default function Flags() {
     mutationFn: (patch) => processConfigApi.updateConfig(patch),
     onSuccess: (updated) => {
       qc.setQueryData(['process-config'], updated)
+      // El Sidebar lee flags de módulo (ej. expenses_enabled) desde
+      // ['tenant', 'current']; invalidar para que el menú refleje el cambio sin recargar.
+      qc.invalidateQueries({ queryKey: ['tenant', 'current'] })
       setDirty(false)
       setSuccessMsg('Configuración guardada.')
       setTimeout(() => setSuccessMsg(null), 3000)
@@ -189,6 +192,14 @@ export default function Flags() {
       operation_mode:                 values.operation_mode,
       uses_resin_types:               values.uses_resin_types,
       tracks_material_origin:         values.tracks_material_origin,
+      // Reversión de validación (tarjeta "Reversión de validación")
+      allow_revert_validation:         values.allow_revert_validation,
+      revert_validation_window_hours:  values.revert_validation_window_hours,
+      block_revert_if_order_fulfilled: values.block_revert_if_order_fulfilled,
+      block_revert_if_period_closed:   values.block_revert_if_period_closed,
+      require_revert_dual_approval:    values.require_revert_dual_approval,
+      // Módulos opcionales
+      expenses_enabled:               values.expenses_enabled,
     }
     saveMut.mutate(patch)
   }

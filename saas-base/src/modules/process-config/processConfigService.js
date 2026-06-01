@@ -59,6 +59,8 @@ const ALLOWED_UPDATES = [
   'allow_quick_order',
   // Facturación: retenciones en todas las modalidades (mig 177)
   'enable_retentions',
+  // Módulos opcionales: gestión de gastos de proveedor (mig 182)
+  'expenses_enabled',
 ]
 
 // Conjuntos de valores enum válidos. Duplican los CHECK constraints en SQL,
