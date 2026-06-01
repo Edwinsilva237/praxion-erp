@@ -166,34 +166,60 @@ async function generateQuotationPDF({ tenantId, quotationId }) {
        .text('CONCEPTOS', 40, y)
 
     y += 14
-    doc.rect(40, y, W, 16).fill(azul)
-    doc.fillColor('white').fontSize(7.5).font('Helvetica-Bold')
     // Columnas: suma = 522 pts (W=532), deja ~10pt de margen derecho.
     // El gap entre "Cant." (right-align) y "Unidad" (left-align) se da con
     // width reducido en Cant para no pegarse al texto siguiente.
     const cw = { sku: 55, desc: 200, cant: 42, unit: 50, precio: 75, importe: 100 }
     const GAP = 4
-    let cx = 45
-    doc.text('SKU',        cx, y + 4, { width: cw.sku - GAP });                    cx += cw.sku
-    doc.text('Descripción',cx, y + 4, { width: cw.desc - GAP });                   cx += cw.desc
-    doc.text('Cant.',      cx, y + 4, { width: cw.cant - GAP, align: 'right' });   cx += cw.cant
-    doc.text('Unidad',     cx, y + 4, { width: cw.unit - GAP });                   cx += cw.unit
-    doc.text('P. Unitario',cx, y + 4, { width: cw.precio - GAP, align: 'right' }); cx += cw.precio
-    doc.text('Importe',    cx, y + 4, { width: cw.importe - GAP, align: 'right' })
 
-    y += 16
+    // Encabezado de la tabla; función para poder re-dibujarlo tras un salto de página.
+    function drawConceptsHeader(yPos) {
+      doc.rect(40, yPos, W, 16).fill(azul)
+      doc.fillColor('white').fontSize(7.5).font('Helvetica-Bold')
+      let hx = 45
+      doc.text('SKU',        hx, yPos + 4, { width: cw.sku - GAP });                    hx += cw.sku
+      doc.text('Descripción',hx, yPos + 4, { width: cw.desc - GAP });                   hx += cw.desc
+      doc.text('Cant.',      hx, yPos + 4, { width: cw.cant - GAP, align: 'right' });   hx += cw.cant
+      doc.text('Unidad',     hx, yPos + 4, { width: cw.unit - GAP });                   hx += cw.unit
+      doc.text('P. Unitario',hx, yPos + 4, { width: cw.precio - GAP, align: 'right' }); hx += cw.precio
+      doc.text('Importe',    hx, yPos + 4, { width: cw.importe - GAP, align: 'right' })
+      return yPos + 16
+    }
+
+    y = drawConceptsHeader(y)
+
+    // La nota de cada producto se imprime debajo de su renglón (cursiva gris),
+    // abarcando varias columnas; el alto del renglón crece para alojarla.
+    const PAGE_BOTTOM = doc.page.height - 60
+    const noteWidth = cw.desc + cw.cant + cw.unit + cw.precio - GAP
     lines.forEach((line, i) => {
-      const rowH = 20
+      const note = (line.notes || '').trim()
+      const noteText = note ? `Nota: ${note}` : ''
+      doc.fontSize(7).font('Helvetica-Oblique')
+      const noteH = noteText ? doc.heightOfString(noteText, { width: noteWidth }) : 0
+      const rowH = 20 + (noteText ? noteH + 2 : 0)
+
+      // Salto de página si el renglón (con su nota) no cabe; re-dibuja encabezado.
+      if (y + rowH > PAGE_BOTTOM) {
+        doc.addPage()
+        y = drawConceptsHeader(40)
+      }
+
       const lineSubtotal = parseFloat(line.subtotal || 0)
       doc.rect(40, y, W, rowH).fill(i % 2 === 0 ? 'white' : gris)
       doc.fillColor(negro).fontSize(7.5).font('Helvetica')
-      cx = 45
+      let cx = 45
       doc.text(line.sku || '',          cx, y + 6, { width: cw.sku - GAP });                    cx += cw.sku
       doc.text(line.product_name || '', cx, y + 6, { width: cw.desc - GAP });                   cx += cw.desc
       doc.text(parseFloat(line.quantity).toFixed(2), cx, y + 6, { width: cw.cant - GAP, align: 'right' }); cx += cw.cant
       doc.text(line.unit || '',         cx, y + 6, { width: cw.unit - GAP });                   cx += cw.unit
       doc.text(fmt(line.unit_price),    cx, y + 6, { width: cw.precio - GAP, align: 'right' }); cx += cw.precio
       doc.text(fmt(lineSubtotal),       cx, y + 6, { width: cw.importe - GAP, align: 'right' })
+
+      if (noteText) {
+        doc.fillColor(grisText).fontSize(7).font('Helvetica-Oblique')
+           .text(noteText, 45 + cw.sku, y + 18, { width: noteWidth })
+      }
       y += rowH
     })
 
