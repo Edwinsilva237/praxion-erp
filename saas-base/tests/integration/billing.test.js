@@ -34,6 +34,34 @@ describe('Enforcement de billing', () => {
       expect(r2.body.error).toMatch(/plan.*Gratis.*2 usuario/i)
     })
 
+    test('Asientos activos: desactivar libera lugar; reactivar respeta el límite', async () => {
+      const t = await createTenant({ label: 'free-seats' })
+      const sess = await loginAs({ slug: t.tenant.slug, email: t.email, password: t.password })
+      const client = authedClient({ slug: t.tenant.slug, token: sess.token })
+
+      // Admin (1) + invitar usuario2 → 2/2 activos (al límite del plan Gratis).
+      const r1 = await client.post('/api/users/invite', { email: 'seat2@test.local', fullName: 'Seat 2', roleIds: [] })
+      expect(r1.status).toBe(201)
+      const u2 = r1.body.user.id
+
+      // Lleno: invitar otro debe fallar con 402.
+      const rFull = await client.post('/api/users/invite', { email: 'seat3@test.local', fullName: 'Seat 3', roleIds: [] })
+      expect(rFull.status).toBe(402)
+
+      // Desactivar usuario2 → libera un asiento.
+      const rDeact = await client.delete(`/api/users/${u2}`)
+      expect(rDeact.status).toBe(200)
+
+      // Ahora SÍ se puede invitar (1 activo + 1 = 2/2).
+      const r3 = await client.post('/api/users/invite', { email: 'seat3@test.local', fullName: 'Seat 3', roleIds: [] })
+      expect(r3.status).toBe(201)
+
+      // Reactivar usuario2 con el plan lleno → 402 (sería el 3er activo).
+      const rReact = await client.patch(`/api/users/${u2}`, { isActive: true })
+      expect(rReact.status).toBe(402)
+      expect(rReact.body.error).toMatch(/activo|plan/i)
+    })
+
     test('Plan Owner: sin límite de usuarios (acepta crear varios)', async () => {
       const t = await createTenant({ label: 'owner-users', planSlug: 'owner' })
       const sess = await loginAs({ slug: t.tenant.slug, email: t.email, password: t.password })

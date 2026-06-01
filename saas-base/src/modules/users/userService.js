@@ -155,6 +155,19 @@ async function inviteUser({ tenantId, tenantName, email, fullName, roleIds = [],
 }
 
 async function updateUser({ userId, tenantId, fullName, isActive, requesterId, ipAddress, userAgent }) {
+  // Reactivar (inactivo→activo) consume un asiento del plan → validar el límite,
+  // pero SOLO en esa transición (si ya está activo, no se re-cuenta). Tira 402 si
+  // el plan está lleno. Aplica venga del botón "Reactivar" o del checkbox del modal.
+  if (isActive === true) {
+    const { rows: cur } = await query(
+      `SELECT is_active FROM users WHERE id = $1 AND tenant_id = $2`,
+      [userId, tenantId]
+    )
+    if (cur.length && cur[0].is_active === false) {
+      await assertCanCreateUser(tenantId)
+    }
+  }
+
   const { rows } = await query(
     `UPDATE users
      SET full_name = COALESCE($1, full_name),
@@ -192,6 +205,61 @@ async function deactivateUser({ userId, tenantId, requesterId, ipAddress, userAg
   return rows[0]
 }
 
+/**
+ * Reenvía la invitación a un usuario que aún NO ha iniciado sesión. La
+ * contraseña temporal original se guardó hasheada (irrecuperable), así que se
+ * genera una NUEVA y se actualizan las credenciales. Por eso se bloquea si el
+ * usuario ya entró (sería resetearle su contraseña sin querer). Devuelve
+ * `emailSent` + la nueva temporal para recuperación manual si el correo falla.
+ */
+async function resendInvitation({ userId, tenantId, tenantName, invitedByName, requesterId, ipAddress, userAgent }) {
+  const { rows } = await query(
+    `SELECT id, email, full_name, last_login_at FROM users WHERE id = $1 AND tenant_id = $2`,
+    [userId, tenantId]
+  )
+  if (rows.length === 0) throw createError(404, 'Usuario no encontrado.')
+  const user = rows[0]
+  if (user.last_login_at) {
+    throw createError(400, 'Este usuario ya inició sesión. Reenviar invitación es solo para quien aún no ha entrado.')
+  }
+
+  const tempPassword = generateTempPassword()
+  const passwordHash = await bcrypt.hash(tempPassword, config.bcrypt.rounds)
+  await query(`UPDATE user_credentials SET password_hash = $1 WHERE user_id = $2`, [passwordHash, user.id])
+
+  const { rows: trows } = await query(`SELECT brand_color_primary FROM tenants WHERE id = $1`, [tenantId])
+  const brandColor = trows[0]?.brand_color_primary || null
+
+  let emailSent = true
+  let emailError = null
+  try {
+    await enqueueEmail({
+      to:      user.email,
+      subject: `Invitación a ${tenantName}`,
+      html:    invitationEmail({
+        fullName:      user.full_name,
+        email:         user.email,
+        tempPassword,
+        tenantName,
+        invitedByName: invitedByName || 'Un administrador',
+        brandColor,
+      }),
+    })
+  } catch (err) {
+    emailSent = false
+    emailError = err.message
+    logger.warn('Resend invitation email failed', { userId: user.id, error: err.message })
+  }
+
+  await audit({
+    tenantId, userId: requesterId, action: 'user.invitation_resent',
+    resource: 'users', resourceId: user.id,
+    payload: { email: user.email, emailSent }, ipAddress, userAgent,
+  })
+
+  return { user, emailSent, emailError, tempPassword }
+}
+
 function generateTempPassword() {
   const chars = 'ABCDEFGHJKMNPQRSTWXYZabcdefghjkmnpqrstwxyz23456789!@#$'
   return Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
@@ -203,4 +271,4 @@ function createError(status, message) {
   return err
 }
 
-module.exports = { listUsers, getUserById, inviteUser, updateUser, deactivateUser }
+module.exports = { listUsers, getUserById, inviteUser, resendInvitation, updateUser, deactivateUser }

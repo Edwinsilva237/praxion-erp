@@ -11,6 +11,55 @@ import clsx from 'clsx'
 
 const PAGE_SIZE = 25
 
+// ── Modal de credenciales (cuando el correo NO se pudo enviar) ───────────────
+// Reusado por "Invitar" y "Reenviar invitación": muestra email + contraseña
+// temporal para que el admin las comparta a mano, con botón de copiar.
+function CredentialsModal({ result, title = 'Usuario creado ✓', onClose }) {
+  const c = result?.credentials || {}
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-md p-6 flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-ink-primary">{title}</h2>
+          <button type="button" onClick={onClose} className="btn-ghost btn-icon text-ink-muted">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <div className="bg-status-warning/10 border border-status-warning/40 rounded-lg px-3 py-2.5 text-sm text-status-warning">
+          ⚠ El correo de invitación <strong>no se pudo enviar</strong>. Comparte estas credenciales
+          con el usuario para que pueda entrar:
+        </div>
+        <div className="bg-surface-elevated/60 border border-line-subtle rounded-lg p-4 flex flex-col gap-2 text-sm">
+          <div className="flex justify-between gap-3">
+            <span className="text-ink-muted">Email</span>
+            <code className="text-ink-primary font-mono break-all">{c.email}</code>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-ink-muted">Contraseña temporal</span>
+            <code className="text-ink-primary font-mono break-all">{c.tempPassword}</code>
+          </div>
+        </div>
+        <button type="button"
+          onClick={() => navigator.clipboard?.writeText(`Email: ${c.email}\nContraseña temporal: ${c.tempPassword}`)}
+          className="btn-secondary btn-sm self-start">Copiar credenciales</button>
+        <p className="text-xs text-ink-muted">
+          El usuario debe cambiar su contraseña al iniciar sesión. Revisa la configuración de correo
+          (SMTP) para que las próximas invitaciones se envíen automáticamente.
+        </p>
+        {result?.emailError && (
+          <p className="text-[11px] text-ink-muted">Detalle técnico: {result.emailError}</p>
+        )}
+        <button type="button" onClick={onClose} className="btn-primary w-full justify-center">
+          Entendido, cerrar
+        </button>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 // ── Modal: invitar usuario nuevo ────────────────────────────────────────────
 function InvitarModal({ roles, onClose, onSaved }) {
   const qc = useQueryClient()
@@ -50,49 +99,7 @@ function InvitarModal({ roles, onClose, onSaved }) {
 
   // El correo no se pudo enviar: mostramos las credenciales para compartir a mano.
   if (failResult) {
-    const c = failResult.credentials || {}
-    return createPortal(
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
-        <div className="card w-full max-w-md p-6 flex flex-col gap-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold text-ink-primary">Usuario creado ✓</h2>
-            <button type="button" onClick={onClose} className="btn-ghost btn-icon text-ink-muted">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
-              </svg>
-            </button>
-          </div>
-          <div className="bg-status-warning/10 border border-status-warning/40 rounded-lg px-3 py-2.5 text-sm text-status-warning">
-            ⚠ El correo de invitación <strong>no se pudo enviar</strong>. Comparte estas credenciales
-            con el usuario para que pueda entrar:
-          </div>
-          <div className="bg-surface-elevated/60 border border-line-subtle rounded-lg p-4 flex flex-col gap-2 text-sm">
-            <div className="flex justify-between gap-3">
-              <span className="text-ink-muted">Email</span>
-              <code className="text-ink-primary font-mono break-all">{c.email}</code>
-            </div>
-            <div className="flex justify-between gap-3">
-              <span className="text-ink-muted">Contraseña temporal</span>
-              <code className="text-ink-primary font-mono break-all">{c.tempPassword}</code>
-            </div>
-          </div>
-          <button type="button"
-            onClick={() => navigator.clipboard?.writeText(`Email: ${c.email}\nContraseña temporal: ${c.tempPassword}`)}
-            className="btn-secondary btn-sm self-start">Copiar credenciales</button>
-          <p className="text-xs text-ink-muted">
-            El usuario debe cambiar su contraseña al iniciar sesión. Revisa la configuración de correo
-            (SMTP) para que las próximas invitaciones se envíen automáticamente.
-          </p>
-          {failResult.emailError && (
-            <p className="text-[11px] text-ink-muted">Detalle técnico: {failResult.emailError}</p>
-          )}
-          <button type="button" onClick={onClose} className="btn-primary w-full justify-center">
-            Entendido, cerrar
-          </button>
-        </div>
-      </div>,
-      document.body
-    )
+    return <CredentialsModal result={failResult} title="Usuario creado ✓" onClose={onClose} />
   }
 
   return createPortal(
@@ -320,6 +327,8 @@ export default function Usuarios() {
   const [showInvite, setShowInvite] = useState(false)
   const [editingUser, setEditingUser] = useState(null)
   const [msg, setMsg] = useState(null)
+  // Resultado de "Reenviar invitación" cuando el correo falla (muestra credenciales).
+  const [resendResult, setResendResult] = useState(null)
 
   const queryParams = useMemo(() => ({
     page, limit: PAGE_SIZE,
@@ -354,6 +363,27 @@ export default function Usuarios() {
     if (!window.confirm(`¿Desactivar a ${user.email}? Ya no podrá iniciar sesión.`)) return
     deactivateMutation.mutate(user.id)
   }
+
+  const reactivateMutation = useMutation({
+    mutationFn: (id) => usersApi.reactivate(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['users'] })
+      setMsg('Usuario reactivado.')
+    },
+    // El 402 del límite de plan llega aquí con su mensaje (desactiva otro o sube de plan).
+    onError: (e) => alert(e.response?.data?.error || e.message || 'Error al reactivar'),
+  })
+
+  const resendMutation = useMutation({
+    mutationFn: (id) => usersApi.resendInvitation(id),
+    onSuccess: (r) => {
+      qc.invalidateQueries({ queryKey: ['users'] })
+      // Si el correo no salió, mostramos las credenciales para compartir a mano.
+      if (r?.emailSent === false) setResendResult(r)
+      else setMsg(r?.message || 'Invitación reenviada por correo.')
+    },
+    onError: (e) => alert(e.response?.data?.error || e.message || 'Error al reenviar'),
+  })
 
   return (
     <div className="page-enter flex flex-col gap-4">
@@ -446,12 +476,32 @@ export default function Usuarios() {
                         className="btn-ghost btn-sm text-brand-300">
                         Editar
                       </button>
+                      {/* Reenviar solo a quien aún no ha entrado (correo falló o se perdió). */}
+                      {u.is_active && !u.last_login_at && (
+                        <Can do="users:create">
+                          <button onClick={() => resendMutation.mutate(u.id)}
+                            disabled={resendMutation.isPending}
+                            className="btn-ghost btn-sm text-ink-secondary"
+                            title="Reenviar la invitación con una contraseña temporal nueva">
+                            Reenviar invitación
+                          </button>
+                        </Can>
+                      )}
                       {u.is_active && (
                         <button onClick={() => handleDeactivate(u)}
                           disabled={deactivateMutation.isPending}
                           className="btn-ghost btn-sm text-status-danger">
                           Desactivar
                         </button>
+                      )}
+                      {!u.is_active && (
+                        <Can do="users:update">
+                          <button onClick={() => reactivateMutation.mutate(u.id)}
+                            disabled={reactivateMutation.isPending}
+                            className="btn-ghost btn-sm text-status-success">
+                            Reactivar
+                          </button>
+                        </Can>
                       )}
                     </td>
                   </tr>
@@ -491,6 +541,14 @@ export default function Usuarios() {
           user={editingUser}
           roles={roles}
           onClose={() => setEditingUser(null)}
+        />
+      )}
+
+      {resendResult && (
+        <CredentialsModal
+          result={resendResult}
+          title="Invitación reenviada"
+          onClose={() => setResendResult(null)}
         />
       )}
     </div>

@@ -75,6 +75,36 @@ router.post('/invite', checkPermission('users', 'create'), async (req, res, next
   }
 })
 
+// Reenviar invitación a un usuario que aún no inició sesión (correo falló o se
+// perdió). Regenera la contraseña temporal. Mismo permiso que invitar.
+router.post('/:id/resend-invitation', checkPermission('users', 'create'), async (req, res, next) => {
+  try {
+    const { rows } = await query(`SELECT full_name FROM users WHERE id = $1`, [req.auth.userId])
+    const invitedByName = rows[0]?.full_name || 'Un administrador'
+
+    const result = await userService.resendInvitation({
+      userId:        req.params.id,
+      tenantId:      req.tenant.id,
+      tenantName:    req.tenant.name,
+      invitedByName,
+      requesterId:   req.auth.userId,
+      ipAddress:     req.ip,
+      userAgent:     req.get('user-agent'),
+    })
+
+    res.json({
+      emailSent: result.emailSent,
+      message:   result.emailSent
+        ? 'Invitación reenviada por correo.'
+        : 'No se pudo enviar el correo. Comparte las credenciales manualmente.',
+      ...(result.emailSent ? {} : {
+        emailError:  result.emailError,
+        credentials: { email: result.user.email, tempPassword: result.tempPassword },
+      }),
+    })
+  } catch (err) { next(err) }
+})
+
 router.patch('/:id', checkPermission('users', 'update'), async (req, res, next) => {
   try {
     const { fullName, isActive } = req.body

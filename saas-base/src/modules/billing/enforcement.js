@@ -73,11 +73,15 @@ async function assertSubscriptionActive(tenantId) {
 }
 
 /**
- * Verifica que el tenant pueda crear un usuario más sin exceder el límite
- * de su plan. Si max_users del plan es NULL → ilimitado, siempre OK.
+ * Verifica que el tenant pueda tener un usuario ACTIVO más sin exceder el
+ * límite de su plan. Si max_users del plan es NULL → ilimitado, siempre OK.
+ *
+ * Modelo de "asientos activos": solo cuentan los usuarios `is_active = true`.
+ * Desactivar un usuario libera su lugar; reactivarlo (o invitar uno nuevo)
+ * vuelve a consumir uno, y por eso pasa por aquí.
  *
  * @param {string} tenantId
- * @param {number} [addCount=1] - cuántos usuarios se van a crear (default 1)
+ * @param {number} [addCount=1] - cuántos usuarios activos se van a agregar (default 1)
  */
 async function assertCanCreateUser(tenantId, addCount = 1) {
   const sub = await getSubAndPlan(tenantId)
@@ -85,14 +89,14 @@ async function assertCanCreateUser(tenantId, addCount = 1) {
   if (sub.max_users === null) return // ilimitado
 
   const { rows: cnt } = await query(
-    `SELECT COUNT(*)::int AS n FROM users WHERE tenant_id = $1`,
+    `SELECT COUNT(*)::int AS n FROM users WHERE tenant_id = $1 AND is_active = true`,
     [tenantId]
   )
   const current = cnt[0].n
   if (current + addCount > sub.max_users) {
     throwPaymentRequired(
-      `Tu plan "${sub.plan_name}" permite hasta ${sub.max_users} usuario(s). ` +
-      `Ya tienes ${current}. Cambia a un plan superior para agregar más.`
+      `Tu plan "${sub.plan_name}" permite hasta ${sub.max_users} usuario(s) activo(s). ` +
+      `Ya tienes ${current}. Desactiva otro usuario o cambia a un plan superior.`
     )
   }
 }
