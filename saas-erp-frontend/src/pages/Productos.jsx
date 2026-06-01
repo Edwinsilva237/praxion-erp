@@ -1160,7 +1160,14 @@ export default function Productos() {
                       />
                     </td>
                     <td>
-                      <div className="flex items-center justify-end gap-0.5">
+                      <div className="flex items-center justify-end gap-1">
+                        <Can do="products:update">
+                          <button onClick={() => openEdit(p)}
+                            className="btn-ghost btn-icon btn-sm text-brand-300 hover:text-brand-200"
+                            title="Editar">
+                            <IconEdit />
+                          </button>
+                        </Can>
                         <Can do="products:create">
                           <button onClick={() => openClone(p)}
                             className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-brand-300"
@@ -1168,13 +1175,6 @@ export default function Productos() {
                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h6a2 2 0 002-2v-2" />
                             </svg>
-                          </button>
-                        </Can>
-                        <Can do="products:update">
-                          <button onClick={() => openEdit(p)}
-                            className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-brand-300"
-                            title="Editar">
-                            <IconEdit />
                           </button>
                         </Can>
                       </div>

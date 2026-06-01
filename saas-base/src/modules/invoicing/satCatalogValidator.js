@@ -17,6 +17,8 @@ const { query } = require('../../db')
  *   - metodo_pago: existe (PUE / PPD).
  *   - tipo_comprobante: existe (I, E, T, N, P, R).
  *   - país del receptor: existe (si receptor extranjero).
+ *   - clave de unidad y clave de producto SAT por línea: existen en
+ *     c_ClaveUnidad / c_ClaveProdServ (atrapa ej. "ROL" en vez de "XRO"=Rollo).
  *
  * No reemplaza la validación de "datos faltantes" (stampService), que se
  * ejecuta primero. Esto se ejecuta DESPUÉS de confirmar que los datos
@@ -193,7 +195,8 @@ async function validateAgainstSatCatalogs(inv, lines = null) {
   let invLines = lines
   if (invLines == null && inv.id) {
     const { rows } = await query(
-      `SELECT line_number, objeto_imp, tax_factor, tax_rate
+      `SELECT line_number, objeto_imp, tax_factor, tax_rate,
+              sat_unit_code, sat_product_code
          FROM invoice_lines WHERE invoice_id = $1 ORDER BY line_number`,
       [inv.id]
     )
@@ -207,10 +210,43 @@ async function validateAgainstSatCatalogs(inv, lines = null) {
     const validFactores = new Set(factores.map(r => r.code))
     const VALID_IVA_RATES = new Set([0, 8, 16]) // tasa cero, frontera, general
 
+    // Validar claves de UNIDAD y PRODUCTO del SAT por línea (1 query por catálogo).
+    // Sin esto, una clave inválida (ej. "ROL" en vez de "XRO"=Rollo) llegaba hasta
+    // el PAC y gastaba/rebotaba el timbre con un error críptico.
+    const unitCodes = [...new Set(invLines.map(l => String(l.sat_unit_code || '').trim()).filter(Boolean))]
+    const prodCodes = [...new Set(invLines.map(l => String(l.sat_product_code || '').trim()).filter(Boolean))]
+    let validUnits = new Set()
+    let validProds = new Set()
+    if (unitCodes.length) {
+      const { rows } = await query(`SELECT code FROM sat_unit_codes WHERE code = ANY($1)`, [unitCodes])
+      validUnits = new Set(rows.map(r => r.code))
+    }
+    if (prodCodes.length) {
+      const { rows } = await query(`SELECT code FROM sat_product_codes WHERE code = ANY($1)`, [prodCodes])
+      validProds = new Set(rows.map(r => r.code))
+    }
+
     for (const line of invLines) {
       const ln = line.line_number != null ? `línea ${line.line_number}` : 'una línea'
       const objeto = String(line.objeto_imp || '02')
       const factor = line.tax_factor || 'Tasa'
+
+      const unitCode = String(line.sat_unit_code || '').trim()
+      if (unitCode && !validUnits.has(unitCode)) {
+        errors.push({
+          field: 'sat_unit_code',
+          code:  'SAT_UNIT_NOT_FOUND',
+          message: `La clave de unidad SAT "${unitCode}" (${ln}) no existe en c_ClaveUnidad. Corrige la unidad SAT del producto o su presentación (ej. "XRO"=Rollo, "H87"=Pieza, "KGM"=Kilogramo, "MTR"=Metro).`,
+        })
+      }
+      const prodCode = String(line.sat_product_code || '').trim()
+      if (prodCode && !validProds.has(prodCode)) {
+        errors.push({
+          field: 'sat_product_code',
+          code:  'SAT_PRODUCT_NOT_FOUND',
+          message: `La clave de producto SAT "${prodCode}" (${ln}) no existe en c_ClaveProdServ. Corrige la clave SAT del producto.`,
+        })
+      }
 
       if (!validObjetos.has(objeto)) {
         errors.push({
