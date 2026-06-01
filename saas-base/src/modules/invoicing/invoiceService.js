@@ -157,11 +157,31 @@ async function nextInvoiceNumber(client, tenantId, opts = {}) {
     seriesCode: opts.seriesCode,
     cfdiType:   opts.cfdiType,
   })
-  const { folio, serie } = await invoiceSeriesService.consumeNextFolio({
-    client, seriesId: series.id,
-  })
+
+  // Consumir folios hasta dar con un document_number LIBRE. El contador
+  // (folio_next) puede quedar DETRÁS del folio máximo real de la serie —p.ej.
+  // si hay dos series con la misma letra, si se editó "próximo folio", o por
+  // facturas previas— y entonces `${serie}-${folio}` choca con la constraint
+  // única `inv_number_tenant` → el INSERT reventaba con un 500 al regenerar una
+  // factura. Cada vuelta AVANZA el contador, así que el desfase se auto-sana de
+  // forma permanente. La cota evita ciclar si algo más anda mal.
+  let docNumber = null, serie = null, folio = null
+  for (let attempt = 0; attempt < 1000 && docNumber === null; attempt++) {
+    const consumed = await invoiceSeriesService.consumeNextFolio({ client, seriesId: series.id })
+    const candidate = `${consumed.serie}-${String(consumed.folio).padStart(4, '0')}`
+    const { rows: dup } = await client.query(
+      `SELECT 1 FROM invoices WHERE tenant_id = $1 AND document_number = $2 LIMIT 1`,
+      [tenantId, candidate]
+    )
+    if (!dup.length) { docNumber = candidate; serie = consumed.serie; folio = consumed.folio }
+  }
+  if (docNumber === null) {
+    throw createError(409,
+      'No se pudo asignar un folio libre para la factura. Revisa la serie en Configuración — el contador de folios quedó muy desfasado.')
+  }
+
   return {
-    docNumber: `${serie}-${String(folio).padStart(4, '0')}`,
+    docNumber,
     series:    serie,
     folio:     String(folio),
     fiscalProfileId,
@@ -1183,6 +1203,76 @@ async function cancelInvoice({ tenantId, invoiceId, reason, userId, ipAddress, u
 }
 
 /**
+ * Elimina de raíz una factura en BORRADOR no timbrada (hard delete). Solo admin
+ * (permiso invoicing:delete). Revierte la CXC con la MISMA lógica que
+ * cancelInvoice (split → recalcula AR-remisión; consolidada → reactiva las
+ * AR-remisión origen) y luego borra la factura: las líneas (invoice_lines) y
+ * retenciones (invoice_retentions) cascadean por FK ON DELETE CASCADE.
+ *
+ * Bloquea cualquier factura con cfdi_uuid (timbrada ante el SAT — esas se
+ * cancelan ante el PAC, no se borran) o con cobros registrados en su CXC.
+ * El folio de la serie NO se libera (igual que cancelInvoice): un borrador
+ * borrado deja un hueco interno inocuo (nunca llegó al SAT).
+ */
+async function deleteDraftInvoice({ tenantId, invoiceId, userId, ipAddress, userAgent }) {
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT id, document_number, status, cfdi_uuid, delivery_note_id
+         FROM invoices WHERE id = $1 AND tenant_id = $2`,
+      [invoiceId, tenantId]
+    )
+    if (!rows.length) throw createError(404, 'Factura no encontrada.')
+    const invoice = rows[0]
+    if (invoice.status !== 'draft' || invoice.cfdi_uuid) {
+      throw createError(409,
+        'Solo se pueden eliminar facturas en borrador no timbradas. Una factura timbrada debe cancelarse ante el SAT.')
+    }
+
+    const { rows: arPay } = await client.query(
+      `SELECT 1 FROM accounts_receivable
+        WHERE tenant_id = $1 AND document_type = 'invoice' AND document_id = $2 AND amount_paid > 0 LIMIT 1`,
+      [tenantId, invoiceId]
+    )
+    if (arPay.length) {
+      throw createError(409, 'No se puede eliminar: la factura tiene cobros registrados.')
+    }
+
+    // Revertir el efecto en CXC — misma lógica que cancelInvoice.
+    if (invoice.delivery_note_id) {
+      await revertInvoiceArOnCancel(client, { tenantId, invoice })
+    } else {
+      // Reactivar CXC de remisiones consolidadas (marca "[Consolidada en factura X]").
+      await client.query(
+        `UPDATE accounts_receivable
+            SET status = 'pending',
+                notes  = NULLIF(REPLACE(COALESCE(notes, ''), ' [Consolidada en factura ' || $2 || ']', ''), '')
+          WHERE tenant_id = $1
+            AND document_type = 'remission'
+            AND status = 'cancelled'
+            AND notes LIKE '%[Consolidada en factura ' || $2 || ']%'`,
+        [tenantId, invoice.document_number]
+      )
+    }
+
+    // Borrar la CXC-factura (ahora huérfana) y la factura (cascada: líneas + retenciones).
+    await client.query(
+      `DELETE FROM accounts_receivable
+        WHERE tenant_id = $1 AND document_type = 'invoice' AND document_id = $2`,
+      [tenantId, invoiceId]
+    )
+    await client.query(`DELETE FROM invoices WHERE id = $1 AND tenant_id = $2`, [invoiceId, tenantId])
+
+    await audit({
+      tenantId, userId, action: 'invoice.deleted',
+      resource: 'invoices', resourceId: invoiceId,
+      payload: { documentNumber: invoice.document_number }, ipAddress, userAgent,
+    })
+
+    return { id: invoiceId, document_number: invoice.document_number }
+  })
+}
+
+/**
  * Edición de una factura en estado 'draft'.
  *
  * Solo permite cambiar metadatos del CFDI (uso, método/forma de pago,
@@ -1576,6 +1666,6 @@ module.exports = {
   listInvoices, getInvoice,
   createFromRemission, createFromRemissions, createDirect, createOccasional,
   updateInvoice,
-  cancelInvoice,
+  cancelInvoice, deleteDraftInvoice,
   revertInvoiceArOnCancel,
 }

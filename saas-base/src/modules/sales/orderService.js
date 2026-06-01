@@ -436,7 +436,49 @@ async function cancelOrder({ tenantId, orderId, reason, userId, ipAddress, userA
   })
 }
 
+/**
+ * Elimina de raíz un pedido SIN documentos asociados (hard delete). Solo admin
+ * (permiso sales:delete). Bloquea si tiene remisiones (incluidas las
+ * consolidadas, vía delivery_note_lines.sales_order_id) o facturas que lo
+ * referencian. El pedido nunca toca inventario, así que no hay nada que
+ * revertir; las líneas cascadean (sales_order_lines FK ON DELETE CASCADE).
+ */
+async function deleteOrder({ tenantId, orderId, userId, ipAddress, userAgent }) {
+  return withTransaction(async (client) => {
+    const { rows: ord } = await client.query(
+      `SELECT id, order_number FROM sales_orders WHERE id = $1 AND tenant_id = $2`,
+      [orderId, tenantId]
+    )
+    if (!ord.length) throw createError(404, 'Pedido no encontrado.')
 
+    const { rows: act } = await client.query(
+      `SELECT
+         EXISTS(SELECT 1 FROM delivery_notes      WHERE tenant_id=$2 AND sales_order_id=$1) AS rem_hdr,
+         EXISTS(SELECT 1 FROM delivery_note_lines WHERE sales_order_id=$1)                  AS rem_ln,
+         EXISTS(SELECT 1 FROM invoice_lines il
+                  JOIN sales_order_lines sol ON sol.id = il.sales_order_line_id
+                 WHERE sol.sales_order_id=$1)                                               AS facturas`,
+      [orderId, tenantId]
+    )
+    const a = act[0]
+    if (a.rem_hdr || a.rem_ln) {
+      throw createError(409, 'No se puede eliminar: el pedido tiene remisiones asociadas. Cancélalo en su lugar.')
+    }
+    if (a.facturas) {
+      throw createError(409, 'No se puede eliminar: el pedido tiene facturas asociadas. Cancélalo en su lugar.')
+    }
+
+    await client.query(`DELETE FROM sales_orders WHERE id = $1 AND tenant_id = $2`, [orderId, tenantId])
+
+    await audit({
+      tenantId, userId, action: 'sales_order.deleted',
+      resource: 'sales_orders', resourceId: orderId,
+      payload: { orderNumber: ord[0].order_number }, ipAddress, userAgent,
+    })
+
+    return { id: orderId, order_number: ord[0].order_number }
+  })
+}
 
 /**
  * Edita datos generales de un pedido en estado draft.
@@ -868,7 +910,7 @@ async function recalcOrderStatusFromDeliveries(client, { tenantId, orderId }) {
 
 module.exports = {
   listOrders, getOrder, createOrder, updateOrder,
-  confirmOrder, cancelOrder, getSuggestedPrice,
+  confirmOrder, cancelOrder, deleteOrder, getSuggestedPrice,
   assignDriver,
   addOrderLine, updateOrderLine, deleteOrderLine,
   getOrderDeliveryBreakdown, recalcOrderStatusFromDeliveries,

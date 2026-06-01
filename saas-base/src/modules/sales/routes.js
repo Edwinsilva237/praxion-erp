@@ -141,6 +141,20 @@ router.post('/orders/:id/cancel', checkPermission('sales', 'update'), async (req
   } catch (err) { next(err) }
 })
 
+// Eliminar de raíz un pedido sin documentos asociados (solo admin).
+router.delete('/orders/:id', checkPermission('sales', 'delete'), async (req, res, next) => {
+  try {
+    const result = await orderService.deleteOrder({
+      tenantId:  req.tenant.id,
+      orderId:   req.params.id,
+      userId:    req.auth.userId,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    })
+    res.json({ message: `Pedido ${result.order_number} eliminado.`, ...result })
+  } catch (err) { next(err) }
+})
+
 // ─── Remisiones ───────────────────────────────────────────────────────────────
 
 /**
@@ -311,6 +325,20 @@ router.post('/delivery-notes/:id/cancel', checkPermission('sales', 'update'), as
       userAgent: req.get('user-agent'),
     })
     res.json(result)
+  } catch (err) { next(err) }
+})
+
+// Eliminar de raíz una remisión sin movimientos asociados (solo admin).
+router.delete('/delivery-notes/:id', checkPermission('sales', 'delete'), async (req, res, next) => {
+  try {
+    const result = await deliveryNoteService.deleteDelivery({
+      tenantId:  req.tenant.id,
+      noteId:    req.params.id,
+      userId:    req.auth.userId,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    })
+    res.json({ message: `Remisión ${result.document_number} eliminada.`, ...result })
   } catch (err) { next(err) }
 })
 

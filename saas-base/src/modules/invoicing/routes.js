@@ -191,6 +191,20 @@ router.post('/invoices/:id/cancel', checkPermission('invoicing', 'update'), asyn
   } catch (err) { next(err) }
 })
 
+// Eliminar de raíz una factura en borrador no timbrada (solo admin).
+router.delete('/invoices/:id', checkPermission('invoicing', 'delete'), async (req, res, next) => {
+  try {
+    const result = await invoiceService.deleteDraftInvoice({
+      tenantId:  req.tenant.id,
+      invoiceId: req.params.id,
+      userId:    req.auth.userId,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    })
+    res.json({ message: `Factura ${result.document_number} eliminada.`, ...result })
+  } catch (err) { next(err) }
+})
+
 /**
  * POST /api/invoicing/invoices/:id/stamp
  * Timbra una factura en borrador. Si REDIS_URL está configurado, encola y

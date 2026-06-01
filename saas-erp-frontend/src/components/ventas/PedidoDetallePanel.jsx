@@ -11,6 +11,7 @@ import { ProductImageThumb } from '@/components/productos/ProductImageThumb'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import { fmtMXN, fmtDate, fmtNum, fmtDateInput, fmtDateOnly } from '@/utils/fmt'
+import Can from '@/components/auth/Can'
 import clsx from 'clsx'
 
 // ── Tabla de líneas — read-only + acciones edit/delete cuando editable ──────
@@ -289,6 +290,13 @@ function AccionesPedido({ order, onAction, loadingAction, editing, onToggleEdit,
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
           </svg>}
         />
+        <Can do="sales:delete">
+          <Btn label="Eliminar" action="delete" variant="danger"
+            icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+            </svg>}
+          />
+        </Can>
       </div>
     </div>
   )
@@ -303,19 +311,39 @@ function AccionesPedido({ order, onAction, loadingAction, editing, onToggleEdit,
         {status === 'confirmed' ? 'Crear remisión' : 'Crear otra remisión'}
       </button>
       {status === 'confirmed' && (
-        <Btn label="Cancelar pedido" action="cancel" variant="danger"
-          icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
-          </svg>}
-        />
+        <>
+          <Btn label="Cancelar pedido" action="cancel" variant="danger"
+            icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+            </svg>}
+          />
+          <Can do="sales:delete">
+            <Btn label="Eliminar" action="delete" variant="danger"
+              icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+              </svg>}
+            />
+          </Can>
+        </>
       )}
     </div>
   )
 
   if (status === 'delivered' || status === 'cancelled') return (
-    <div className="border-t border-line-subtle pt-4 mt-2 text-xs text-ink-muted italic">
-      {status === 'delivered'   && 'Pedido entregado — el pago pendiente del cliente se generó automáticamente.'}
-      {status === 'cancelled'   && 'Este pedido fue cancelado.'}
+    <div className="border-t border-line-subtle pt-4 mt-2 flex flex-col gap-2">
+      <p className="text-xs text-ink-muted italic">
+        {status === 'delivered'   && 'Pedido entregado — el pago pendiente del cliente se generó automáticamente.'}
+        {status === 'cancelled'   && 'Este pedido fue cancelado.'}
+      </p>
+      {status === 'cancelled' && (
+        <Can do="sales:delete">
+          <Btn label="Eliminar definitivamente" action="delete" variant="danger"
+            icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+            </svg>}
+          />
+        </Can>
+      )}
     </div>
   )
 
@@ -552,11 +580,29 @@ export function PedidoDetallePanel({ orderId, onClose }) {
     }
   }
 
+  // Hard delete de un pedido sin documentos asociados (solo admin — sales:delete).
+  const deleteMutation = useMutation({
+    mutationFn: () => salesApi.deleteOrder(orderId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sales-orders'] })
+      onClose()
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al eliminar el pedido'),
+    onSettled: () => setLoading(null),
+  })
+
+  function handleDeleteOrder() {
+    if (!window.confirm(`Eliminar de raíz el pedido ${order.order_number}? Desaparecerá por completo. Esta acción no se puede deshacer.`)) return
+    setError(null); setLoading('delete')
+    deleteMutation.mutate()
+  }
+
   function handleAction(action) {
     setError(null)
     setLoading(action)
     if (action === 'confirm')      confirmMutation.mutate()
     else if (action === 'cancel')  { setShowCancelModal(true); setLoading(null) }
+    else if (action === 'delete')  { setLoading(null); handleDeleteOrder() }
   }
 
   function handleCancelConfirm(reason) {

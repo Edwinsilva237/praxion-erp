@@ -10,6 +10,7 @@ import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob } from '@/utils/downloadBlob'
 import useAuthStore from '@/store/useAuthStore'
 import SatCatalogSelect from '@/components/fiscal/SatCatalogSelect'
+import Can from '@/components/auth/Can'
 import clsx from 'clsx'
 
 // ── Datos fiscales y de pago ────────────────────────────────────────────────
@@ -1151,6 +1152,17 @@ export function FacturaDetallePanel({ invoiceId, onClose }) {
     onSettled: () => setLoadingAction(null),
   })
 
+  // Hard delete de un borrador no timbrado (solo admin — invoicing:delete).
+  const deleteMutation = useMutation({
+    mutationFn: () => invoicingApi.remove(invoiceId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['invoices'] })
+      onClose()
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al eliminar'),
+    onSettled: () => setLoadingAction(null),
+  })
+
   const emailMutation = useMutation({
     mutationFn: (emails) => invoicingApi.sendEmail(invoiceId, emails),
     onSuccess: (r) => {
@@ -1436,6 +1448,17 @@ export function FacturaDetallePanel({ invoiceId, onClose }) {
                       </svg>}
                       onClick={() => setShowCancelModal(true)}
                     />
+                    <Can do="invoicing:delete">
+                      <Btn label="Eliminar" variant="danger" action="delete-draft"
+                        icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                        </svg>}
+                        onClick={() => {
+                          if (!confirm(`Eliminar de raíz la factura borrador ${invoice.document_number}? Desaparecerá por completo (no quedará como cancelada). Esta acción no se puede deshacer.`)) return
+                          setError(null); setMsg(null); setLoadingAction('delete-draft'); deleteMutation.mutate()
+                        }}
+                      />
+                    </Can>
                   </>
                 )}
 

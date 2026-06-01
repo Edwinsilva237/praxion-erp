@@ -366,6 +366,19 @@ async function updateProduct({
     const productKindIdProvided     = productKindId     !== undefined
     const defaultGradeIdProvided    = defaultQualityGradeId !== undefined
 
+    // Capturar la clave de unidad SAT anterior para propagarla a las
+    // presentaciones que estaban en sincronía con ella (típicamente la default
+    // que se auto-crea espejando al producto). Solo aplica cuando el caller
+    // manda satUnitCode.
+    let oldSatUnitCode = null
+    if (satUnitCode) {
+      const { rows: prev } = await client.query(
+        `SELECT sat_unit_code FROM products WHERE id = $1 AND tenant_id = $2`,
+        [productId, tenantId]
+      )
+      oldSatUnitCode = prev[0]?.sat_unit_code || null
+    }
+
     const { rows } = await client.query(
       `UPDATE products SET
          name                  = COALESCE($1, name),
@@ -413,6 +426,22 @@ async function updateProduct({
       ]
     )
     if (rows.length === 0) return null
+
+    // Propagar el cambio de clave de unidad SAT a las presentaciones que tenían
+    // la clave anterior. La factura toma sat_unit_code de product_pack_options
+    // (no del producto) — sin esto, editar la clave del producto NO surtía
+    // efecto al facturar y el validador SAT seguía rebotando (ej. "ROL"→"XRO").
+    // Acotado a las presentaciones que coincidían con la clave vieja: no pisa
+    // las que el usuario fijó a propósito con otra unidad (ej. "caja"=XBX).
+    const newSatUnitCode = rows[0].sat_unit_code
+    if (satUnitCode && oldSatUnitCode && newSatUnitCode && newSatUnitCode !== oldSatUnitCode) {
+      await client.query(
+        `UPDATE product_pack_options
+            SET sat_unit_code = $1
+          WHERE product_id = $2 AND tenant_id = $3 AND sat_unit_code = $4`,
+        [newSatUnitCode, productId, tenantId, oldSatUnitCode]
+      )
+    }
 
     await audit({
       tenantId, userId, action: 'product.updated', resource: 'products',

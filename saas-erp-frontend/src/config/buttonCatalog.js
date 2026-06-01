@@ -87,11 +87,32 @@ export const BUTTON_CATALOG = [
     permission:       'sales:create',
   },
   {
+    key:              'sales.delete-order',
+    label:            'Eliminar pedido sin documentos asociados',
+    screen:           'Comercial · Pedidos',
+    accessPermission: 'sales:read',
+    permission:       'sales:delete',
+  },
+  {
+    key:              'sales.delete-delivery-note',
+    label:            'Eliminar remisión sin movimientos asociados',
+    screen:           'Comercial · Remisiones',
+    accessPermission: 'sales:read',
+    permission:       'sales:delete',
+  },
+  {
     key:              'invoicing.new-invoice',
     label:            'Nueva factura',
     screen:           'Comercial · Facturación',
     accessPermission: 'invoicing:read',
     permission:       'invoicing:create',
+  },
+  {
+    key:              'invoicing.delete-invoice',
+    label:            'Eliminar factura en borrador (no timbrada)',
+    screen:           'Comercial · Facturación',
+    accessPermission: 'invoicing:read',
+    permission:       'invoicing:delete',
   },
   {
     key:              'financials.register-receipt',

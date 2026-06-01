@@ -641,6 +641,79 @@ async function cancelDelivery({ tenantId, noteId, reason, userId, ipAddress, use
 }
 
 /**
+ * Elimina de raíz una remisión SIN movimientos asociados (hard delete). Solo
+ * admin (permiso sales:delete). Por diseño solo borra remisiones que NUNCA
+ * afectaron inventario — bloquea las entregadas/parciales/facturadas, las que
+ * tengan movimientos de inventario, factura activa (directa o consolidada) o
+ * CXC con pagos. No revierte inventario (no hay nada que revertir). Las líneas
+ * cascadean (delivery_note_lines FK ON DELETE CASCADE).
+ */
+async function deleteDelivery({ tenantId, noteId, userId, ipAddress, userAgent }) {
+  return withTransaction(async (client) => {
+    const { rows: noteRows } = await client.query(
+      `SELECT id, document_number, status, sales_order_id FROM delivery_notes
+        WHERE id = $1 AND tenant_id = $2`,
+      [noteId, tenantId]
+    )
+    if (!noteRows.length) throw createError(404, 'Remisión no encontrada.')
+    const note = noteRows[0]
+
+    if (['delivered', 'partially_delivered', 'invoiced'].includes(note.status)) {
+      throw createError(409,
+        'No se puede eliminar una remisión que ya movió inventario. Para revertirla, ajusta el inventario manualmente.')
+    }
+
+    // Defensa adicional: movimientos de inventario, factura activa o CXC con pagos.
+    const { rows: refs } = await client.query(
+      `SELECT
+         EXISTS(SELECT 1 FROM inventory_movements
+                 WHERE tenant_id=$1 AND reference_type='delivery_note' AND reference_id=$2) AS movimientos,
+         EXISTS(SELECT 1 FROM invoices
+                 WHERE tenant_id=$1 AND delivery_note_id=$2 AND status<>'cancelled')        AS inv_directa,
+         EXISTS(SELECT 1 FROM invoice_lines il
+                  JOIN delivery_note_lines dnl ON dnl.id = il.delivery_note_line_id
+                  JOIN invoices iv ON iv.id = il.invoice_id
+                 WHERE dnl.delivery_note_id=$2 AND iv.tenant_id=$1 AND iv.status<>'cancelled') AS inv_consol,
+         EXISTS(SELECT 1 FROM accounts_receivable
+                 WHERE tenant_id=$1 AND document_type='remission' AND document_id=$2 AND amount_paid>0) AS cobros`,
+      [tenantId, noteId]
+    )
+    const r = refs[0]
+    if (r.movimientos) {
+      throw createError(409, 'No se puede eliminar: la remisión tiene movimientos de inventario.')
+    }
+    if (r.inv_directa || r.inv_consol) {
+      throw createError(409, 'No se puede eliminar: la remisión tiene una factura activa. Cancela primero la factura.')
+    }
+    if (r.cobros) {
+      throw createError(409, 'No se puede eliminar: la remisión tiene cobros registrados.')
+    }
+
+    // Limpiar cualquier CXC-remisión sin pagos (defensivo) y borrar la remisión.
+    await client.query(
+      `DELETE FROM accounts_receivable
+        WHERE tenant_id=$1 AND document_type='remission' AND document_id=$2 AND amount_paid=0`,
+      [tenantId, noteId]
+    )
+    await client.query(`DELETE FROM delivery_notes WHERE id = $1 AND tenant_id = $2`, [noteId, tenantId])
+
+    // Recalcular el status del pedido (si la remisión venía de uno).
+    if (note.sales_order_id) {
+      await recalcOrderStatusFromDeliveries(client, { tenantId, orderId: note.sales_order_id })
+    }
+
+    await audit({
+      tenantId, userId, action: 'delivery_note.deleted',
+      resource: 'delivery_notes', resourceId: noteId,
+      payload: { documentNumber: note.document_number, status: note.status },
+      ipAddress, userAgent,
+    })
+
+    return { id: noteId, document_number: note.document_number }
+  })
+}
+
+/**
  * Resuelve los destinatarios por defecto de una remisión:
  * el contacto principal del cliente, o cualquier contacto con email si no hay primario.
  */
@@ -871,5 +944,5 @@ function createError(status, message) {
 
 module.exports = {
   createDeliveryNote, listDeliveryNotes, getDeliveryNote,
-  recordDelivery, markAsSentByEmail, setNoInvoice, cancelDelivery,
+  recordDelivery, markAsSentByEmail, setNoInvoice, cancelDelivery, deleteDelivery,
 }

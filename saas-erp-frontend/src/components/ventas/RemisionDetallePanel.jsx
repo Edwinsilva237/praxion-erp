@@ -13,6 +13,7 @@ import { printRemision } from '@/utils/printRemision'
 import { printBlob } from '@/utils/downloadBlob'
 import { Capacitor } from '@capacitor/core'
 import useAuthStore from '@/store/useAuthStore'
+import Can from '@/components/auth/Can'
 import clsx from 'clsx'
 
 // ── Datos generales ──────────────────────────────────────────────────────────
@@ -124,8 +125,12 @@ function LineasTable({ note }) {
 }
 
 // ── Acciones contextuales por estado ─────────────────────────────────────────
-function AccionesRemision({ note, onSendEmail, onDeliver, onCancel, canceling }) {
+function AccionesRemision({ note, onSendEmail, onDeliver, onCancel, canceling, onDelete, deleting }) {
   const { status } = note
+
+  // El borrado solo aplica a remisiones que NUNCA movieron inventario
+  // (issued / sent_by_email). 'partially_delivered' ya descontó stock.
+  const canDelete = status === 'issued' || status === 'sent_by_email'
 
   if (status === 'issued' || status === 'sent_by_email' || status === 'partially_delivered') return (
     <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 border-t border-line-subtle pt-4 mt-2">
@@ -150,6 +155,19 @@ function AccionesRemision({ note, onSendEmail, onDeliver, onCancel, canceling })
         )}
         Cancelar remisión
       </button>
+      {canDelete && (
+        <Can do="sales:delete">
+          <button onClick={onDelete} disabled={deleting}
+            className="btn-ghost btn-sm text-status-danger hover:bg-status-danger/10 justify-center">
+            {deleting ? <Spinner size="sm" /> : (
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+              </svg>
+            )}
+            Eliminar
+          </button>
+        </Can>
+      )}
     </div>
   )
 
@@ -181,8 +199,19 @@ function AccionesRemision({ note, onSendEmail, onDeliver, onCancel, canceling })
   )
 
   if (status === 'cancelled') return (
-    <div className="border-t border-line-subtle pt-4 mt-2 text-xs text-ink-muted italic">
-      Esta remisión fue cancelada.
+    <div className="border-t border-line-subtle pt-4 mt-2 flex flex-col gap-2">
+      <p className="text-xs text-ink-muted italic">Esta remisión fue cancelada.</p>
+      <Can do="sales:delete">
+        <button onClick={onDelete} disabled={deleting}
+          className="btn-ghost btn-sm text-status-danger hover:bg-status-danger/10 justify-center self-start">
+          {deleting ? <Spinner size="sm" /> : (
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+            </svg>
+          )}
+          Eliminar definitivamente
+        </button>
+      </Can>
     </div>
   )
 
@@ -350,6 +379,24 @@ export function RemisionDetallePanel({ noteId, onClose }) {
     const reason = prompt('Cancelar esta remisión. Motivo (opcional):')
     if (reason === null) return // canceló el prompt
     cancelMutation.mutate(reason.trim() || null)
+  }
+
+  // Hard delete de una remisión sin movimientos (solo admin — sales:delete).
+  const deleteMutation = useMutation({
+    mutationFn: () => salesApi.deleteDeliveryNote(noteId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['delivery-notes'] })
+      qc.invalidateQueries({ queryKey: ['sales-order', note?.sales_order_id] })
+      qc.invalidateQueries({ queryKey: ['sales-orders'] })
+      onClose()
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al eliminar la remisión'),
+  })
+
+  function handleDelete() {
+    if (!confirm(`Eliminar de raíz la remisión ${note.document_number}? Desaparecerá por completo. Esta acción no se puede deshacer.`)) return
+    setError(null); setMsg(null)
+    deleteMutation.mutate()
   }
 
   // En nativo se imprime el PDF formal del backend (el HTML del cliente no
@@ -558,6 +605,8 @@ export function RemisionDetallePanel({ noteId, onClose }) {
                 onDeliver={() => { setError(null); setShowEntregaModal(true) }}
                 onCancel={() => { setError(null); handleCancel() }}
                 canceling={cancelMutation.isPending}
+                onDelete={handleDelete}
+                deleting={deleteMutation.isPending}
               />
             </div>
           )}

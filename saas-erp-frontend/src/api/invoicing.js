@@ -19,6 +19,9 @@ export const invoicingApi = {
   // Cancelar borrador (local)
   cancel:        (id, body) => api.post(`${B}/invoices/${id}/cancel`, body).then(r => r.data),
 
+  // Eliminar de raíz un borrador no timbrado (solo admin — invoicing:delete)
+  remove:        (id) => api.delete(`${B}/invoices/${id}`).then(r => r.data),
+
   // Timbrado. El backend puede responder de dos formas:
   //   - 200 con el resultado completo (modo síncrono / Redis no configurado)
   //   - 202 con { queued, jobId } — debemos hacer polling hasta que termine.
