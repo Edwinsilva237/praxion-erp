@@ -323,7 +323,17 @@ function ProductModal({ product: initialProduct, onClose }) {
     onError: () => setUploadProgress(null),
   })
 
+  // Borrado (solo admin). El backend rechaza con 409 si tiene movimientos.
+  const deleteMut = useMutation({
+    mutationFn: () => productsApi.remove(product.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['products'] })
+      onClose()
+    },
+  })
+
   const serverError = mutation.error?.response?.data?.error
+    || deleteMut.error?.response?.data?.error
 
   return createPortal(
     <div
@@ -646,14 +656,31 @@ function ProductModal({ product: initialProduct, onClose }) {
             </div>
           )}
 
-          <div className="flex justify-end gap-3 pt-2 border-t border-line-subtle">
-            <button type="button" onClick={onClose} className="btn-secondary" disabled={isSubmitting}>
-              {justCreated ? 'Cerrar' : 'Cancelar'}
-            </button>
-            <button type="submit" disabled={isSubmitting} className="btn-primary">
-              {isSubmitting && <Spinner className="w-4 h-4" />}
-              {uploadProgress || (isEditing ? 'Guardar cambios' : 'Crear producto')}
-            </button>
+          <div className="flex items-center justify-between gap-3 pt-2 border-t border-line-subtle">
+            <div>
+              {isEditing && (
+                <Can do="products:delete">
+                  <button type="button" disabled={deleteMut.isPending || isSubmitting}
+                    onClick={() => {
+                      if (confirm(`¿Eliminar el producto "${product.name}"?\n\nSolo se puede si no tiene movimientos asociados. Esta acción no se puede deshacer.`)) {
+                        deleteMut.mutate()
+                      }
+                    }}
+                    className="btn-ghost text-status-danger hover:bg-status-danger/10 disabled:opacity-50">
+                    {deleteMut.isPending ? <Spinner className="w-4 h-4" /> : 'Eliminar'}
+                  </button>
+                </Can>
+              )}
+            </div>
+            <div className="flex gap-3">
+              <button type="button" onClick={onClose} className="btn-secondary" disabled={isSubmitting}>
+                {justCreated ? 'Cerrar' : 'Cancelar'}
+              </button>
+              <button type="submit" disabled={isSubmitting} className="btn-primary">
+                {isSubmitting && <Spinner className="w-4 h-4" />}
+                {uploadProgress || (isEditing ? 'Guardar cambios' : 'Crear producto')}
+              </button>
+            </div>
           </div>
         </form>
       </div>
@@ -671,6 +698,8 @@ function PackOptionsEditor({ product }) {
   })
 
   const [newRow, setNewRow] = useState({ packUnit: '', basePerPack: '', satUnitCode: 'H87' })
+  const [editingId, setEditingId] = useState(null)
+  const [editRow, setEditRow]     = useState({ packUnit: '', basePerPack: '', satUnitCode: '' })
   const [error, setError]   = useState(null)
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['pack-options', product.id] })
@@ -690,6 +719,28 @@ function PackOptionsEditor({ product }) {
     mutationFn: (id) => productsApi.updatePackOption(product.id, id, { isDefault: true }),
     onSuccess: invalidate,
   })
+
+  // Editar una presentación existente (incluida la default).
+  const editMut = useMutation({
+    mutationFn: () => productsApi.updatePackOption(product.id, editingId, {
+      packUnit:    editRow.packUnit.trim(),
+      basePerPack: parseFloat(editRow.basePerPack),
+      satUnitCode: editRow.satUnitCode.trim().toUpperCase(),
+    }),
+    onSuccess: () => { invalidate(); setEditingId(null); setError(null) },
+    onError: (e) => setError(e.response?.data?.error || e.message),
+  })
+
+  function startEdit(opt) {
+    setError(null)
+    setEditingId(opt.id)
+    setEditRow({ packUnit: opt.pack_unit, basePerPack: String(opt.base_per_pack), satUnitCode: opt.sat_unit_code })
+  }
+  function saveEdit() {
+    if (!editRow.packUnit.trim()) return setError('Captura el nombre de la unidad.')
+    if (!editRow.basePerPack || parseFloat(editRow.basePerPack) <= 0) return setError('Captura cuántas unidades base contiene.')
+    editMut.mutate()
+  }
 
   const deleteMut = useMutation({
     mutationFn: (id) => productsApi.deletePackOption(product.id, id),
@@ -728,13 +779,29 @@ function PackOptionsEditor({ product }) {
               </tr>
             </thead>
             <tbody>
-              {options.map(opt => (
+              {options.map(opt => {
+                const isEd = editingId === opt.id
+                return (
                 <tr key={opt.id}>
-                  <td className="font-medium text-ink-primary">{opt.pack_unit}</td>
-                  <td className="text-right font-mono tabular-nums">
-                    {Number(opt.base_per_pack).toLocaleString('es-MX')} {baseUnit}
+                  <td className="font-medium text-ink-primary">
+                    {isEd ? (
+                      <input className="input text-xs py-1" value={editRow.packUnit}
+                        onChange={e => setEditRow(r => ({ ...r, packUnit: e.target.value }))} />
+                    ) : opt.pack_unit}
                   </td>
-                  <td className="font-mono text-ink-muted">{opt.sat_unit_code}</td>
+                  <td className="text-right font-mono tabular-nums">
+                    {isEd ? (
+                      <input className="input text-xs py-1 text-right w-24" type="number" step="0.01" min="0"
+                        value={editRow.basePerPack}
+                        onChange={e => setEditRow(r => ({ ...r, basePerPack: e.target.value }))} />
+                    ) : <>{Number(opt.base_per_pack).toLocaleString('es-MX')} {baseUnit}</>}
+                  </td>
+                  <td className="font-mono text-ink-muted">
+                    {isEd ? (
+                      <input className="input text-xs py-1 w-20 uppercase" value={editRow.satUnitCode}
+                        onChange={e => setEditRow(r => ({ ...r, satUnitCode: e.target.value }))} />
+                    ) : opt.sat_unit_code}
+                  </td>
                   <td className="text-center">
                     {opt.is_default ? (
                       <span className="text-[10px] font-bold uppercase tracking-wide bg-brand-500/15 text-brand-300 px-1.5 py-0.5 rounded">Default</span>
@@ -743,17 +810,30 @@ function PackOptionsEditor({ product }) {
                         className="text-[10px] text-brand-300 hover:underline">marcar</button>
                     )}
                   </td>
-                  <td>
-                    {!opt.is_default && (
-                      <button type="button"
-                        onClick={() => { if (confirm(`Eliminar presentación "${opt.pack_unit}"?`)) deleteMut.mutate(opt.id) }}
-                        className="text-ink-muted hover:text-status-danger">
-                        <IconX />
-                      </button>
+                  <td className="text-right whitespace-nowrap">
+                    {isEd ? (
+                      <div className="flex items-center gap-2 justify-end">
+                        <button type="button" onClick={saveEdit} disabled={editMut.isPending}
+                          className="text-[10px] font-semibold text-brand-300 hover:underline">Guardar</button>
+                        <button type="button" onClick={() => { setEditingId(null); setError(null) }}
+                          className="text-[10px] text-ink-muted hover:underline">Cancelar</button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 justify-end">
+                        <button type="button" onClick={() => startEdit(opt)}
+                          className="text-[10px] text-brand-300 hover:underline">Editar</button>
+                        {!opt.is_default && (
+                          <button type="button"
+                            onClick={() => { if (confirm(`Eliminar presentación "${opt.pack_unit}"?`)) deleteMut.mutate(opt.id) }}
+                            className="text-ink-muted hover:text-status-danger">
+                            <IconX />
+                          </button>
+                        )}
+                      </div>
                     )}
                   </td>
                 </tr>
-              ))}
+              )})}
             </tbody>
           </table>
         </div>

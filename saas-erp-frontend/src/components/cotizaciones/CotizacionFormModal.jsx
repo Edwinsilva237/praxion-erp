@@ -45,7 +45,7 @@ export function CotizacionFormModal({ onClose, onCreated }) {
   const searchPartners = useCallback(async (q) => {
     const res = await partnersApi.list({ search: q, type: 'customer', limit: 20 })
     return (res.data || res).map(p => ({
-      id: p.id, label: p.name, sub: p.rfc || '',
+      id: p.id, label: p.name, sub: [p.rfc, p.tax_name && p.tax_name !== p.name ? p.tax_name : null].filter(Boolean).join(' · '),
       email: p.email || '',
     }))
   }, [])
@@ -383,6 +383,10 @@ export function CotizacionFormModal({ onClose, onCreated }) {
                 </div>
               )
             })}
+            <button type="button" onClick={addLine}
+              className="w-full border border-dashed border-line-base rounded-xl py-2.5 text-sm font-medium text-brand-300 hover:bg-brand-500/5 transition-colors">
+              + Agregar artículo
+            </button>
           </div>
 
           {/* Total */}

@@ -426,6 +426,11 @@ function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
           </div>
         ))}
 
+        <button type="button" onClick={() => setLines(p => [...p, EMPTY_LINE_MP()])}
+          className="w-full border border-dashed border-line-base rounded-xl py-2.5 text-sm font-medium text-brand-300 hover:bg-brand-500/5 transition-colors">
+          + Agregar artículo
+        </button>
+
         <TotalesBlock lines={lines} currency={currency} exchangeRate={exchangeRate} applyTax={applyTax} setApplyTax={setApplyTax} />
       </div>
 
@@ -678,6 +683,11 @@ function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
             </div>
           </div>
         ))}
+
+        <button type="button" onClick={() => setLines(p => [...p, EMPTY_LINE_PT()])}
+          className="w-full border border-dashed border-line-base rounded-xl py-2.5 text-sm font-medium text-brand-300 hover:bg-brand-500/5 transition-colors">
+          + Agregar artículo
+        </button>
 
         <TotalesBlock lines={lines} currency={currency} exchangeRate={exchangeRate} applyTax={applyTax} setApplyTax={setApplyTax} />
       </div>

@@ -134,6 +134,21 @@ router.patch('/:id', checkPermission('products', 'update'), async (req, res, nex
   } catch (err) { next(err) }
 })
 
+// DELETE /api/products/:id — borra un producto sin movimientos (solo admin via
+// permiso products:delete, otorgado únicamente a super_admin en mig 184).
+router.delete('/:id', checkPermission('products', 'delete'), async (req, res, next) => {
+  try {
+    const result = await productService.deleteProduct({
+      tenantId:  req.tenant.id,
+      productId: req.params.id,
+      userId:    req.auth.userId,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    })
+    res.json({ message: `Producto ${result.name} eliminado.`, ...result })
+  } catch (err) { next(err) }
+})
+
 // ─── Presentaciones (pack options) ──────────────────────────────────────────
 
 router.get('/:id/pack-options', checkPermission('products', 'read'), async (req, res, next) => {

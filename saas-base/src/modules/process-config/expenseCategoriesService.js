@@ -48,13 +48,34 @@ function slugify(name) {
     .slice(0, 40) || 'gasto'
 }
 
+// Deriva un code ÚNICO dentro del tenant a partir del slug del nombre. Si el
+// slug ya existe (p. ej. la categoría sembrada "renta"), agrega sufijo numérico
+// (renta_2, renta_3…). Así crear una categoría NUNCA falla por colisión de slug
+// cuando el usuario solo capturó el nombre — puede crear las que necesite.
+async function uniqueCode({ tenantId, base }) {
+  const root = base.slice(0, 36) || 'gasto'  // deja lugar para el sufijo _NN (col es 40)
+  const { rows } = await query(
+    `SELECT code FROM tenant_expense_categories
+      WHERE tenant_id = $1 AND (code = $2 OR code LIKE $2 || '_%')`,
+    [tenantId, root]
+  )
+  const taken = new Set(rows.map(r => r.code))
+  if (!taken.has(root)) return root
+  let n = 2
+  while (taken.has(`${root}_${n}`)) n++
+  return `${root}_${n}`
+}
+
 async function createCategory({
   tenantId, userId, code, name, affectsCost = false, sortOrder = 0,
   ipAddress, userAgent,
 }) {
   if (!name) throw badReq('name es requerido.')
   if (typeof affectsCost !== 'boolean') throw badReq('affects_cost debe ser boolean.')
-  const finalCode = (code && String(code).trim()) || slugify(name)
+  // Code explícito → respetar (puede dar 409 abajo). Derivado del nombre → único.
+  const finalCode = (code && String(code).trim())
+    ? String(code).trim()
+    : await uniqueCode({ tenantId, base: slugify(name) })
 
   try {
     const { rows } = await query(

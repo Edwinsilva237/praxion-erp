@@ -165,6 +165,10 @@ export default function OccasionalInvoiceSection({
             </div>
           )
         })}
+        <button type="button" onClick={addLine}
+          className="w-full border border-dashed border-line-base rounded-xl py-2.5 text-sm font-medium text-teal-300 hover:bg-teal-500/5 transition-colors">
+          + Agregar concepto
+        </button>
       </div>
 
       {/* ── Retenciones (opcional) ───────────────────────────────────── */}

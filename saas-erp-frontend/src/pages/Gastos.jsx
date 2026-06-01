@@ -28,6 +28,14 @@ function PagoBadge({ status }) {
   return <span className={cls}>{label}</span>
 }
 
+// ── Forma de pago (mismo vocabulario que el módulo de pagos a proveedor) ─────
+const METHOD_OPTS = [
+  ['transfer', 'Transferencia'],
+  ['cash',     'Efectivo'],
+  ['check',    'Cheque'],
+]
+const methodLabel = (m) => (METHOD_OPTS.find(([v]) => v === m)?.[1]) || null
+
 // ── Modal: registrar gasto ─────────────────────────────────────────────────
 function GastoModal({ categories, onClose, onSaved }) {
   const [supplierId, setSupplierId]   = useState('')
@@ -38,6 +46,9 @@ function GastoModal({ categories, onClose, onSaved }) {
   const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [subtotal, setSubtotal]       = useState('')
   const [tax, setTax]                 = useState('')
+  const [paymentMethod, setPaymentMethod] = useState('transfer')
+  const [markPaid, setMarkPaid]       = useState(false)
+  const [paymentReference, setPaymentReference] = useState('')
   const [notes, setNotes]             = useState('')
   const [error, setError]             = useState(null)
 
@@ -57,6 +68,9 @@ function GastoModal({ categories, onClose, onSaved }) {
       if (!supplierId) throw new Error('Selecciona el proveedor.')
       if (!categoryId) throw new Error('Selecciona la categoría de gasto.')
       if (total <= 0) throw new Error('Captura el monto del gasto.')
+      if (markPaid && paymentMethod === 'check' && !paymentReference.trim()) {
+        throw new Error('El número de cheque es requerido.')
+      }
       return purchasesApi.createExpense({
         supplierId,
         expenseCategoryId: categoryId,
@@ -64,6 +78,9 @@ function GastoModal({ categories, onClose, onSaved }) {
         uuidSat: hasCfdi ? (uuid.trim() || undefined) : undefined,
         invoiceDate,
         subtotal: sub, tax: iva, total,
+        paymentMethod,
+        markPaid,
+        paymentReference: markPaid ? (paymentReference.trim() || undefined) : undefined,
         notes: notes.trim() || undefined,
       })
     },
@@ -145,6 +162,35 @@ function GastoModal({ categories, onClose, onSaved }) {
             <span className="text-sm text-ink-muted">Total</span>
             <span className="text-base font-bold text-brand-300 tabular-nums">{fmtMXN(total)}</span>
           </div>
+        </div>
+
+        {/* ── Forma de pago + liquidación inmediata ── */}
+        <div className="border-t border-line-subtle pt-3 flex flex-col gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="label">Forma de pago</label>
+              <select className="select" value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
+                {METHOD_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+            {markPaid && (
+              <div>
+                <label className="label">
+                  Referencia
+                  {paymentMethod === 'check'
+                    ? <span className="text-status-danger"> *</span>
+                    : <span className="text-ink-muted text-xs"> (opcional)</span>}
+                </label>
+                <input className="input" value={paymentReference} onChange={e => setPaymentReference(e.target.value)}
+                  placeholder={paymentMethod === 'transfer' ? 'SPEI / folio' : paymentMethod === 'check' ? '# cheque' : 'Opcional'} />
+              </div>
+            )}
+          </div>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" className="w-4 h-4 accent-brand-600"
+              checked={markPaid} onChange={e => setMarkPaid(e.target.checked)} />
+            <span className="text-ink-secondary">Ya lo pagué — liquidar de inmediato (no queda como “Por pagar”)</span>
+          </label>
         </div>
 
         <div>
@@ -265,6 +311,7 @@ export default function Gastos() {
                 <div className="flex flex-wrap gap-2">
                   <CfdiBadge has={e.has_cfdi} />
                   <PagoBadge status={e.ap_status || e.status} />
+                  {methodLabel(e.payment_method) && <span className="badge-gray">{methodLabel(e.payment_method)}</span>}
                   {e.is_overdue && <span className="badge-red">Vencido</span>}
                 </div>
               </div>
@@ -297,6 +344,9 @@ export default function Gastos() {
                         <PagoBadge status={e.ap_status || e.status} />
                         {e.is_overdue && <span className="badge-red">Vencido</span>}
                       </div>
+                      {methodLabel(e.payment_method) && (
+                        <span className="text-[10px] text-ink-muted">{methodLabel(e.payment_method)}</span>
+                      )}
                     </td>
                   </tr>
                 ))}

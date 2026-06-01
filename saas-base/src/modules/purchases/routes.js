@@ -452,7 +452,7 @@ router.get('/expenses', checkPermission('expenses', 'read'), async (req, res, ne
  */
 router.post('/expenses', checkPermission('expenses', 'create'), async (req, res, next) => {
   try {
-    const { total } = req.body
+    const { total, markPaid, paymentMethod, paymentReference, paymentDate } = req.body
     if (!total) return res.status(400).json({ error: 'total es requerido.' })
     const expense = await supplierInvoiceService.registerInvoice({
       tenantId: req.tenant.id, ...req.body,
@@ -461,6 +461,25 @@ router.post('/expenses', checkPermission('expenses', 'create'), async (req, res,
       isExpense: true,
       userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
     })
+
+    // "Ya lo pagué": liquida el gasto al registrarlo con la misma forma de pago.
+    // Requiere proveedor del catálogo (es quien genera el CXP — ap_id). El gasto
+    // genérico no tiene CXP, así que ahí no se puede marcar pagado.
+    if (markPaid && expense.ap_id) {
+      await supplierInvoiceService.registerPayment({
+        tenantId: req.tenant.id,
+        supplierId: expense.partner_id,
+        paymentDate: paymentDate || req.body.invoiceDate || undefined,
+        method: paymentMethod || 'transfer',
+        reference: paymentReference || null,
+        amount: expense.total,
+        currency: expense.currency || 'MXN',
+        applications: [{ apId: expense.ap_id, amountApplied: expense.total_mxn }],
+        userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+      })
+      expense.ap_status = 'paid'
+    }
+
     res.status(201).json(expense)
   } catch (err) {
     if (err.code === '23505') {

@@ -85,9 +85,9 @@ function getDeliveryUrgency(scheduledDate) {
 }
 
 const URGENCY_ROW_CLASS = {
-  overdue: 'bg-status-danger/10 hover:bg-status-danger/15',
-  today:   'bg-status-warning/10 hover:bg-status-warning/15',
-  future:  'bg-status-success/10 hover:bg-status-success/15',
+  overdue: 'bg-status-danger/20 hover:bg-status-danger/25',
+  today:   'bg-status-warning/20 hover:bg-status-warning/25',
+  future:  'bg-status-success/15 hover:bg-status-success/20',
   none:    'hover:bg-surface-elevated/40',
 }
 
@@ -308,9 +308,9 @@ export default function VentasPedidos() {
                   </p>
                   {doneOrders.map(o => (
                     <button key={o.id} type="button" onClick={() => setSelectedId(o.id)}
-                      className={clsx('w-full text-left border rounded-xl p-3 transition-colors opacity-80',
-                        selectedId === o.id ? 'border-brand-500 bg-brand-500/10 opacity-100'
-                          : 'border-line-subtle bg-surface-primary hover:opacity-100')}>
+                      className={clsx('w-full text-left border rounded-xl p-3 transition-colors',
+                        selectedId === o.id ? 'border-brand-500 bg-brand-500/10'
+                          : 'border-line-subtle bg-surface-elevated/30 opacity-60 hover:opacity-100')}>
                       <div className="flex items-start justify-between gap-2">
                         <span className="font-mono font-semibold text-brand-300">{o.order_number}</span>
                         <Badge status={o.status} />
@@ -425,8 +425,8 @@ export default function VentasPedidos() {
                     <tr key={o.id}
                       onClick={() => setSelectedId(o.id)}
                       className={clsx(
-                        'cursor-pointer transition-colors opacity-80',
-                        selectedId === o.id ? 'bg-brand-500/15 opacity-100' : 'hover:bg-surface-elevated/40 hover:opacity-100'
+                        'cursor-pointer transition-colors',
+                        selectedId === o.id ? 'bg-brand-500/15' : 'bg-surface-elevated/40 opacity-60 hover:opacity-100 hover:bg-surface-elevated/60'
                       )}>
                       <td className="font-mono font-semibold text-brand-300">{o.order_number}</td>
                       <td>

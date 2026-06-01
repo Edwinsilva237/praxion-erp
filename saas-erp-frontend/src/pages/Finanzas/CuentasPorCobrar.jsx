@@ -68,7 +68,7 @@ export default function CuentasPorCobrar() {
 
   const searchPartners = useCallback(async (q) => {
     const res = await partnersApi.list({ search: q, type: 'customer', limit: 20 })
-    return (res.data || res).map(p => ({ id: p.id, label: p.name, sub: p.rfc || '' }))
+    return (res.data || res).map(p => ({ id: p.id, label: p.name, sub: [p.rfc, p.tax_name && p.tax_name !== p.name ? p.tax_name : null].filter(Boolean).join(' · ') }))
   }, [])
 
   // Filtro local por búsqueda libre

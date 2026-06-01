@@ -484,6 +484,68 @@ async function getQualitySpecHistory({ tenantId, productId }) {
   return rows
 }
 
+/**
+ * Elimina un producto SOLO si no tiene movimientos/actividad asociada.
+ * Permiso `products:delete` (solo admin) ya verificado en la ruta. La config
+ * propia del producto (pack_options, quality_specs, recipes, allergens,
+ * customer_prices) cae por ON DELETE CASCADE; los adjuntos (referencia
+ * polimórfica, sin FK) se limpian explícitamente.
+ */
+async function deleteProduct({ tenantId, productId, userId, ipAddress, userAgent }) {
+  return withTransaction(async (client) => {
+    const { rows: prod } = await client.query(
+      `SELECT id, sku, name FROM products WHERE id = $1 AND tenant_id = $2`,
+      [productId, tenantId]
+    )
+    if (!prod.length) throw createError(404, 'Producto no encontrado.')
+
+    // Guard: cualquier rastro de actividad bloquea el borrado. product_id es
+    // único y ya pertenece a este tenant, así que basta filtrar por él en las
+    // tablas de línea (no traen tenant_id). El kardex es polimórfico.
+    const { rows: act } = await client.query(
+      `SELECT
+         EXISTS(SELECT 1 FROM inventory_movements WHERE tenant_id=$2 AND item_type='product' AND item_id=$1) AS movements,
+         EXISTS(SELECT 1 FROM product_lots        WHERE product_id=$1) AS lots,
+         EXISTS(SELECT 1 FROM production_orders   WHERE product_id=$1) AS production,
+         EXISTS(SELECT 1 FROM sales_order_lines   WHERE product_id=$1) AS orders,
+         EXISTS(SELECT 1 FROM delivery_note_lines WHERE product_id=$1) AS remisiones,
+         EXISTS(SELECT 1 FROM invoice_lines       WHERE product_id=$1) AS invoices,
+         EXISTS(SELECT 1 FROM quotation_lines     WHERE product_id=$1) AS quotes`,
+      [productId, tenantId]
+    )
+    const a = act[0]
+    const reasons = []
+    if (a.movements)  reasons.push('movimientos de inventario')
+    if (a.lots)       reasons.push('lotes')
+    if (a.production)  reasons.push('órdenes de producción')
+    if (a.orders)     reasons.push('pedidos')
+    if (a.remisiones) reasons.push('remisiones')
+    if (a.invoices)   reasons.push('facturas')
+    if (a.quotes)     reasons.push('cotizaciones')
+    if (reasons.length) {
+      throw createError(409,
+        `No se puede eliminar: el producto tiene ${reasons.join(', ')} asociado(s). Desactívalo en su lugar.`)
+    }
+
+    // Adjuntos (imagen/COA/fichas) — referencia polimórfica, sin FK a products.
+    await client.query(
+      `DELETE FROM attachments WHERE tenant_id=$2 AND entity_type='product' AND entity_id=$1`,
+      [productId, tenantId]
+    )
+
+    await client.query(`DELETE FROM products WHERE id=$1 AND tenant_id=$2`, [productId, tenantId])
+
+    await audit({
+      tenantId, userId, action: 'product.deleted',
+      resource: 'products', resourceId: productId,
+      payload: { sku: prod[0].sku, name: prod[0].name },
+      ipAddress, userAgent,
+    })
+
+    return { id: productId, sku: prod[0].sku, name: prod[0].name }
+  })
+}
+
 function createError(status, message) {
   const err = new Error(message)
   err.status = status
@@ -494,4 +556,5 @@ module.exports = {
   listProducts, getProduct, createProduct,
   updateProduct, addQualitySpec, getQualitySpecHistory,
   listPackOptions, createPackOption, updatePackOption, deletePackOption,
+  deleteProduct,
 }

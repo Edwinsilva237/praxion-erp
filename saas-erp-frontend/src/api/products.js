@@ -13,6 +13,10 @@ export const productsApi = {
   update: (id, body) =>
     api.patch(`/products/${id}`, body).then((r) => r.data),
 
+  // Borrado (solo admin; el backend rechaza si tiene movimientos asociados)
+  remove: (id) =>
+    api.delete(`/products/${id}`).then((r) => r.data),
+
   // Specs de calidad (solo esquineros)
   getQualitySpecs: (id) =>
     api.get(`/products/${id}/quality-specs`).then((r) => r.data),

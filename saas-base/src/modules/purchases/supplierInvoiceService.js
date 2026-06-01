@@ -38,6 +38,7 @@ async function registerInvoice({
   creditDays = 0, notes,
   xmlContent = null,
   isExpense = false, expenseCategoryId = null,  // módulo de Gastos (Fase 1)
+  paymentMethod = null,                         // forma de pago del gasto (mig 183)
   userId, ipAddress, userAgent,
 }) {
   return withTransaction(async (client) => {
@@ -45,6 +46,9 @@ async function registerInvoice({
     if (!documentNumber) throw createError(400, 'documentNumber es requerido.')
     if (!total || total <= 0) throw createError(400, 'total debe ser mayor a cero.')
     if (!supplierId && !genericSupplier) throw createError(400, 'supplierId o genericSupplier es requerido.')
+    if (paymentMethod && !['transfer', 'cash', 'check'].includes(paymentMethod)) {
+      throw createError(400, 'paymentMethod inválido (transfer | cash | check).')
+    }
 
     // Verificar duplicado por UUID SAT
     if (uuidSat) {
@@ -141,8 +145,8 @@ async function registerInvoice({
           invoice_date, due_date, received_date,
           reconciliation_status, reconciliation_diff,
           is_expense, expense_category_id,
-          xml_content, notes, created_by)
-       VALUES ($1,$2,$3,'pending',$4,$5,$6,$7,$8::uuid,$8::varchar,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18,$19::date,$20::date,$19::date,$21,$22,$23,$24,$25,$26,$27)
+          xml_content, notes, created_by, payment_method)
+       VALUES ($1,$2,$3,'pending',$4,$5,$6,$7,$8::uuid,$8::varchar,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18,$19::date,$20::date,$19::date,$21,$22,$23,$24,$25,$26,$27,$28)
        RETURNING *`,
       [tenantId, documentNumber,
        documentType === 'remission' ? 'remission' : 'invoice',
@@ -154,7 +158,7 @@ async function registerInvoice({
        issueDate, dueDate,
        reconStatus, reconDiff,
        !!isExpense, expenseCategoryId || null,
-       xmlContent || null, notes || null, userId]
+       xmlContent || null, notes || null, userId, paymentMethod || null]
     )
     const invoice = invRows[0]
 
@@ -524,7 +528,7 @@ async function listExpenses({ tenantId, categoryId, status, hasCfdi, from, to, s
             si.uuid_sat, si.invoice_date, si.due_date,
             si.currency, si.subtotal, si.tax, si.total, si.total_mxn,
             si.generic_supplier, si.notes,
-            si.expense_category_id,
+            si.expense_category_id, si.payment_method,
             ec.name AS expense_category_name,
             bp.name AS partner_name, bp.rfc AS partner_rfc,
             ap.id AS ap_id, ap.status AS ap_status,

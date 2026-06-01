@@ -14,8 +14,9 @@ async function listPartners({ tenantId, type, isActive, search, includeOccasiona
   if (type)     { params.push(type);    filters.push(`bp.type = $${params.length}`) }
   if (isActive !== undefined) { params.push(isActive); filters.push(`bp.is_active = $${params.length}`) }
   if (search) {
+    // Busca por nombre comercial (name), razón social (tax_name) o RFC.
     params.push(`%${search}%`)
-    filters.push(`(bp.name ILIKE $${params.length} OR bp.rfc ILIKE $${params.length})`)
+    filters.push(`(bp.name ILIKE $${params.length} OR bp.tax_name ILIKE $${params.length} OR bp.rfc ILIKE $${params.length})`)
   }
   // Los clientes ocasionales se ocultan del catálogo principal salvo opt-in.
   if (!includeOccasional) filters.push('bp.is_occasional = false')
@@ -24,7 +25,7 @@ async function listPartners({ tenantId, type, isActive, search, includeOccasiona
   params.push(limit, offset)
 
   const { rows } = await query(
-    `SELECT bp.id, bp.type, bp.person_type, bp.name, bp.rfc, bp.internal_code,
+    `SELECT bp.id, bp.type, bp.person_type, bp.name, bp.tax_name, bp.rfc, bp.internal_code,
             bp.credit_type, bp.credit_days, bp.credit_limit,
             bp.city, bp.state, bp.is_active, bp.is_occasional, bp.created_at,
             COUNT(DISTINCT bpc.id) AS contact_count,
