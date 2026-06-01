@@ -137,7 +137,7 @@ function Section({ number, title, badge, children, className }) {
 }
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
-function ProductModal({ product: initialProduct, onClose }) {
+function ProductModal({ product: initialProduct, cloneFrom = null, onClose }) {
   const queryClient  = useQueryClient()
   // Después de crear un producto nuevo, el modal NO se cierra: transiciona a
   // modo edición para que el usuario configure presentaciones (rollo, millar,
@@ -147,6 +147,11 @@ function ProductModal({ product: initialProduct, onClose }) {
   const [savedProduct, setSavedProduct] = useState(initialProduct)
   const product = savedProduct
   const isEditing = !!product
+  // Origen para pre-llenar: el producto en edición, o el que estamos DUPLICANDO.
+  // Al clonar se copian todos los campos EXCEPTO el SKU (debe ser único) — el
+  // usuario ajusta nombre, descripción y precio. isEditing sigue false → crea uno nuevo.
+  const source = product || cloneFrom
+  const isCloning = !product && !!cloneFrom
   // `justCreated` distingue "se acaba de crear en este modal" de "abriste el
   // modal directamente sobre un producto preexistente". Solo lo usamos para
   // mostrar el banner informativo y para decidir si tras un segundo submit
@@ -164,30 +169,32 @@ function ProductModal({ product: initialProduct, onClose }) {
   } = useForm({
     resolver: zodResolver(schema),
     defaultValues: {
-      type:            product?.type             || 'resale',
-      isProduced:      product?.is_produced ?? (product?.type === 'corner_protector') ?? false,
-      productKindId:   product?.product_kind_id  || '',
+      type:            source?.type             || 'resale',
+      isProduced:      source?.is_produced ?? (source?.type === 'corner_protector') ?? false,
+      productKindId:   source?.product_kind_id  || '',
+      // El SKU NO se copia al clonar (debe ser único): la sugerencia/usuario lo llena.
       sku:             product?.sku              || '',
-      name:            product?.name             || '',
-      saleUnit:        product?.sale_unit        || 'pieza',
-      unitsPerPackage: product?.qualitySpec?.units_per_package ?? product?.units_per_package ?? null,
-      description:     product?.description      || '',
-      satProductCode:  product?.sat_product_code || '44102305',
-      satUnitCode:     product?.sat_unit_code    || 'H87',
-      objetoImp:       product?.objeto_imp       || '02',
-      taxFactor:       product?.tax_factor       || 'Tasa',
-      taxRate:         product?.tax_rate != null ? Number(product.tax_rate) : 16,
+      name:            source?.name             || '',
+      saleUnit:        source?.sale_unit        || 'pieza',
+      unitsPerPackage: source?.qualitySpec?.units_per_package ?? source?.units_per_package ?? null,
+      description:     source?.description      || '',
+      satProductCode:  source?.sat_product_code || '44102305',
+      satUnitCode:     source?.sat_unit_code    || 'H87',
+      objetoImp:       source?.objeto_imp       || '02',
+      taxFactor:       source?.tax_factor       || 'Tasa',
+      taxRate:         source?.tax_rate != null ? Number(source.tax_rate) : 16,
+      // Un producto clonado nace activo (no se copia el is_active del origen).
       isActive:        product?.is_active        ?? true,
-      leadTimeDays:    product?.lead_time_days   ?? 7,
-      basePrice:       product?.base_price != null ? Number(product.base_price) : '',
-      baseCurrency:    product?.base_currency    || 'MXN',
-      // Campos del modelo lineal — vacíos por default. Si el producto existente
-      // ya tiene spec, los precargamos para no perder datos.
-      gramsPerLinearMeter: product?.qualitySpec?.grams_per_linear_meter
-        ? parseFloat(product.qualitySpec.grams_per_linear_meter) : '',
-      tolerancePct:        product?.qualitySpec?.tolerance_pct
-        ? parseFloat(product.qualitySpec.tolerance_pct) : '',
-      qualityNotes:        product?.qualitySpec?.notes || '',
+      leadTimeDays:    source?.lead_time_days   ?? 7,
+      basePrice:       source?.base_price != null ? Number(source.base_price) : '',
+      baseCurrency:    source?.base_currency    || 'MXN',
+      // Campos del modelo lineal — vacíos por default. Si el origen ya tiene spec,
+      // los precargamos para no perder datos (también al clonar).
+      gramsPerLinearMeter: source?.qualitySpec?.grams_per_linear_meter
+        ? parseFloat(source.qualitySpec.grams_per_linear_meter) : '',
+      tolerancePct:        source?.qualitySpec?.tolerance_pct
+        ? parseFloat(source.qualitySpec.tolerance_pct) : '',
+      qualityNotes:        source?.qualitySpec?.notes || '',
     },
   })
 
@@ -199,8 +206,8 @@ function ProductModal({ product: initialProduct, onClose }) {
   // edición si el producto existente ya tiene length_mm o gramsPerLinearMeter
   // capturados (para no esconder datos guardados).
   const hasExistingLinearData =
-    (product?.length_mm > 0)
-    || !!product?.qualitySpec?.grams_per_linear_meter
+    (source?.length_mm > 0)
+    || !!source?.qualitySpec?.grams_per_linear_meter
   const [linealMode, setLinealMode] = useState(hasExistingLinearData)
   const [specsExpanded, setSpecsExpanded] = useState(hasExistingLinearData)
 
@@ -350,13 +357,15 @@ function ProductModal({ product: initialProduct, onClose }) {
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-base font-semibold text-ink-primary">
-                {isEditing ? 'Editar producto' : 'Nuevo producto'}
+                {isEditing ? 'Editar producto' : isCloning ? 'Duplicar producto' : 'Nuevo producto'}
               </h2>
             </div>
             <p className="text-xs text-ink-muted mt-0.5">
               {isEditing
                 ? `${product.sku} — ${product.is_produced ? 'Se fabrica internamente' : 'Producto de reventa'}`
-                : 'Captura SKU, datos fiscales y unidad de venta'}
+                : isCloning
+                  ? `Copia de ${cloneFrom.sku} — ajusta SKU, nombre, descripción y precio`
+                  : 'Captura SKU, datos fiscales y unidad de venta'}
             </p>
           </div>
           <button type="button" onClick={onClose} className="btn-ghost btn-icon">
@@ -981,6 +990,13 @@ export default function Productos() {
     setModal(full)
   }
 
+  // Duplicar: carga el producto completo y abre el form en modo CREACIÓN
+  // pre-llenado con sus datos (menos el SKU). Agiliza capturar productos similares.
+  async function openClone(prod) {
+    const full = await productsApi.get(prod.id)
+    setModal({ clone: full })
+  }
+
   async function exportCSV() {
     setExporting(true)
     try {
@@ -1144,13 +1160,24 @@ export default function Productos() {
                       />
                     </td>
                     <td>
-                      <Can do="products:update">
-                        <button onClick={() => openEdit(p)}
-                          className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-brand-300"
-                          title="Editar">
-                          <IconEdit />
-                        </button>
-                      </Can>
+                      <div className="flex items-center justify-end gap-0.5">
+                        <Can do="products:create">
+                          <button onClick={() => openClone(p)}
+                            className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-brand-300"
+                            title="Duplicar (crear uno similar)">
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h6a2 2 0 002-2v-2" />
+                            </svg>
+                          </button>
+                        </Can>
+                        <Can do="products:update">
+                          <button onClick={() => openEdit(p)}
+                            className="btn-ghost btn-icon btn-sm text-ink-muted hover:text-brand-300"
+                            title="Editar">
+                            <IconEdit />
+                          </button>
+                        </Can>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1176,7 +1203,8 @@ export default function Productos() {
 
       {modal && (
         <ProductModal
-          product={modal === 'new' ? null : modal}
+          product={(modal === 'new' || modal?.clone) ? null : modal}
+          cloneFrom={modal?.clone || null}
           onClose={() => setModal(null)}
         />
       )}
