@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createPortal } from 'react-dom'
 import { pettyCashApi } from '@/api/pettyCash'
 import Spinner from '@/components/ui/Spinner'
 import useAuthStore from '@/store/useAuthStore'
+import { useDocumentScanner } from '@/hooks/useDocumentScanner'
 import clsx from 'clsx'
 
 const fmtMXN  = (n) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(n || 0)
@@ -281,13 +282,60 @@ function KpiCard({ label, value, tone = 'neutral' }) {
 // ── Modal de captura ──────────────────────────────────────────────────────
 function CaptureMovementModal({ fund, kind, onClose }) {
   const qc = useQueryClient()
+  const fileInputRef = useRef(null)
+  const { isSupported: scanSupported, scanToPdf } = useDocumentScanner()
   const [amount, setAmount]           = useState('')
   const [categoryId, setCategoryId]   = useState('')
   const [description, setDescription] = useState('')
   const [paidTo, setPaidTo]           = useState('')
   const [occurredAt, setOccurredAt]   = useState(() => new Date().toISOString().slice(0, 10))
   const [receipt, setReceipt]         = useState(null)
+  const [receiptPreview, setPreview]  = useState(null) // dataURL (solo imágenes)
+  const [pageCount, setPageCount]     = useState(null) // si el comprobante es un PDF escaneado
+  const [scanning, setScanning]       = useState(false)
   const [error, setError]             = useState(null)
+
+  function handleFile(f) {
+    if (!f) return
+    if (f.size > 5 * 1024 * 1024) { setError('El archivo excede 5MB. Usa uno más pequeño.'); return }
+    setError(null)
+    setReceipt(f)
+    setPageCount(null)
+    if (f.type.startsWith('image/')) {
+      const reader = new FileReader()
+      reader.onload = ev => setPreview(ev.target.result)
+      reader.readAsDataURL(f)
+    } else {
+      setPreview(null)
+    }
+  }
+
+  // Escáner de documentos (ML Kit) → PDF, igual que en remisiones y recepciones.
+  async function handleScan() {
+    setError(null)
+    setScanning(true)
+    try {
+      const res = await scanToPdf({ pageLimit: 5, fileName: 'comprobante-caja-chica.pdf' })
+      if (res?.file) {
+        if (res.file.size > 5 * 1024 * 1024) { setError('El documento escaneado excede 5MB.'); return }
+        setReceipt(res.file)
+        setPreview(null)
+        setPageCount(res.pageCount || 1)
+      }
+    } catch (e) {
+      const msg = String(e?.message || '')
+      if (!/cancel/i.test(msg)) setError('No se pudo escanear: ' + (e?.message || 'inténtalo de nuevo'))
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  function clearReceipt() {
+    setReceipt(null)
+    setPreview(null)
+    setPageCount(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
 
   const { data: catsResp } = useQuery({
     queryKey: ['petty-cash', 'categories', kind],
@@ -390,10 +438,79 @@ function CaptureMovementModal({ fund, kind, onClose }) {
 
         <div>
           <label className="label">Comprobante <span className="text-[10px] text-ink-muted">(opcional · JPG/PNG/PDF, máx 5MB)</span></label>
-          <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
-            onChange={e => setReceipt(e.target.files?.[0] || null)}
-            className="text-xs" />
-          {receipt && <p className="text-[10px] text-ink-muted mt-1">{receipt.name}</p>}
+          {receipt ? (
+            <div className="relative">
+              {receiptPreview ? (
+                <img src={receiptPreview} alt="Comprobante"
+                  className="w-full max-h-56 object-contain rounded-xl border border-line-subtle bg-surface-elevated/40" />
+              ) : (
+                <div className="flex items-center gap-3 rounded-xl border border-line-subtle bg-surface-elevated/40 p-4">
+                  <svg className="w-9 h-9 text-status-danger shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
+                  </svg>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-ink-primary truncate">
+                      {pageCount ? 'Documento escaneado (PDF)' : receipt.name}
+                    </p>
+                    <p className="text-xs text-ink-muted">
+                      {pageCount ? `${pageCount} página${pageCount > 1 ? 's' : ''} · ` : ''}{(receipt.size / 1024).toFixed(0)} KB
+                    </p>
+                  </div>
+                </div>
+              )}
+              <button type="button" onClick={clearReceipt}
+                className="absolute top-2 right-2 bg-surface-primary/95 hover:bg-surface-primary border border-line-subtle rounded-full p-1.5 shadow-sm">
+                <svg className="w-3.5 h-3.5 text-ink-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+          ) : scanSupported ? (
+            /* Nativo: escáner ML Kit (encuadre + auto-crop + perspectiva + PDF) */
+            <div className="flex flex-col gap-2">
+              <button type="button" onClick={handleScan} disabled={scanning}
+                className="btn-primary justify-center">
+                {scanning ? <Spinner size="sm" /> : (
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7V5a1 1 0 011-1h2M4 17v2a1 1 0 001 1h2m10-16h2a1 1 0 011 1v2m-3 13h2a1 1 0 001-1v-2M7 12h10"/>
+                  </svg>
+                )}
+                Escanear comprobante
+              </button>
+              <label className="btn-secondary justify-center cursor-pointer">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-5l-4-4m0 0L8 7m4-4v12"/>
+                </svg>
+                Subir archivo
+                <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
+                  onChange={e => handleFile(e.target.files?.[0])} className="hidden" />
+              </label>
+              <p className="text-[11px] text-ink-muted text-center">
+                Escanea el ticket con encuadre y mejora automática (guarda PDF), o sube un archivo. Hasta 5MB.
+              </p>
+            </div>
+          ) : (
+            /* Web: cámara / subir archivo (sin escáner nativo) */
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col items-center justify-center gap-1.5 border-2 border-dashed border-line-subtle rounded-xl p-5 cursor-pointer hover:border-brand-500/40 hover:bg-brand-500/10 transition-colors">
+                <svg className="w-7 h-7 text-ink-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
+                </svg>
+                <span className="text-xs text-ink-secondary font-medium">Tomar foto</span>
+                <input type="file" accept="image/*" capture="environment"
+                  onChange={e => handleFile(e.target.files?.[0])} className="hidden" />
+              </label>
+              <label className="flex flex-col items-center justify-center gap-1.5 border-2 border-dashed border-line-subtle rounded-xl p-5 cursor-pointer hover:border-brand-500/40 hover:bg-brand-500/10 transition-colors">
+                <svg className="w-7 h-7 text-ink-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-5l-4-4m0 0L8 7m4-4v12"/>
+                </svg>
+                <span className="text-xs text-ink-secondary font-medium">Subir archivo</span>
+                <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
+                  onChange={e => handleFile(e.target.files?.[0])} className="hidden" />
+              </label>
+            </div>
+          )}
         </div>
 
         {error && <p className="field-error">{error}</p>}
