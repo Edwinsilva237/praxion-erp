@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useNavigate } from 'react-router-dom'
-import api from '@/api/axios'
+import api, { warmUpServer } from '@/api/axios'
 import { authApi } from '@/api/auth'
 import useAuthStore from '@/store/useAuthStore'
 import Spinner from '@/components/ui/Spinner'
@@ -30,16 +30,6 @@ function loginErrorMessage(err) {
     return err.response.data?.error || 'Correo o contraseña incorrectos.'
   }
   return err.response.data?.error || err.response.data?.message || 'Ocurrió un error. Vuelve a intentar.'
-}
-
-// Pre-calienta el backend al abrir el login: si está dormido, empieza a
-// despertar mientras el usuario escribe sus datos. Best-effort: ignora errores
-// y usa no-cors (la petición igual llega al servidor y lo despierta).
-function warmUpServer() {
-  const base = import.meta.env.VITE_API_URL
-  if (!base) return // dev con proxy: no hay arranque frío que calentar
-  const healthUrl = base.replace(/\/api\/?$/, '') + '/health'
-  try { fetch(healthUrl, { mode: 'no-cors', cache: 'no-store' }).catch(() => {}) } catch { /* noop */ }
 }
 
 // ── Modal: Olvidé contraseña ───────────────────────────────────────────────

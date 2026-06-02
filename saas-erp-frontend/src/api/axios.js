@@ -52,10 +52,43 @@ if (subdomainSlug) {
 // corre en `https://localhost`, así que un baseURL relativo `/api` apuntaría al
 // propio bundle. Por eso en nativo SIEMPRE usamos una URL absoluta — la del
 // build si se definió, o el backend de producción como red de seguridad.
+//
+// ⚠️ DEBE ser el endpoint Render DIRECTO, NO el dominio Cloudflare
+// (`api.praxionops.com`): Cloudflare responde el preflight OPTIONS él mismo y NO
+// devuelve `Access-Control-Allow-Origin` para el origen `https://localhost` del
+// webview → bloquea TODA llamada de la app ("No pudimos contactar al servidor").
+// La web sí puede usar Cloudflare porque su origen es `*.praxionops.com`. Para la
+// latencia de la mañana confiamos en el warm-up (calienta esta conexión al abrir).
 const NATIVE_FALLBACK_API = 'https://praxion-api.onrender.com/api'
 const baseURL = Capacitor.isNativePlatform()
   ? (import.meta.env.VITE_API_URL || NATIVE_FALLBACK_API)
   : (import.meta.env.VITE_API_URL || '/api')
+
+// URL base ya resuelta (incluye el fallback nativo). Exportada para que el
+// pre-calentamiento del login derive el /health del MISMO backend que usa la
+// app — en la APK VITE_API_URL está vacío, así que leerla directo daba '' y el
+// warm-up nunca despertaba al servidor (solo la web pre-calentaba).
+export const API_BASE_URL = baseURL
+
+// ── Pre-calentamiento del backend (arranque frío de Render) ────────────────
+// Dispara un ping best-effort a /health para que el servidor, si estuvo
+// inactivo, empiece a despertar cuanto antes. Se llama al cargar este módulo
+// (= apenas abre la app, incluso para un usuario YA logueado que no ve el
+// login) y también desde la pantalla de login mientras el usuario teclea.
+// `no-cors`: la respuesta es opaca pero la petición SÍ llega y despierta al
+// server (clave en el webview nativo, cuyo origen no está en el CORS del API).
+export function warmUpServer() {
+  const base = API_BASE_URL
+  // Solo tiene sentido con base absoluta (web prod o app nativa). En dev la base
+  // es '/api' (relativa, vía proxy de Vite) → no hay arranque frío que calentar.
+  if (!/^https?:\/\//i.test(base)) return
+  const healthUrl = base.replace(/\/api\/?$/, '') + '/health'
+  try { fetch(healthUrl, { mode: 'no-cors', cache: 'no-store' }).catch(() => {}) } catch { /* noop */ }
+}
+
+// Despierta al servidor lo antes posible: este módulo se importa en el arranque
+// (stores + primera pantalla), así que el ping sale antes de pintar la UI.
+warmUpServer()
 
 const api = axios.create({
   baseURL,
