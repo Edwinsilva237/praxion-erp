@@ -355,6 +355,9 @@ async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, 
             dn.total_mxn, dn.issue_date, dn.credit_due_date,
             dn.receiver_name, dn.delivered_at, dn.synced_at,
             dn.no_invoice, dn.partner_id,
+            EXISTS(SELECT 1 FROM document_status_log dsl
+                    WHERE dsl.entity_type='delivery_note' AND dsl.entity_id = dn.id
+                      AND dsl.metadata->>'action'='price_adjusted') AS price_adjusted,
             bp.name AS partner_name, bp.tax_name AS partner_tax_name,
             so.order_number,
             so.po_number AS sales_order_po,
@@ -440,7 +443,21 @@ async function getDeliveryNote({ tenantId, noteId }) {
     [note.partner_id]
   )
 
-  return { ...note, lines, contacts }
+  // Historial de correcciones de precio (de adjustDeliveryNotePrices): quién,
+  // cuándo, la razón y el desglose viejo→nuevo. El dato vive en
+  // document_status_log (metadata.action='price_adjusted').
+  const { rows: priceAdjustments } = await query(
+    `SELECT dsl.created_at, dsl.notes AS reason, dsl.metadata,
+            u.full_name AS changed_by_name, u.email AS changed_by_email
+       FROM document_status_log dsl
+       LEFT JOIN users u ON u.id = dsl.changed_by
+      WHERE dsl.tenant_id = $1 AND dsl.entity_type = 'delivery_note'
+        AND dsl.entity_id = $2 AND dsl.metadata->>'action' = 'price_adjusted'
+      ORDER BY dsl.created_at DESC`,
+    [tenantId, noteId]
+  )
+
+  return { ...note, lines, contacts, priceAdjustments }
 }
 
 /**

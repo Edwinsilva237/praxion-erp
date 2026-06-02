@@ -329,6 +329,48 @@ function EmailModal({ note, onSend, onClose, sending }) {
   )
 }
 
+// ── Historial de correcciones de precio (quién / cuándo / razón / viejo→nuevo) ─
+function PriceAdjustmentHistory({ adjustments, lines = [], currency, compact = false }) {
+  if (!adjustments?.length) return null
+  const nameOf = (id) => lines.find(l => l.product_id === id)?.product_name
+  return (
+    <div className={clsx('rounded-lg border border-status-info/40 bg-status-info/10', compact ? 'px-3 py-2' : 'px-3 py-2.5')}>
+      <p className="text-[10px] font-bold text-status-info uppercase tracking-wide mb-1.5 flex items-center gap-1">
+        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        Correcciones de precio
+      </p>
+      <div className="flex flex-col gap-2">
+        {adjustments.map((a, i) => (
+          <div key={i} className="text-xs border-l-2 border-status-info/40 pl-2">
+            <p className="text-ink-secondary">
+              <span className="font-medium text-ink-primary">{a.changed_by_name || a.changed_by_email || 'Usuario'}</span>
+              <span className="text-ink-muted"> · {fmtDate(a.created_at)}</span>
+            </p>
+            {a.reason && <p className="text-ink-secondary italic mt-0.5">“{a.reason}”</p>}
+            {Array.isArray(a.metadata?.changes) && (
+              <ul className="mt-1 flex flex-col gap-0.5">
+                {a.metadata.changes.map((c, j) => (
+                  <li key={j} className="text-[11px] text-ink-muted flex flex-wrap items-center gap-1">
+                    <span className="font-medium text-ink-secondary">{nameOf(c.productId) || `Línea ${c.lineNumber}`}:</span>
+                    <span className="font-mono line-through opacity-70">{fmtMXN(c.oldUnitPrice, currency)}</span>
+                    <span>→</span>
+                    <span className="font-mono font-semibold text-ink-primary">{fmtMXN(c.newUnitPrice, currency)}</span>
+                    {Number(c.oldDiscountPct) !== Number(c.newDiscountPct) && (
+                      <span className="text-[10px]">(desc. {Number(c.oldDiscountPct)}%→{Number(c.newDiscountPct)}%)</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── Modal: corregir precios de una remisión no facturada ─────────────────────
 function PriceAdjustModal({ note, onSubmit, onClose, saving }) {
   const lines = note.lines || []
@@ -384,6 +426,13 @@ function PriceAdjustModal({ note, onSubmit, onClose, saving }) {
           no los precios — las cantidades no se modifican aquí. El cambio se registra con tu observación
           y se refleja en el pedido y en el saldo por cobrar.
         </p>
+
+        {note.priceAdjustments?.length > 0 && (
+          <div className="mb-3">
+            <PriceAdjustmentHistory
+              adjustments={note.priceAdjustments} lines={note.lines} currency={cur} compact />
+          </div>
+        )}
 
         <div className="border border-line-subtle rounded-xl overflow-x-auto">
           <table className="table text-xs min-w-full">
@@ -595,6 +644,11 @@ export function RemisionDetallePanel({ noteId, onClose }) {
                     }
                     return <span className="badge-amber">Facturada parcial · {invoiced}/{total}</span>
                   })()}
+                  {(note.priceAdjustments?.length > 0 || note.price_adjusted) && (
+                    <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-status-info/15 text-status-info">
+                      Precio corregido
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-ink-muted mt-1">
                   {note.partner_name} · Emitida {fmtDateOnly(note.issue_date)}
@@ -747,6 +801,12 @@ export function RemisionDetallePanel({ noteId, onClose }) {
                   </Can>
                 )
               })()}
+
+              {/* Historial de correcciones de precio */}
+              {note.priceAdjustments?.length > 0 && (
+                <PriceAdjustmentHistory
+                  adjustments={note.priceAdjustments} lines={note.lines} currency={note.currency} />
+              )}
 
               {/* Foto de evidencia */}
               {note.receiver_photo_path && (

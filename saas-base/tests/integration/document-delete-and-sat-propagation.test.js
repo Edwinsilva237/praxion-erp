@@ -658,6 +658,13 @@ describe('L) Corregir precio de una remisión no facturada (mig 187)', () => {
         WHERE entity_type='delivery_note' AND entity_id=$1 AND notes IS NOT NULL
         ORDER BY created_at DESC LIMIT 1`, [noteId]))
     expect(log[0].notes).toMatch(/tarifa autorizada/i)
+
+    // getDeliveryNote expone el historial (quién/razón/desglose) para la UI.
+    const detail = await deliveryNoteService.getDeliveryNote({ tenantId, noteId })
+    expect(detail.priceAdjustments).toHaveLength(1)
+    expect(detail.priceAdjustments[0].reason).toMatch(/tarifa autorizada/i)
+    expect(detail.priceAdjustments[0].changed_by_name).toBeTruthy()
+    expect(detail.priceAdjustments[0].metadata.changes[0].newUnitPrice).toBe(80)
   })
 
   test('exige observación (mínimo 5 caracteres)', async () => {

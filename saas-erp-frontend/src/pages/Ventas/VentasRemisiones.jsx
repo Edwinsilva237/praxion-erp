@@ -294,6 +294,11 @@ export default function VentasRemisiones() {
                           <Badge status={n.status} />
                           {n.invoice_id && <span className="badge-teal">Facturada</span>}
                           {!n.invoice_id && n.no_invoice && <span className="badge-gray">Sin factura</span>}
+                          {n.price_adjusted && (
+                            <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-status-info/15 text-status-info">
+                              Precio corregido
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="text-right font-mono tabular-nums font-medium"
@@ -334,6 +339,11 @@ export default function VentasRemisiones() {
                         <Badge status={n.status} />
                         {n.invoice_id && <span className="badge-teal">Facturada</span>}
                         {!n.invoice_id && n.no_invoice && <span className="badge-gray">Sin factura</span>}
+                        {n.price_adjusted && (
+                          <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-status-info/15 text-status-info">
+                            Precio corregido
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="text-right font-mono tabular-nums font-medium"
