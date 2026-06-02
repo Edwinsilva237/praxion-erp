@@ -393,8 +393,11 @@ export function CotizacionDetallePanel({ quotationId, onClose, onConverted }) {
   const isSent      = q?.status === 'sent'
   const isAccepted  = q?.status === 'accepted'
   const isConverted = q?.status === 'converted'
+  // Acciones de ciclo de vida (editar/convertir/cancelar) solo en estados abiertos.
   const isClosed    = ['converted', 'rejected', 'expired', 'cancelled'].includes(q?.status)
-  const canSendByEmail = isDraft || isSent // permite reenviar después de enviada
+  // El PDF y el reenvío por correo se permiten en CUALQUIER estado salvo cancelada
+  // — incluso convertida a pedido (el cliente puede pedir de nuevo la cotización).
+  const canSendByEmail = !!q && q.status !== 'cancelled'
 
   return createPortal(
     <div className="fixed inset-0 z-[9998] flex">
@@ -484,38 +487,43 @@ export function CotizacionDetallePanel({ quotationId, onClose, onConverted }) {
                 />
               </div>
 
-              {/* Acciones por estado */}
+              {/* Documento — PDF / Imprimir / Enviar disponibles SIEMPRE, incluso
+                  cuando la cotización ya se convirtió a pedido (el cliente puede
+                  volver a pedir su cotización por correo). */}
+              <div className="border-t border-line-subtle pt-4 flex flex-wrap gap-2">
+                <button onClick={handleDownloadPdf} className="btn-secondary btn-sm">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                  </svg>
+                  Descargar PDF
+                </button>
+
+                <button onClick={handlePrintPdf} className="btn-secondary btn-sm">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+                  </svg>
+                  Imprimir
+                </button>
+
+                {canSendByEmail && (
+                  <button onClick={() => setShowSend(true)} className="btn-primary btn-sm">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                    </svg>
+                    {isSent ? 'Reenviar por correo' : 'Enviar por correo'}
+                  </button>
+                )}
+              </div>
+
+              {/* Acciones de ciclo de vida — solo en estados abiertos */}
               {!isClosed && (
-                <div className="border-t border-line-subtle pt-4 flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 mt-2">
                   {isDraft && !editingDatos && (
                     <button onClick={() => setEditingDatos(true)} className="btn-secondary btn-sm">
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                       </svg>
                       Editar datos
-                    </button>
-                  )}
-
-                  <button onClick={handleDownloadPdf} className="btn-secondary btn-sm">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-                    </svg>
-                    Descargar PDF
-                  </button>
-
-                  <button onClick={handlePrintPdf} className="btn-secondary btn-sm">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
-                    </svg>
-                    Imprimir
-                  </button>
-
-                  {canSendByEmail && (
-                    <button onClick={() => setShowSend(true)} className="btn-primary btn-sm">
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
-                      </svg>
-                      {isSent ? 'Reenviar por correo' : 'Enviar por correo'}
                     </button>
                   )}
 

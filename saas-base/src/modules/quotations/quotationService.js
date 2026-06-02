@@ -349,20 +349,33 @@ async function listPartnerContacts(tenantId, partnerId) {
  */
 async function sendQuotation({ tenantId, quotationId, emails, skipEmail = false,
   userId, ipAddress, userAgent }) {
-  // Transición primero (corta, dentro de transacción). Permite re-enviar desde
-  // 'sent' sin cambiar el estado (idempotente cuando ya estaba enviada).
+  // Transición primero (corta, dentro de transacción). Solo borrador → enviada.
+  // Para sent/accepted/converted/expired se REENVÍA el PDF por correo SIN cambiar
+  // el estado — permite reenviar una cotización aunque ya se haya convertido a
+  // pedido (no la regresa a "enviada"). Solo se bloquea 'cancelled'.
   const transitioned = await withTransaction(async (client) => {
     const { rows } = await client.query(
-      `UPDATE quotations
-          SET status = 'sent',
-              sent_at = COALESCE(sent_at, NOW()),
-              sent_by = COALESCE(sent_by, $1)
-        WHERE id = $2 AND tenant_id = $3 AND status IN ('draft', 'sent')
-        RETURNING *`,
-      [userId, quotationId, tenantId]
+      `SELECT * FROM quotations WHERE id = $1 AND tenant_id = $2`,
+      [quotationId, tenantId]
     )
-    if (!rows[0]) throw createError(409, 'Solo se puede enviar una cotización en borrador o ya enviada.')
-    return rows[0]
+    if (!rows[0]) throw createError(404, 'Cotización no encontrada.')
+    const q = rows[0]
+    if (q.status === 'cancelled') {
+      throw createError(409, 'No se puede enviar una cotización cancelada.')
+    }
+    if (q.status === 'draft') {
+      const { rows: upd } = await client.query(
+        `UPDATE quotations
+            SET status = 'sent',
+                sent_at = COALESCE(sent_at, NOW()),
+                sent_by = COALESCE(sent_by, $1)
+          WHERE id = $2 AND tenant_id = $3
+          RETURNING *`,
+        [userId, quotationId, tenantId]
+      )
+      return upd[0]
+    }
+    return q
   })
 
   // Si el operador eligió "marcar enviada sin correo", no resolvemos contactos.

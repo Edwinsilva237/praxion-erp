@@ -22,6 +22,7 @@ const productService = require('../../src/modules/products/productService')
 const orderService = require('../../src/modules/sales/orderService')
 const deliveryNoteService = require('../../src/modules/sales/deliveryNoteService')
 const { hasPermission } = require('../../src/modules/roles/permissionService')
+const quotationService = require('../../src/modules/quotations/quotationService')
 
 async function makePartner(tenantId, name = 'Cliente Test') {
   const { rows } = await withBypass(() => query(
@@ -530,5 +531,47 @@ describe('J) Pedido consolidado: status pegado "Remisionado" se auto-corrige', (
     // El detalle de oB ahora SÍ muestra la remisión consolidada.
     const detail = await orderService.getOrder({ tenantId, orderId: oB.id })
     expect(detail.deliveryNotes.some(d => d.document_number === 'REM-CONS-1')).toBe(true)
+  })
+})
+
+describe('K) Cotización: se puede reenviar aunque ya esté convertida', () => {
+  let tenantId, userId, partnerId, qseq = 0
+
+  beforeAll(async () => {
+    const info = await createTenant({ label: 'cotiz', planSlug: 'owner' })
+    tenantId = info.tenant.id
+    userId   = info.user.id
+    partnerId = await makePartner(tenantId)
+  })
+
+  async function makeQuotation(status) {
+    qseq++
+    const { rows } = await withBypass(() => query(
+      `INSERT INTO quotations (tenant_id, quotation_number, partner_id, status)
+       VALUES ($1, $2, $3, $4) RETURNING id`,
+      [tenantId, `COT-${qseq}`, partnerId, status]
+    ))
+    return rows[0].id
+  }
+
+  test('enviar una cotización CONVERTIDA no la regresa a "enviada"', async () => {
+    const qId = await makeQuotation('converted')
+    // emails: [] + sin contactos → no intenta correo, pero corre la lógica de estado.
+    await quotationService.sendQuotation({ tenantId, quotationId: qId, emails: [], userId })
+    const { rows } = await withBypass(() => query(`SELECT status FROM quotations WHERE id=$1`, [qId]))
+    expect(rows[0].status).toBe('converted')
+  })
+
+  test('enviar un BORRADOR sí lo transiciona a "enviada"', async () => {
+    const qId = await makeQuotation('draft')
+    await quotationService.sendQuotation({ tenantId, quotationId: qId, emails: [], userId })
+    const { rows } = await withBypass(() => query(`SELECT status FROM quotations WHERE id=$1`, [qId]))
+    expect(rows[0].status).toBe('sent')
+  })
+
+  test('NO permite enviar una cotización CANCELADA', async () => {
+    const qId = await makeQuotation('cancelled')
+    await expect(quotationService.sendQuotation({ tenantId, quotationId: qId, emails: [], userId }))
+      .rejects.toThrow(/cancelada/i)
   })
 })
