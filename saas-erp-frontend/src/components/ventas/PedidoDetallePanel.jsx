@@ -544,6 +544,13 @@ export function PedidoDetallePanel({ orderId, onClose }) {
     if (order && order.status !== 'draft') setEditingDatos(false)
   }, [order?.status])
 
+  // El backend auto-corrige el status del pedido al abrirlo (GET /orders/:id
+  // re-deriva desde sus remisiones). Refrescar la lista para que no muestre un
+  // estado viejo (ej. "Remisionado" ya corregido) sin necesidad de F5.
+  useEffect(() => {
+    if (order?.id) qc.invalidateQueries({ queryKey: ['sales-orders'] })
+  }, [order?.id, order?.status, qc])
+
   const confirmMutation = useMutation({
     mutationFn: () => salesApi.confirmOrder(orderId),
     onSuccess: () => {
