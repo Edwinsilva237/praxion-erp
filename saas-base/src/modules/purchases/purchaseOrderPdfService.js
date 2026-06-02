@@ -39,16 +39,26 @@ async function generatePurchaseOrderPDF({ tenantId, orderId }) {
             bp.supplier_credit_days    AS credit_days,
             bp.supplier_lead_time_days AS lead_time_days,
             u.full_name        AS created_by_name,
-            tfi.rfc            AS emisor_rfc,
-            tfi.razon_social   AS emisor_nombre,
-            tfi.tax_regime     AS emisor_regime,
-            tfi.zip_code       AS emisor_zip,
+            COALESCE(fp.rfc, tfi.rfc)               AS emisor_rfc,
+            COALESCE(fp.tax_name, tfi.razon_social) AS emisor_nombre,
+            COALESCE(fp.tax_regime, tfi.tax_regime) AS emisor_regime,
+            COALESCE(fp.zip_code, tfi.zip_code)     AS emisor_zip,
             t.name             AS tenant_name,
             t.brand_color_primary, t.brand_color_secondary, t.logo_storage_path
        FROM purchase_orders po
        JOIN business_partners bp        ON bp.id = po.partner_id
        LEFT JOIN users u                ON u.id  = po.created_by
+       -- Emisor (solicitante): los datos REALES viven en tenant_fiscal_profiles
+       -- (pantalla "Datos fiscales"). tenant_fiscal_info solo la llena el seed,
+       -- así que el COALESCE prefiere el perfil real y respalda a la tabla vieja.
        LEFT JOIN tenant_fiscal_info tfi ON tfi.tenant_id = po.tenant_id
+       LEFT JOIN LATERAL (
+         SELECT rfc, tax_name, tax_regime, zip_code
+           FROM tenant_fiscal_profiles
+          WHERE tenant_id = po.tenant_id
+          ORDER BY is_active DESC, created_at ASC
+          LIMIT 1
+       ) fp ON true
        LEFT JOIN tenants t              ON t.id  = po.tenant_id
       WHERE po.id = $1 AND po.tenant_id = $2`,
     [orderId, tenantId]

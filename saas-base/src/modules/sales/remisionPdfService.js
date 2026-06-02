@@ -29,15 +29,23 @@ async function generateRemisionPDF({ tenantId, noteId, showPrices = true }) {
             da.alias AS address_alias, da.address AS delivery_address,
             da.city AS delivery_city, da.state AS delivery_state,
             da.zip_code AS delivery_zip,
-            tfi.rfc AS emisor_rfc, tfi.razon_social AS emisor_nombre,
-            tfi.tax_regime AS emisor_regime, tfi.zip_code AS emisor_zip,
+            COALESCE(fp.rfc, tfi.rfc) AS emisor_rfc, COALESCE(fp.tax_name, tfi.razon_social) AS emisor_nombre,
+            COALESCE(fp.tax_regime, tfi.tax_regime) AS emisor_regime, COALESCE(fp.zip_code, tfi.zip_code) AS emisor_zip,
             t.name AS tenant_name,
             t.brand_color_primary, t.brand_color_secondary, t.logo_storage_path
      FROM delivery_notes dn
      JOIN business_partners bp ON bp.id = dn.partner_id
      LEFT JOIN sales_orders so      ON so.id = dn.sales_order_id
      LEFT JOIN delivery_addresses da ON da.id = dn.delivery_address_id
+     -- Emisor: datos reales en tenant_fiscal_profiles; tenant_fiscal_info es legacy/seed.
      LEFT JOIN tenant_fiscal_info tfi ON tfi.tenant_id = dn.tenant_id
+     LEFT JOIN LATERAL (
+       SELECT rfc, tax_name, tax_regime, zip_code
+         FROM tenant_fiscal_profiles
+        WHERE tenant_id = dn.tenant_id
+        ORDER BY is_active DESC, created_at ASC
+        LIMIT 1
+     ) fp ON true
      LEFT JOIN tenants t              ON t.id = dn.tenant_id
      WHERE dn.id = $1 AND dn.tenant_id = $2`,
     [noteId, tenantId]
