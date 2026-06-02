@@ -60,6 +60,7 @@ export const NAV_SECTIONS = [
     label: 'Compras',
     items: [
       { label: 'Órdenes de compra',      to: '/compras/ordenes',     iconKey: 'purchase', permission: 'purchases:read',  module: 'purchases' },
+      { label: 'Precios por proveedor',  to: '/precios-proveedor',   iconKey: 'tag',      permission: 'purchases:read',  module: 'purchases' },
       { label: 'Recepciones',            to: '/compras/recepciones', iconKey: 'receipt',  permission: 'purchases:read',  module: 'purchases' },
       { label: 'Comprobantes recibidos', to: '/compras/facturas',    iconKey: 'invoice',  permission: 'purchases:read',  module: 'purchases' },
       { label: 'Gastos',                 to: '/gastos',              iconKey: 'expense',  permission: 'expenses:read',   flag: 'expenses_enabled' },

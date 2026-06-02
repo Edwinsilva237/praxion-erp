@@ -13,6 +13,7 @@ const documentParserService   = require('./documentParserService')
 const supplierInvoiceService  = require('./supplierInvoiceService')
 const cxpService              = require('./cxpService')
 const apAdvanceService        = require('./apAdvanceService')
+const supplierPriceService    = require('./supplierPriceService')
 const attachmentService       = require('../attachments/attachmentService')
 const storage                 = require('../../utils/storage')
 const config                  = require('../../config')
@@ -49,6 +50,71 @@ router.use(tenantResolver)
 router.use(authGuard)
 router.use(requireActiveTenant)
 router.use(requireModule('purchases'))
+
+// ─── Precios por proveedor (precarga rápida de OC) ───────────────────────────
+
+/**
+ * GET /api/purchases/suggested-price?supplierId&itemType&itemId&currency
+ * Precio sugerido para una línea de OC (manual → aprendido → costo del ítem).
+ */
+router.get('/suggested-price', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const { supplierId, itemType, itemId, currency } = req.query
+    if (!supplierId || !itemType || !itemId) {
+      return res.status(400).json({ error: 'supplierId, itemType e itemId son requeridos.' })
+    }
+    const price = await supplierPriceService.getSuggestedSupplierPrice({
+      tenantId: req.tenant.id, supplierId, itemType, itemId, currency: currency || 'MXN',
+    })
+    res.json(price || { message: 'Sin precio previo — captura manualmente.' })
+  } catch (err) { next(err) }
+})
+
+/**
+ * GET /api/purchases/supplier-prices?supplierId&itemType&itemId
+ * Lista de precios vigentes por proveedor (pantalla de gestión).
+ */
+router.get('/supplier-prices', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const { supplierId, itemType, itemId } = req.query
+    const rows = await supplierPriceService.listSupplierPrices({
+      tenantId: req.tenant.id, supplierId, itemType, itemId,
+    })
+    res.json({ data: rows })
+  } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/supplier-prices
+ * Crea/edita un precio NEGOCIADO (manual). Body: { supplierId, itemType, itemId,
+ * unitPrice, currency?, supplierSku?, minOrderQty?, leadTimeDays?, notes? }
+ */
+router.post('/supplier-prices',
+  checkAnyPermission([['purchases', 'create'], ['purchases', 'update']]),
+  async (req, res, next) => {
+    try {
+      const row = await supplierPriceService.upsertManualSupplierPrice({
+        tenantId: req.tenant.id, ...req.body, userId: req.auth.userId,
+      })
+      res.status(201).json(row)
+    } catch (err) { next(err) }
+  }
+)
+
+/**
+ * DELETE /api/purchases/supplier-prices/:id
+ */
+router.delete('/supplier-prices/:id',
+  checkAnyPermission([['purchases', 'update'], ['purchases', 'create']]),
+  async (req, res, next) => {
+    try {
+      const r = await supplierPriceService.deleteSupplierPrice({
+        tenantId: req.tenant.id, id: req.params.id,
+      })
+      res.json({ message: 'Precio eliminado.', ...r })
+    } catch (err) { next(err) }
+  }
+)
 
 // ─── Órdenes de Compra ────────────────────────────────────────────────────────
 

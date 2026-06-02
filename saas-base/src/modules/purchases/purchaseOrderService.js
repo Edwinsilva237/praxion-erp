@@ -4,6 +4,7 @@ const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
 const { getRateForDate } = require('../exchange-rates/exchangeRateService')
 const documentSeriesService = require('../document-series/documentSeriesService')
+const supplierPriceService = require('./supplierPriceService')
 
 /**
  * Genera el siguiente número de OC. Usa serie configurada si existe,
@@ -228,6 +229,22 @@ async function createOrder({
          line.isGeneric || false, line.genericCategory || null,
          line.warehouseId || null, i + 1, line.notes || null]
       )
+    }
+
+    // Auto-aprender precios del proveedor → la próxima OC se precarga sola.
+    // Solo cuando hay proveedor del catálogo (las OC genéricas no tienen a quién
+    // atarle el precio). Best-effort dentro de la misma transacción.
+    if (partnerId) {
+      await supplierPriceService.learnFromLines(client, {
+        tenantId, supplierId: partnerId, currency: resolvedCurrency,
+        source: 'po', userId,
+        lines: lines.map(l => ({
+          itemType:  l.itemType,
+          itemId:    l.itemId,
+          unitPrice: l.isEstimated ? (l.estimatedPrice || l.unitPrice) : l.unitPrice,
+          isGeneric: l.isGeneric,
+        })),
+      })
     }
 
     await client.query(

@@ -7,6 +7,7 @@ const storage            = require('../../utils/storage')
 const { recordMovement } = require('../inventory/inventoryService')
 const { generate: generateLotNumber } = require('../production/lotNumberGenerator')
 const documentSeriesService = require('../document-series/documentSeriesService')
+const supplierPriceService = require('./supplierPriceService')
 
 async function nextReceiptNumber(client, tenantId, opts = {}) {
   const result = await documentSeriesService.generateDocumentNumber({
@@ -357,6 +358,20 @@ async function confirmReceipt({ tenantId, receiptId, userId, ipAddress, userAgen
           await client.query('ROLLBACK TO SAVEPOINT sp_supplier_materials')
         }
       }
+    }
+
+    // Aprender el precio REAL recibido (source='receipt') → corrige el precio
+    // aprendido de la OC con lo que de verdad llegó. La línea de la recepción ya
+    // trae item_type/item_id/unit_price. Best-effort, dentro de la transacción.
+    if (receipt.partner_id) {
+      await supplierPriceService.learnFromLines(client, {
+        tenantId, supplierId: receipt.partner_id,
+        currency: receipt.currency || 'MXN', source: 'receipt', userId,
+        lines: lines.map(l => ({
+          itemType: l.item_type, itemId: l.item_id,
+          unitPrice: l.unit_price, isGeneric: l.is_generic,
+        })),
+      })
     }
 
     const { rows } = await client.query(

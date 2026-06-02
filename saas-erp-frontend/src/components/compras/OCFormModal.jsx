@@ -15,10 +15,44 @@ import clsx from 'clsx'
 // ── Constantes ─────────────────────────────────────────────────────────────
 const EMPTY_LINE_MP = () => ({
   item: null, quantity: '', unit: 'kg', unit_price: '', warehouse_id: '', is_estimated: true,
+  price_source: null,
 })
 const EMPTY_LINE_PT = () => ({
   item: null, quantity: '', unit: 'pza', unit_price: '', warehouse_id: '', product_meta: null,
+  price_source: null,
 })
+
+// Chip que indica de dónde salió el precio sugerido del proveedor (espejo del
+// chip de ventas). `source` puede traer sufijo `_converted` (USD→MXN).
+function SupplierPriceChip({ source }) {
+  if (!source) return null
+  const map = {
+    manual:    ['Negociado',      'bg-status-success/15 text-status-success'],
+    po:        ['Última OC',      'bg-status-info/15 text-status-info'],
+    receipt:   ['Última compra',  'bg-status-info/15 text-status-info'],
+    item_cost: ['Costo estándar', 'bg-surface-elevated/80 text-ink-muted'],
+  }
+  const found = map[String(source).replace('_converted', '')]
+  if (!found) return null
+  return (
+    <span className={clsx('text-[10px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wide', found[1])}>
+      {found[0]}
+    </span>
+  )
+}
+
+// Consulta el precio sugerido del proveedor para una línea. Devuelve el patch a
+// aplicar ({ unit_price, price_source, supplier_sku }) o null. Best-effort.
+async function fetchSupplierLinePrice(supplierId, itemType, itemId, currency) {
+  if (!supplierId || !itemId) return null
+  try {
+    const res = await purchasesApi.suggestedSupplierPrice(supplierId, itemType, itemId, currency)
+    if (res?.unit_price != null) {
+      return { unit_price: String(res.unit_price), price_source: res.source || null, supplier_sku: res.supplierSku || null }
+    }
+  } catch { /* sin precio previo → captura manual */ }
+  return null
+}
 
 // ── Selección de almacén destino para una línea de OC ──────────────────────
 // El cálculo de "en tránsito" requiere que cada línea apunte a un almacén:
@@ -260,8 +294,17 @@ function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
     setLines(prev => prev.map((l, i) => {
       if (i !== idx) return l
       if (key === 'item') return { ...l, item: val, unit: val?.unit || 'kg' }
+      if (key === 'unit_price') return { ...l, unit_price: val, price_source: null }
       return { ...l, [key]: val }
     }))
+  }
+
+  // Al elegir la MP, precargar el precio del proveedor (negociado/aprendido/costo).
+  async function handlePickMP(idx, item) {
+    updateLine(idx, 'item', item)
+    if (!item?.id || !partner?.id) return
+    const patch = await fetchSupplierLinePrice(partner.id, 'raw_material', item.id, currency)
+    if (patch) setLines(prev => prev.map((l, i) => (i === idx && l.item?.id === item.id) ? { ...l, ...patch } : l))
   }
 
   const mutation = useMutation({
@@ -368,7 +411,7 @@ function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
 
             <div>
               <label className="label">Materia prima <span className="text-status-danger">*</span></label>
-              <Autocomplete value={line.item} onChange={item => updateLine(idx, 'item', item)} onSearch={searchMP} placeholder="Buscar en catálogo de materias primas..." />
+              <Autocomplete value={line.item} onChange={item => handlePickMP(idx, item)} onSearch={searchMP} placeholder="Buscar en catálogo de materias primas..." />
             </div>
 
             <div>
@@ -411,7 +454,9 @@ function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
                 </div>
               </div>
               <div>
-                <label className="label">Precio unitario</label>
+                <label className="label flex items-center gap-1.5">
+                  Precio unitario <SupplierPriceChip source={line.price_source} />
+                </label>
                 <input type="number" step="0.0001" min="0" value={line.unit_price}
                   onChange={e => updateLine(idx, 'unit_price', e.target.value)}
                   className="input" placeholder="0.0000" />
@@ -525,10 +570,21 @@ function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
           product_meta: val ? {
             sku: val.sku, unit: val.unit, price: val.price, warehouse: val.warehouse,
           } : null,
+          price_source: null,
         }
       }
+      if (key === 'unit_price') return { ...l, unit_price: val, price_source: null }
       return { ...l, [key]: val }
     }))
+  }
+
+  // Al elegir el producto, sobre el precio de lista precargamos el del proveedor
+  // (negociado/aprendido) si existe — más específico que el de catálogo.
+  async function handlePickPT(idx, item) {
+    updateLine(idx, 'item', item)
+    if (!item?.id || !partner?.id) return
+    const patch = await fetchSupplierLinePrice(partner.id, 'product', item.id, currency)
+    if (patch) setLines(prev => prev.map((l, i) => (i === idx && l.item?.id === item.id) ? { ...l, ...patch } : l))
   }
 
   const mutation = useMutation({
@@ -635,7 +691,7 @@ function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
 
             <div>
               <label className="label">Producto terminado <span className="text-status-danger">*</span></label>
-              <Autocomplete value={line.item} onChange={item => updateLine(idx, 'item', item)} onSearch={searchProducts} placeholder="Buscar en catálogo de productos..." />
+              <Autocomplete value={line.item} onChange={item => handlePickPT(idx, item)} onSearch={searchProducts} placeholder="Buscar en catálogo de productos..." />
               <ProductCard meta={line.product_meta} onClear={() => updateLine(idx, 'item', null)} />
             </div>
 
@@ -669,7 +725,9 @@ function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
                 </div>
               </div>
               <div>
-                <label className="label">Precio unitario</label>
+                <label className="label flex items-center gap-1.5">
+                  Precio unitario <SupplierPriceChip source={line.price_source} />
+                </label>
                 <input type="number" step="0.0001" min="0" value={line.unit_price}
                   onChange={e => updateLine(idx, 'unit_price', e.target.value)}
                   className="input" placeholder="0.0000" />

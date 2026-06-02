@@ -12,6 +12,13 @@ export const purchasesApi = {
   sendOrder:      (id) => api.patch(`${B}/orders/${id}`, { status: 'sent' }).then(r => r.data),
   cancelOrder:    (id, body) => api.post(`${B}/orders/${id}/cancel`, body).then(r => r.data),
 
+  // ── Precios por proveedor (precarga de OC) ──────────────────────────────
+  suggestedSupplierPrice: (supplierId, itemType, itemId, currency = 'MXN') =>
+    api.get(`${B}/suggested-price`, { params: { supplierId, itemType, itemId, currency } }).then(r => r.data),
+  listSupplierPrices:  (params) => api.get(`${B}/supplier-prices`, { params }).then(r => r.data),
+  upsertSupplierPrice: (body) => api.post(`${B}/supplier-prices`, body).then(r => r.data),
+  deleteSupplierPrice: (id) => api.delete(`${B}/supplier-prices/${id}`).then(r => r.data),
+
   // PDF de la OC (control interno, no fiscal)
   downloadOrderPdf: (id) =>
     api.get(`${B}/orders/${id}/pdf`, { responseType: 'blob' }).then(r => r.data),
