@@ -482,3 +482,53 @@ describe('I) Guard anti-duplicado de pedidos (override con force)', () => {
     expect(forced.id).not.toBe(first.id)
   })
 })
+
+describe('J) Pedido consolidado: status pegado "Remisionado" se auto-corrige', () => {
+  let tenantId, userId, partnerId, prodA, prodB
+
+  beforeAll(async () => {
+    const info = await createTenant({ label: 'consol', planSlug: 'owner' })
+    tenantId = info.tenant.id
+    userId   = info.user.id
+    partnerId = await makePartner(tenantId)
+    prodA = (await productService.createProduct({ tenantId, userId, sku: 'CON-A', name: 'A',
+      type: 'resale', isProduced: false, satUnitCode: 'H87' })).id
+    prodB = (await productService.createProduct({ tenantId, userId, sku: 'CON-B', name: 'B',
+      type: 'resale', isProduced: false, satUnitCode: 'H87' })).id
+  })
+
+  test('recalcOrderStatus saca al pedido NO-principal de "in_delivery"; getOrder muestra la remisión consolidada', async () => {
+    const oA = await orderService.createOrder({ tenantId, partnerId, userId, force: true,
+      lines: [{ productId: prodA, quantity: 10, unit: 'pieza', unitPrice: 5 }] })
+    const oB = await orderService.createOrder({ tenantId, partnerId, userId, force: true,
+      lines: [{ productId: prodB, quantity: 4, unit: 'pieza', unitPrice: 5 }] })
+    const { rows: lA } = await withBypass(() => query(`SELECT id FROM sales_order_lines WHERE sales_order_id=$1`, [oA.id]))
+    const { rows: lB } = await withBypass(() => query(`SELECT id FROM sales_order_lines WHERE sales_order_id=$1`, [oB.id]))
+
+    // Remisión CONSOLIDADA entregada: header = oA, líneas referencian oA y oB.
+    const { rows: dn } = await withBypass(() => query(
+      `INSERT INTO delivery_notes (tenant_id, type, document_number, partner_id, sales_order_id, status)
+       VALUES ($1,'sale','REM-CONS-1',$2,$3,'delivered') RETURNING id`, [tenantId, partnerId, oA.id]
+    ))
+    const noteId = dn[0].id
+    await withBypass(() => query(
+      `INSERT INTO delivery_note_lines
+         (delivery_note_id, product_id, sales_order_id, sales_order_line_id, quantity_ordered, quantity_delivered, unit_price, line_number)
+       VALUES ($1,$2,$3,$4,10,10,5,1), ($1,$5,$6,$7,4,4,5,2)`,
+      [noteId, prodA, oA.id, lA[0].id, prodB, oB.id, lB[0].id]
+    ))
+
+    // Simular el bug: oB (no-principal) quedó pegado en 'in_delivery'.
+    await withBypass(() => query(`UPDATE sales_orders SET status='in_delivery' WHERE id=$1`, [oB.id]))
+
+    // Auto-corrección: re-deriva el status real desde la remisión entregada.
+    await orderService.recalcOrderStatus({ tenantId, orderId: oB.id })
+    const { rows: after } = await withBypass(() => query(`SELECT status FROM sales_orders WHERE id=$1`, [oB.id]))
+    expect(after[0].status).not.toBe('in_delivery')
+    expect(['delivered', 'partially_delivered', 'invoiced']).toContain(after[0].status)
+
+    // El detalle de oB ahora SÍ muestra la remisión consolidada.
+    const detail = await orderService.getOrder({ tenantId, orderId: oB.id })
+    expect(detail.deliveryNotes.some(d => d.document_number === 'REM-CONS-1')).toBe(true)
+  })
+})

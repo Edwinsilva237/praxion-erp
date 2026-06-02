@@ -444,6 +444,31 @@ async function getDeliveryNote({ tenantId, noteId }) {
 }
 
 /**
+ * Recalcula el status de TODOS los pedidos cubiertos por una remisión, no solo
+ * el "principal" del header. Las remisiones consolidadas tocan varios pedidos
+ * vía `delivery_note_lines.sales_order_id`; recalcular solo el header dejaba a
+ * los demás con el status pegado (ej. "Remisionado" aunque ya se entregó/facturó
+ * o se canceló). Para borrado (líneas ya eliminadas) pasar `orderIds` capturados
+ * de antemano.
+ */
+async function recalcOrdersForNote(client, { tenantId, noteId, headerOrderId = null, orderIds = null }) {
+  let ids = orderIds
+  if (!ids) {
+    const { rows } = await client.query(
+      `SELECT DISTINCT sales_order_id FROM delivery_note_lines
+        WHERE delivery_note_id = $1 AND sales_order_id IS NOT NULL`,
+      [noteId]
+    )
+    ids = rows.map(r => r.sales_order_id)
+  }
+  const set = new Set((ids || []).filter(Boolean))
+  if (headerOrderId) set.add(headerOrderId)
+  for (const oid of set) {
+    await recalcOrderStatusFromDeliveries(client, { tenantId, orderId: oid })
+  }
+}
+
+/**
  * Registra la entrega — captura foto del documento firmado y nombre del receptor.
  * Funciona offline: si no hay internet la foto se guarda localmente y synced_at queda NULL.
  */
@@ -556,14 +581,9 @@ async function recordDelivery({
     // Generar CXC automáticamente: la entrega siempre completa la remisión.
     await generateCXC(client, { tenantId, note, userId })
 
-    // Recalcular status del pedido en función del agregado de todas sus remisiones.
-    // Una remisión completa NO necesariamente significa pedido completo (puede haber otras
-    // remisiones pendientes con saldo). El helper decide entre delivered / partially_delivered / in_delivery.
-    if (note.sales_order_id) {
-      await recalcOrderStatusFromDeliveries(client, {
-        tenantId, orderId: note.sales_order_id,
-      })
-    }
+    // Recalcular status de TODOS los pedidos cubiertos (consolidada incluida),
+    // no solo el principal — si no, los demás quedaban pegados en "Remisionado".
+    await recalcOrdersForNote(client, { tenantId, noteId, headerOrderId: note.sales_order_id })
 
     await audit({
       tenantId, userId, action: 'delivery_note.delivered',
@@ -630,12 +650,8 @@ async function cancelDelivery({ tenantId, noteId, reason, userId, ipAddress, use
        JSON.stringify({ reason: reason || null })]
     )
 
-    // Recalcular status del pedido
-    if (note.sales_order_id) {
-      await recalcOrderStatusFromDeliveries(client, {
-        tenantId, orderId: note.sales_order_id,
-      })
-    }
+    // Recalcular status de TODOS los pedidos cubiertos (consolidada incluida).
+    await recalcOrdersForNote(client, { tenantId, noteId, headerOrderId: note.sales_order_id })
 
     await audit({
       tenantId, userId, action: 'delivery_note.cancelled',
@@ -697,6 +713,15 @@ async function deleteDelivery({ tenantId, noteId, userId, ipAddress, userAgent }
       throw createError(409, 'No se puede eliminar: la remisión tiene cobros registrados.')
     }
 
+    // Capturar los pedidos cubiertos ANTES de borrar (las líneas cascadean al
+    // borrar la remisión, así que después ya no se pueden leer).
+    const { rows: affRows } = await client.query(
+      `SELECT DISTINCT sales_order_id FROM delivery_note_lines
+        WHERE delivery_note_id = $1 AND sales_order_id IS NOT NULL`,
+      [noteId]
+    )
+    const affectedOrderIds = affRows.map(r => r.sales_order_id)
+
     // Limpiar cualquier CXC-remisión sin pagos (defensivo) y borrar la remisión.
     await client.query(
       `DELETE FROM accounts_receivable
@@ -705,10 +730,10 @@ async function deleteDelivery({ tenantId, noteId, userId, ipAddress, userAgent }
     )
     await client.query(`DELETE FROM delivery_notes WHERE id = $1 AND tenant_id = $2`, [noteId, tenantId])
 
-    // Recalcular el status del pedido (si la remisión venía de uno).
-    if (note.sales_order_id) {
-      await recalcOrderStatusFromDeliveries(client, { tenantId, orderId: note.sales_order_id })
-    }
+    // Recalcular status de TODOS los pedidos cubiertos (consolidada incluida).
+    await recalcOrdersForNote(client, {
+      tenantId, headerOrderId: note.sales_order_id, orderIds: affectedOrderIds,
+    })
 
     await audit({
       tenantId, userId, action: 'delivery_note.deleted',

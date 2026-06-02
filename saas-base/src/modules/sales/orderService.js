@@ -141,13 +141,19 @@ async function getOrder({ tenantId, orderId }) {
     [orderId]
   )
 
-  // Remisiones ligadas al pedido (resumen)
+  // Remisiones ligadas al pedido (resumen). Incluye las CONSOLIDADAS: una
+  // remisión que cubre varios pedidos apunta en su header solo al principal,
+  // pero referencia a los demás vía delivery_note_lines.sales_order_id. Sin
+  // esto, los pedidos consolidados "no veían" su remisión en el detalle.
   const { rows: deliveryNotes } = await query(
-    `SELECT id, document_number, status, currency, total_mxn,
-            issue_date, delivered_at, receiver_name, created_at
-       FROM delivery_notes
-      WHERE sales_order_id = $1 AND tenant_id = $2
-      ORDER BY issue_date DESC, created_at DESC`,
+    `SELECT DISTINCT dn.id, dn.document_number, dn.status, dn.currency, dn.total_mxn,
+            dn.issue_date, dn.delivered_at, dn.receiver_name, dn.created_at
+       FROM delivery_notes dn
+      WHERE dn.tenant_id = $2
+        AND ( dn.sales_order_id = $1
+           OR EXISTS (SELECT 1 FROM delivery_note_lines dnl
+                       WHERE dnl.delivery_note_id = dn.id AND dnl.sales_order_id = $1) )
+      ORDER BY dn.issue_date DESC, dn.created_at DESC`,
     [orderId, tenantId]
   )
 
@@ -933,11 +939,20 @@ async function recalcOrderStatusFromDeliveries(client, { tenantId, orderId }) {
   return nextStatus
 }
 
+/**
+ * Recalcula y persiste el status de UN pedido desde sus remisiones actuales,
+ * en su propia transacción. Sirve para auto-corregir status pegados (ej. un
+ * pedido consolidado que quedó en "Remisionado" tras entregar la remisión).
+ */
+async function recalcOrderStatus({ tenantId, orderId }) {
+  return withTransaction(client => recalcOrderStatusFromDeliveries(client, { tenantId, orderId }))
+}
+
 module.exports = {
   listOrders, getOrder, createOrder, updateOrder,
   confirmOrder, cancelOrder, deleteOrder, getSuggestedPrice,
   assignDriver,
   addOrderLine, updateOrderLine, deleteOrderLine,
-  getOrderDeliveryBreakdown, recalcOrderStatusFromDeliveries,
+  getOrderDeliveryBreakdown, recalcOrderStatusFromDeliveries, recalcOrderStatus,
   nextOrderNumber,
 }

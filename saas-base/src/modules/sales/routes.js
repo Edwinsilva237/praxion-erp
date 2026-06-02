@@ -55,6 +55,13 @@ router.get('/orders', checkPermission('sales', 'read'), async (req, res, next) =
  */
 router.get('/orders/:id', checkPermission('sales', 'read'), async (req, res, next) => {
   try {
+    // Auto-corrección de status pegado (best-effort): si el pedido quedó con un
+    // status viejo (ej. "Remisionado" tras entregar una remisión consolidada),
+    // lo re-derivamos de sus remisiones actuales al abrirlo. No bloquea la vista.
+    try {
+      await orderService.recalcOrderStatus({ tenantId: req.tenant.id, orderId: req.params.id })
+    } catch (e) { /* no romper el detalle por un fallo de recálculo */ }
+
     const order = await orderService.getOrder({ tenantId: req.tenant.id, orderId: req.params.id })
     if (!order) return res.status(404).json({ error: 'Pedido no encontrado.' })
     res.json(order)
