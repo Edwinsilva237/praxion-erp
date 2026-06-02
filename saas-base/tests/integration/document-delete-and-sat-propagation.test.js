@@ -21,6 +21,7 @@ const { pool, query, withBypass } = require('../../src/db')
 const productService = require('../../src/modules/products/productService')
 const orderService = require('../../src/modules/sales/orderService')
 const deliveryNoteService = require('../../src/modules/sales/deliveryNoteService')
+const { hasPermission } = require('../../src/modules/roles/permissionService')
 
 async function makePartner(tenantId, name = 'Cliente Test') {
   const { rows } = await withBypass(() => query(
@@ -289,5 +290,104 @@ describe('E) nextInvoiceNumber a prueba de colisiones (contador de serie desfasa
       [tenant.tenant.id]
     ))
     expect(rows).toHaveLength(0)
+  })
+})
+
+describe('F) Prevención: rechaza claves de unidad SAT inválidas al guardar', () => {
+  let tenantId, userId, productId
+
+  beforeAll(async () => {
+    const info = await createTenant({ label: 'satval', planSlug: 'owner' })
+    tenantId = info.tenant.id
+    userId   = info.user.id
+    const p = await productService.createProduct({
+      tenantId, userId, sku: 'VAL-OK', name: 'Producto válido',
+      type: 'resale', isProduced: false, saleUnit: 'rollo', satUnitCode: 'XRO',
+    })
+    productId = p.id
+  })
+
+  test('rechaza crear producto con clave de unidad inválida (ROL)', async () => {
+    await expect(productService.createProduct({
+      tenantId, userId, sku: 'VAL-BAD', name: 'Producto malo',
+      type: 'resale', isProduced: false, saleUnit: 'rollo', satUnitCode: 'ROL',
+    })).rejects.toThrow(/no existe en el catálogo del SAT/i)
+  })
+
+  test('rechaza editar el producto a una clave inválida', async () => {
+    await expect(productService.updateProduct({
+      tenantId, productId, satUnitCode: 'ROL', userId,
+    })).rejects.toThrow(/no existe/i)
+  })
+
+  test('rechaza crear presentación con clave inválida; acepta válida y bloquea editarla a inválida', async () => {
+    await expect(productService.createPackOption({
+      tenantId, productId, packUnit: 'caja', basePerPack: 10, satUnitCode: 'ROL', userId,
+    })).rejects.toThrow(/no existe/i)
+
+    const opt = await productService.createPackOption({
+      tenantId, productId, packUnit: 'tarima', basePerPack: 100, satUnitCode: 'XPL', userId,
+    })
+    expect(opt.sat_unit_code).toBe('XPL')
+
+    await expect(productService.updatePackOption({
+      tenantId, packOptionId: opt.id, satUnitCode: 'ROL', userId,
+    })).rejects.toThrow(/no existe/i)
+  })
+})
+
+describe('G) Permisos finos de evidencia aislados de la edición', () => {
+  let tenantId, deliverUserId, evidenceUserId
+
+  async function makeUserWithPerms(tenantId, roleName, perms) {
+    const { rows: r } = await withBypass(() => query(
+      `INSERT INTO roles (tenant_id, name) VALUES ($1, $2) RETURNING id`,
+      [tenantId, roleName]
+    ))
+    const roleId = r[0].id
+    for (const [resource, action] of perms) {
+      await withBypass(() => query(
+        `INSERT INTO role_permissions (role_id, permission_id)
+         SELECT $1, id FROM permissions WHERE resource = $2 AND action = $3`,
+        [roleId, resource, action]
+      ))
+    }
+    const { rows: u } = await withBypass(() => query(
+      `INSERT INTO users (tenant_id, email, full_name) VALUES ($1, $2, $3) RETURNING id`,
+      [tenantId, `${roleName}@test.local`, roleName]
+    ))
+    const userId = u[0].id
+    await withBypass(() => query(
+      `INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)`, [userId, roleId]
+    ))
+    return userId
+  }
+
+  beforeAll(async () => {
+    const info = await createTenant({ label: 'perms', planSlug: 'owner' })
+    tenantId = info.tenant.id
+    deliverUserId  = await makeUserWithPerms(tenantId, 'repartidor', [['sales', 'deliver'], ['sales', 'read']])
+    evidenceUserId = await makeUserWithPerms(tenantId, 'apoyoalmacen', [['purchases', 'upload_evidence'], ['purchases', 'read']])
+  })
+
+  test('mig 186 creó los permisos finos', async () => {
+    const { rows } = await withBypass(() => query(
+      `SELECT resource, action FROM permissions
+        WHERE (resource='sales' AND action='deliver')
+           OR (resource='purchases' AND action='upload_evidence')`
+    ))
+    expect(rows).toHaveLength(2)
+  })
+
+  test('rol repartidor: tiene sales:deliver pero NO sales:update', async () => {
+    expect(await hasPermission(deliverUserId, 'sales', 'deliver')).toBe(true)
+    expect(await hasPermission(deliverUserId, 'sales', 'update')).toBe(false)
+    expect(await hasPermission(deliverUserId, 'sales', 'create')).toBe(false)
+  })
+
+  test('rol apoyo almacén: tiene purchases:upload_evidence pero NO create/update', async () => {
+    expect(await hasPermission(evidenceUserId, 'purchases', 'upload_evidence')).toBe(true)
+    expect(await hasPermission(evidenceUserId, 'purchases', 'create')).toBe(false)
+    expect(await hasPermission(evidenceUserId, 'purchases', 'update')).toBe(false)
   })
 })

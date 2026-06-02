@@ -5,7 +5,7 @@ const multer              = require('multer')
 const { tenantResolver }  = require('../../middleware/tenantResolver')
 const { authGuard }       = require('../../middleware/authGuard')
 const { requireActiveTenant } = require('../../middleware/requireActiveTenant')
-const { checkPermission } = require('../../middleware/checkPermission')
+const { checkPermission, checkAnyPermission } = require('../../middleware/checkPermission')
 const requireModule       = require('../../middleware/requireModule')
 const purchaseOrderService    = require('./purchaseOrderService')
 const supplierReceiptService  = require('./supplierReceiptService')
@@ -387,7 +387,10 @@ router.get('/receipts/:id/pdf', checkPermission('purchases', 'read'), async (req
  * firma digital de quien entrega (PNG). Form-data: file (PDF/JPG/PNG/WebP).
  */
 router.post('/receipts/:id/evidence',
-  checkPermission('purchases', 'create'),
+  // Subir evidencia: un rol de apoyo en almacén puede tener solo
+  // `purchases:upload_evidence` (sin crear/editar compras). Los roles con
+  // `purchases:create` siguen funcionando.
+  checkAnyPermission([['purchases', 'create'], ['purchases', 'upload_evidence']]),
   uploadEvidence.single('file'),
   async (req, res, next) => {
     try {

@@ -45,32 +45,34 @@ async function getOrgId(tenantId) {
 }
 
 /**
- * Sincroniza colores con Facturapi (PUT /organizations/{id}).
- * No-op silencioso si el tenant no tiene org fiscal.
+ * Sincroniza el color de acento con Facturapi
+ * (PUT /organizations/{id}/customization).
+ *
+ * Facturapi solo admite UN color de acento en el CFDI (`customization.color`),
+ * no primario+secundario. Usamos el color PRIMARIO del tenant; el secundario
+ * solo aplica a nuestros PDF internos. No-op silencioso si el tenant no tiene
+ * org fiscal o no hay color.
+ *
+ * (Antes llamaba `organizations.update(orgId, { colors: {...} })`, método que
+ * el SDK de Facturapi v4 ya no expone → tronaba y los colores nunca llegaban
+ * al CFDI. Ahora usa `updateCustomization` con el shape correcto.)
  */
 async function syncColors(tenantId, { primary, secondary } = {}) {
   const orgId = await getOrgId(tenantId)
   if (!orgId) return { synced: false, reason: 'sin_organizacion_fiscal' }
 
+  if (!primary) return { synced: false, reason: 'sin_color' }
+
   const fa = adminClient()
-
-  // Facturapi acepta `colors` como objeto {primary, secondary}. Si no se
-  // pasa alguno, se mantiene el valor previo. Para limpiar, pasar string vacía.
-  const payload = {}
-  if (primary)   payload.colors = { ...(payload.colors || {}), primary   }
-  if (secondary) payload.colors = { ...(payload.colors || {}), secondary }
-
-  if (!payload.colors) return { synced: false, reason: 'sin_cambios' }
-
   try {
-    await fa.organizations.update(orgId, payload)
-    logger.info('[branding] colores sincronizados con Facturapi', { tenantId, orgId })
+    await fa.organizations.updateCustomization(orgId, { color: primary })
+    logger.info('[branding] color sincronizado con Facturapi', { tenantId, orgId })
     return { synced: true, orgId }
   } catch (err) {
-    logger.error('[branding] error sincronizando colores', {
+    logger.error('[branding] error sincronizando color', {
       tenantId, orgId, error: err.message,
     })
-    const e = new Error(`Facturapi rechazó los colores: ${err.message}`)
+    const e = new Error(`Facturapi rechazó el color: ${err.message}`)
     e.status = 502
     throw e
   }

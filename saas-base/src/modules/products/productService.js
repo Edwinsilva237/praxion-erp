@@ -5,6 +5,23 @@ const { audit } = require('../../utils/audit')
 const codeFormatService = require('../code-formats/codeFormatService')
 
 /**
+ * Valida que una clave de unidad SAT exista en el catálogo oficial
+ * (c_ClaveUnidad → tabla sat_unit_codes). Previene capturar unidades inválidas
+ * (ej. "ROL") que después rebotan el timbrado. Solo valida si se provee un
+ * valor — así editar otros campos sin tocar la clave no rompe productos legacy.
+ */
+async function assertValidSatUnitCode(client, code) {
+  if (code == null || code === '') return
+  const c = String(code).trim().toUpperCase()
+  const { rows } = await client.query(`SELECT 1 FROM sat_unit_codes WHERE code = $1`, [c])
+  if (!rows.length) {
+    throw createError(422,
+      `La clave de unidad SAT "${c}" no existe en el catálogo del SAT (c_ClaveUnidad). ` +
+      `Búscala en el selector y elige una válida — ej. XRO (Rollo), H87 (Pieza), KGM (Kilogramo), MTR (Metro).`)
+  }
+}
+
+/**
  * Lista productos del tenant con filtros opcionales.
  */
 async function listProducts({ tenantId, type, resinType, isActive, isProduced, search, page = 1, limit = 50 }) {
@@ -157,6 +174,8 @@ async function createPackOption({
       )
     }
 
+    await assertValidSatUnitCode(client, satUnitCode)
+
     const { rows } = await client.query(
       `INSERT INTO product_pack_options
          (tenant_id, product_id, pack_unit, base_per_pack, sat_unit_code, is_default, notes)
@@ -190,6 +209,8 @@ async function updatePackOption({
       [packOptionId, tenantId]
     )
     if (!existing.length) throw createError(404, 'Presentación no encontrada.')
+
+    await assertValidSatUnitCode(client, satUnitCode)
 
     if (isDefault === true) {
       await client.query(
@@ -295,6 +316,8 @@ async function createProduct({
       client, tenantId, entityType: 'product', providedCode: sku,
     })
 
+    await assertValidSatUnitCode(client, satUnitCode)
+
     const { rows } = await client.query(
       `INSERT INTO products
          (tenant_id, sku, name, type, is_produced, product_kind_id, resin_type,
@@ -365,6 +388,8 @@ async function updateProduct({
     const expectedSalePriceProvided = expectedSalePrice !== undefined
     const productKindIdProvided     = productKindId     !== undefined
     const defaultGradeIdProvided    = defaultQualityGradeId !== undefined
+
+    await assertValidSatUnitCode(client, satUnitCode)
 
     // Capturar la clave de unidad SAT anterior para propagarla a las
     // presentaciones que estaban en sincronía con ella (típicamente la default

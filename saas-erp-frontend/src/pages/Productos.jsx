@@ -807,8 +807,10 @@ function PackOptionsEditor({ product }) {
                   </td>
                   <td className="font-mono text-ink-muted">
                     {isEd ? (
-                      <input className="input text-xs py-1 w-20 uppercase" value={editRow.satUnitCode}
-                        onChange={e => setEditRow(r => ({ ...r, satUnitCode: e.target.value }))} />
+                      <SatUnitCombobox
+                        value={editRow.satUnitCode}
+                        onChange={v => setEditRow(r => ({ ...r, satUnitCode: v }))}
+                      />
                     ) : opt.sat_unit_code}
                   </td>
                   <td className="text-center">

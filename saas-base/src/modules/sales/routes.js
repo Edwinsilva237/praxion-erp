@@ -6,7 +6,7 @@ const path    = require('path')
 const { tenantResolver }  = require('../../middleware/tenantResolver')
 const { authGuard }       = require('../../middleware/authGuard')
 const { requireActiveTenant } = require('../../middleware/requireActiveTenant')
-const { checkPermission } = require('../../middleware/checkPermission')
+const { checkPermission, checkAnyPermission } = require('../../middleware/checkPermission')
 const requireModule       = require('../../middleware/requireModule')
 const { query }           = require('../../db')
 const orderService        = require('./orderService')
@@ -284,7 +284,9 @@ router.get('/delivery-notes/:id/pdf', checkPermission('sales', 'read'), async (r
  * Funciona offline — si no hay conexión la foto se guarda localmente.
  */
 router.post('/delivery-notes/:id/deliver',
-  checkPermission('sales', 'update'),
+  // Registrar entrega + evidencia: el repartidor puede tener solo `sales:deliver`
+  // (sin edición general). Los roles con `sales:update` siguen funcionando.
+  checkAnyPermission([['sales', 'update'], ['sales', 'deliver']]),
   uploadPhoto.single('photo'),
   async (req, res, next) => {
     try {
