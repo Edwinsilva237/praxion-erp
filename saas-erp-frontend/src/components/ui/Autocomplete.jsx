@@ -3,6 +3,14 @@ import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 
+// El desplegable de resultados se ancla con position:fixed en un portal, así que
+// su z-index DEBE ganarle al modal que contiene el input. Los modales de EDICIÓN
+// de línea (PedidoLineaModal/CotizacionLineaModal) viven en z-[10001]; con el
+// menú en 10000 quedaba DETRÁS y el autocompletar se veía "muerto" al editar
+// (sí funcionaba al crear porque esos forms están en z-[9999]). Mantener este
+// valor por ENCIMA del modal más alto que use un Autocomplete.
+const AUTOCOMPLETE_MENU_Z = 10010
+
 /**
  * Autocomplete genérico.
  *
@@ -111,7 +119,7 @@ export default function Autocomplete({ value, onChange, onSearch, placeholder = 
       {open && results.length > 0 && menuPos && createPortal(
         <ul
           ref={menuRef}
-          style={{ position: 'fixed', zIndex: 10000, ...menuPos }}
+          style={{ position: 'fixed', zIndex: AUTOCOMPLETE_MENU_Z, ...menuPos }}
           className="bg-surface-primary border border-line-subtle rounded-xl shadow-card overflow-y-auto"
         >
           {results.map(item => (
@@ -131,7 +139,7 @@ export default function Autocomplete({ value, onChange, onSearch, placeholder = 
       {open && !loading && query && results.length === 0 && menuPos && createPortal(
         <div
           ref={menuRef}
-          style={{ position: 'fixed', zIndex: 10000, ...menuPos }}
+          style={{ position: 'fixed', zIndex: AUTOCOMPLETE_MENU_Z, ...menuPos }}
           className="bg-surface-primary border border-line-subtle rounded-xl shadow-card px-3 py-2"
         >
           <p className="text-sm text-ink-muted">Sin resultados para "{query}"</p>
