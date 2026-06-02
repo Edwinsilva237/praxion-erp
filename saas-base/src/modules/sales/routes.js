@@ -319,6 +319,32 @@ router.post('/delivery-notes/:id/deliver',
 )
 
 /**
+ * POST /api/sales/delivery-notes/:id/adjust-prices
+ * Corrige precios (unit_price/discount_pct) de una remisión NO facturada, con
+ * observación obligatoria. Recalcula total + CXC y espeja el precio al pedido.
+ * Body: { lines: [{ lineId, unitPrice, discountPct? }], reason }
+ * Permiso dedicado (sensible) — solo admin por default (mig 187).
+ */
+router.post('/delivery-notes/:id/adjust-prices', checkPermission('sales', 'adjust_price'), async (req, res, next) => {
+  try {
+    const { lines, reason } = req.body
+    if (!Array.isArray(lines) || lines.length === 0) {
+      return res.status(400).json({ error: 'Se requiere al menos una línea a corregir.' })
+    }
+    const result = await deliveryNoteService.adjustDeliveryNotePrices({
+      tenantId:  req.tenant.id,
+      noteId:    req.params.id,
+      lines,
+      reason,
+      userId:    req.auth.userId,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    })
+    res.json({ ...result, message: `Precios corregidos (${result.changed}). Total: ${result.total_mxn}.` })
+  } catch (err) { next(err) }
+})
+
+/**
  * POST /api/sales/delivery-notes/:id/cancel
  * Cancela una remisión revirtiendo inventario y AR.
  * Body: { reason }

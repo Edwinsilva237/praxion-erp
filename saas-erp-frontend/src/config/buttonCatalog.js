@@ -101,6 +101,13 @@ export const BUTTON_CATALOG = [
     permission:       'sales:delete',
   },
   {
+    key:              'sales.adjust-delivery-note-prices',
+    label:            'Corregir precios de una remisión no facturada (con observación)',
+    screen:           'Comercial · Remisiones',
+    accessPermission: 'sales:read',
+    permission:       'sales:adjust_price',
+  },
+  {
     key:              'invoicing.new-invoice',
     label:            'Nueva factura',
     screen:           'Comercial · Facturación',

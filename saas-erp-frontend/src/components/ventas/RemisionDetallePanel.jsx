@@ -329,11 +329,143 @@ function EmailModal({ note, onSend, onClose, sending }) {
   )
 }
 
+// ── Modal: corregir precios de una remisión no facturada ─────────────────────
+function PriceAdjustModal({ note, onSubmit, onClose, saving }) {
+  const lines = note.lines || []
+  const cur = note.currency
+  const [edited, setEdited] = useState(() =>
+    Object.fromEntries(lines.map(l => [l.id, {
+      unitPrice:   l.unit_price != null ? String(l.unit_price) : '',
+      discountPct: l.discount_pct != null ? String(l.discount_pct) : '0',
+    }]))
+  )
+  const [reason, setReason] = useState('')
+
+  const setField = (id, field, val) =>
+    setEdited(s => ({ ...s, [id]: { ...s[id], [field]: val } }))
+
+  const lineCalc = (l) => {
+    const e = edited[l.id] || {}
+    const price = Number(e.unitPrice)
+    const disc  = Number(e.discountPct || 0)
+    const qty   = parseFloat(l.quantity_delivered || 0)
+    const validPrice = Number.isFinite(price) && price >= 0
+    const validDisc  = Number.isFinite(disc) && disc >= 0 && disc < 100
+    const importe = (validPrice ? price : 0) * qty * (1 - (validDisc ? disc : 0) / 100)
+    const op = parseFloat(l.unit_price)
+    const od = parseFloat(l.discount_pct || 0)
+    const changed = validPrice && (price !== op || (validDisc ? disc : 0) !== od)
+    return { price, disc, qty, validPrice, validDisc, importe, changed }
+  }
+
+  const calcs = lines.map(l => ({ l, c: lineCalc(l) }))
+  const newTotal = calcs.reduce((acc, { c }) => acc + c.importe, 0)
+  const allValid = calcs.every(({ c }) => c.validPrice && c.validDisc)
+  const changes = calcs.filter(({ c }) => c.changed)
+  const canSave = !saving && reason.trim().length >= 5 && changes.length > 0 && allValid
+
+  function handleSave() {
+    const payload = changes.map(({ l }) => ({
+      lineId:      l.id,
+      unitPrice:   Number(edited[l.id].unitPrice),
+      discountPct: Number(edited[l.id].discountPct || 0),
+    }))
+    onSubmit({ lines: payload, reason: reason.trim() })
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-2xl p-5 max-h-[92vh] overflow-y-auto">
+        <h3 className="text-base font-semibold text-ink-primary mb-1">
+          Corregir precios · {note.document_number}
+        </h3>
+        <p className="text-xs text-ink-muted mb-3">
+          Ajusta el precio antes de facturar. La remisión respalda la <strong>entrega</strong> (cantidades),
+          no los precios — las cantidades no se modifican aquí. El cambio se registra con tu observación
+          y se refleja en el pedido y en el saldo por cobrar.
+        </p>
+
+        <div className="border border-line-subtle rounded-xl overflow-x-auto">
+          <table className="table text-xs min-w-full">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th className="text-right">Entregado</th>
+                <th className="text-right">P. Unit.</th>
+                <th className="text-right">Desc. %</th>
+                <th className="text-right">Importe</th>
+              </tr>
+            </thead>
+            <tbody>
+              {calcs.map(({ l, c }) => (
+                <tr key={l.id} className={c.changed ? 'bg-brand-500/[0.06]' : undefined}>
+                  <td>
+                    <p className="font-medium text-ink-primary">{l.product_name}</p>
+                    {l.sku && <p className="text-[10px] text-ink-muted font-mono">{l.sku}</p>}
+                  </td>
+                  <td className="text-right font-mono tabular-nums text-ink-secondary whitespace-nowrap">
+                    {fmtNum(c.qty, 3)} {l.unit}
+                  </td>
+                  <td className="text-right">
+                    <input
+                      type="number" min="0" step="0.0001" inputMode="decimal"
+                      className={clsx('input input-sm w-28 text-right font-mono', !c.validPrice && 'input-error')}
+                      value={edited[l.id]?.unitPrice ?? ''}
+                      onChange={e => setField(l.id, 'unitPrice', e.target.value)}
+                    />
+                  </td>
+                  <td className="text-right">
+                    <input
+                      type="number" min="0" max="99.99" step="0.01" inputMode="decimal"
+                      className={clsx('input input-sm w-20 text-right font-mono', !c.validDisc && 'input-error')}
+                      value={edited[l.id]?.discountPct ?? '0'}
+                      onChange={e => setField(l.id, 'discountPct', e.target.value)}
+                    />
+                  </td>
+                  <td className="text-right font-mono tabular-nums font-medium whitespace-nowrap">
+                    {fmtMXN(c.importe, cur)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="bg-surface-elevated/40 border-t border-line-subtle px-4 py-2.5 flex justify-between text-sm font-semibold text-ink-primary">
+            <span>Nuevo total remisión</span>
+            <span className="font-mono tabular-nums text-brand-300">{fmtMXN(newTotal, cur)}</span>
+          </div>
+        </div>
+
+        <label className="block text-xs font-medium text-ink-secondary mt-4 mb-1">
+          Observación (obligatoria) <span className="text-status-danger">*</span>
+        </label>
+        <textarea
+          className="input min-h-[64px]" rows={2}
+          placeholder="Ej. Precio mal capturado; se corrige a la tarifa autorizada del cliente."
+          value={reason}
+          onChange={e => setReason(e.target.value)}
+        />
+        <p className="text-[10px] text-ink-muted mt-1">
+          Queda registrada en el historial del documento (mínimo 5 caracteres).
+        </p>
+
+        <div className="flex gap-2 mt-4">
+          <button onClick={onClose} className="btn-secondary flex-1" disabled={saving}>Cancelar</button>
+          <button onClick={handleSave} className="btn-primary flex-1" disabled={!canSave}>
+            {saving ? <Spinner size="sm" /> : `Guardar corrección${changes.length ? ` (${changes.length})` : ''}`}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 // ── Panel principal ──────────────────────────────────────────────────────────
 export function RemisionDetallePanel({ noteId, onClose }) {
   const qc = useQueryClient()
   const [showEntregaModal, setShowEntregaModal] = useState(false)
   const [showEmailModal, setShowEmailModal] = useState(false)
+  const [showAdjustModal, setShowAdjustModal] = useState(false)
   const [actionError, setError] = useState(null)
   const [actionMsg, setMsg]     = useState(null)
 
@@ -398,6 +530,21 @@ export function RemisionDetallePanel({ noteId, onClose }) {
     setError(null); setMsg(null)
     deleteMutation.mutate()
   }
+
+  // Corrección de precios de una remisión NO facturada (solo admin — sales:adjust_price).
+  const adjustMutation = useMutation({
+    mutationFn: (payload) => salesApi.adjustPrices(noteId, payload),
+    onSuccess: (r) => {
+      setShowAdjustModal(false)
+      setError(null)
+      setMsg(r.message || 'Precios corregidos.')
+      qc.invalidateQueries({ queryKey: ['delivery-note', noteId] })
+      qc.invalidateQueries({ queryKey: ['delivery-notes'] })
+      qc.invalidateQueries({ queryKey: ['sales-order', note?.sales_order_id] })
+      qc.invalidateQueries({ queryKey: ['sales-orders'] })
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al corregir precios'),
+  })
 
   // En nativo se imprime el PDF formal del backend (el HTML del cliente no
   // funciona en el webview). El parámetro showPrices pide la versión sin precios.
@@ -578,6 +725,29 @@ export function RemisionDetallePanel({ noteId, onClose }) {
 
               <LineasTable note={note} />
 
+              {/* Corregir precios — solo si la remisión NO tiene factura activa
+                  ni está cancelada (permiso sales:adjust_price, solo admin). */}
+              {(() => {
+                const anyInvoiced = !!note.invoice_id || (note.lines || []).some(l => l.invoice_id)
+                if (anyInvoiced || note.status === 'cancelled') return null
+                return (
+                  <Can do="sales:adjust_price">
+                    <div className="flex items-center justify-between gap-2 bg-surface-elevated/40 border border-line-subtle rounded-lg px-3 py-2">
+                      <p className="text-[11px] text-ink-muted">
+                        ¿Precio equivocado? Corrígelo antes de facturar (queda registrado con observación).
+                      </p>
+                      <button onClick={() => { setError(null); setMsg(null); setShowAdjustModal(true) }}
+                        className="btn-secondary btn-sm shrink-0">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                        </svg>
+                        Corregir precios
+                      </button>
+                    </div>
+                  </Can>
+                )
+              })()}
+
               {/* Foto de evidencia */}
               {note.receiver_photo_path && (
                 <div>
@@ -627,6 +797,15 @@ export function RemisionDetallePanel({ noteId, onClose }) {
           onSend={(emails) => sendEmailMutation.mutate(emails)}
           onClose={() => setShowEmailModal(false)}
           sending={sendEmailMutation.isPending}
+        />
+      )}
+
+      {showAdjustModal && note && (
+        <PriceAdjustModal
+          note={note}
+          onSubmit={(payload) => adjustMutation.mutate(payload)}
+          onClose={() => setShowAdjustModal(false)}
+          saving={adjustMutation.isPending}
         />
       )}
     </div>,

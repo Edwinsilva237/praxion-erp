@@ -952,6 +952,195 @@ async function setNoInvoice({ tenantId, noteId, noInvoice, userId, ipAddress, us
   })
 }
 
+/**
+ * Corrige los PRECIOS (unit_price / discount_pct) de las líneas de una remisión
+ * que AÚN NO se ha facturado. Fundamento: la remisión respalda la ENTREGA de
+ * mercancía (cantidades), no los precios; el CFDI es el documento que fija el
+ * precio. Corregir antes de timbrar evita una nota de crédito.
+ *
+ * NO toca cantidades (eso falsearía lo entregado y movería inventario — para
+ * una discrepancia de cantidad va cancelar/rehacer la remisión).
+ *
+ * Candados:
+ *   - Observación obligatoria (mín. 5 caracteres) → queda en document_status_log
+ *     + audit_logs con el precio viejo→nuevo por línea.
+ *   - Bloquea si la remisión ya tiene factura ACTIVA (directa o consolidada) →
+ *     ahí se corrige con nota de crédito.
+ *   - Bloquea si el CXC de la remisión ya tiene cobros (cambiar el total
+ *     descuadraría el cobro).
+ *   - Bloquea si la remisión está cancelada.
+ *
+ * Cascada (misma transacción):
+ *   - Recalcula delivery_notes.subtotal_mxn / total_mxn (sin IVA, igual que al
+ *     crearla: total_mxn = subtotal_doc * factor).
+ *   - Actualiza el CXC tipo 'remission' (amount_total) si existe y sin cobros.
+ *   - Espeja unit_price / discount_pct a sales_order_lines → el pedido queda
+ *     consistente (pasa por encima del candado de draft a propósito: es la vía
+ *     sancionada de corrección).
+ *
+ * `lines`: [{ lineId, unitPrice, discountPct? }] — solo las líneas a corregir.
+ */
+async function adjustDeliveryNotePrices({ tenantId, noteId, lines, reason, userId, ipAddress, userAgent }) {
+  const cleanReason = (reason || '').trim()
+  if (cleanReason.length < 5) {
+    throw createError(400, 'La observación es obligatoria (mínimo 5 caracteres).')
+  }
+  if (!Array.isArray(lines) || lines.length === 0) {
+    throw createError(400, 'No hay líneas que corregir.')
+  }
+
+  return withTransaction(async (client) => {
+    const { rows: noteRows } = await client.query(
+      `SELECT id, document_number, status, currency, exchange_rate_value
+         FROM delivery_notes
+        WHERE id = $1 AND tenant_id = $2
+        FOR UPDATE`,
+      [noteId, tenantId]
+    )
+    if (!noteRows.length) throw createError(404, 'Remisión no encontrada.')
+    const note = noteRows[0]
+
+    if (note.status === 'cancelled') {
+      throw createError(409, 'No se puede corregir el precio de una remisión cancelada.')
+    }
+
+    // Candado: no debe estar facturada (factura directa o consolidada activa) ni
+    // tener cobros aplicados sobre el CXC de la remisión.
+    const { rows: refs } = await client.query(
+      `SELECT
+         EXISTS(SELECT 1 FROM invoices
+                 WHERE tenant_id=$1 AND delivery_note_id=$2 AND status<>'cancelled')          AS inv_directa,
+         EXISTS(SELECT 1 FROM invoice_lines il
+                  JOIN delivery_note_lines dnl ON dnl.id = il.delivery_note_line_id
+                  JOIN invoices iv ON iv.id = il.invoice_id
+                 WHERE dnl.delivery_note_id=$2 AND iv.tenant_id=$1 AND iv.status<>'cancelled') AS inv_consol,
+         EXISTS(SELECT 1 FROM accounts_receivable
+                 WHERE tenant_id=$1 AND document_type='remission' AND document_id=$2 AND amount_paid>0) AS cobros`,
+      [tenantId, noteId]
+    )
+    const r = refs[0]
+    if (r.inv_directa || r.inv_consol) {
+      throw createError(409,
+        'Esta remisión ya tiene factura activa. Corrige el precio con una nota de crédito, o cancela la factura primero.')
+    }
+    if (r.cobros) {
+      throw createError(409, 'La remisión ya tiene cobros aplicados; ajusta el cobro antes de corregir el precio.')
+    }
+
+    // Cargar TODAS las líneas actuales (para recomputar el total con los cambios).
+    const { rows: dbLines } = await client.query(
+      `SELECT id, line_number, product_id, quantity_delivered,
+              unit_price, discount_pct, sales_order_line_id
+         FROM delivery_note_lines
+        WHERE delivery_note_id = $1`,
+      [noteId]
+    )
+    const byId = Object.fromEntries(dbLines.map(l => [l.id, l]))
+
+    // Validar y registrar cada cambio (sin escribir aún).
+    const changes = []
+    for (const inp of lines) {
+      const cur = byId[inp.lineId]
+      if (!cur) throw createError(400, 'Una de las líneas no pertenece a esta remisión.')
+      const newPrice = Number(inp.unitPrice)
+      if (!Number.isFinite(newPrice) || newPrice < 0) {
+        throw createError(400, 'Precio unitario inválido.')
+      }
+      const oldPrice = parseFloat(cur.unit_price)
+      const oldDisc  = cur.discount_pct != null ? parseFloat(cur.discount_pct) : 0
+      let newDisc = oldDisc
+      if (inp.discountPct != null && inp.discountPct !== '') {
+        newDisc = Number(inp.discountPct)
+        if (!Number.isFinite(newDisc) || newDisc < 0 || newDisc >= 100) {
+          throw createError(400, 'Descuento inválido (0–99.99%).')
+        }
+      }
+      // Reflejar en el mapa para el recálculo del total aunque no haya cambio.
+      cur.unit_price   = newPrice
+      cur.discount_pct = newDisc
+      if (oldPrice !== newPrice || oldDisc !== newDisc) {
+        changes.push({
+          lineId: cur.id, lineNumber: cur.line_number, productId: cur.product_id,
+          oldUnitPrice: oldPrice, newUnitPrice: newPrice,
+          oldDiscountPct: oldDisc, newDiscountPct: newDisc,
+        })
+      }
+    }
+    if (changes.length === 0) {
+      throw createError(400, 'No hay cambios de precio que aplicar.')
+    }
+
+    // Persistir los cambios de línea.
+    for (const ch of changes) {
+      await client.query(
+        `UPDATE delivery_note_lines
+            SET unit_price = $1, discount_pct = $2
+          WHERE id = $3 AND delivery_note_id = $4`,
+        [ch.newUnitPrice, ch.newDiscountPct, ch.lineId, noteId]
+      )
+    }
+
+    // Recalcular el total de la remisión. Sin IVA (igual que al crearla):
+    // total_mxn = subtotal_doc * factor (factor = TC si la moneda es USD).
+    const factor = note.currency === 'USD' ? parseFloat(note.exchange_rate_value || 1) : 1
+    let subtotalDoc = 0
+    for (const l of Object.values(byId)) {
+      subtotalDoc += parseFloat(l.quantity_delivered) * parseFloat(l.unit_price)
+        * (1 - parseFloat(l.discount_pct || 0) / 100)
+    }
+    const newTotalMxn = +(subtotalDoc * factor).toFixed(2)
+    await client.query(
+      `UPDATE delivery_notes
+          SET subtotal_mxn = $1, tax_mxn = 0, total_mxn = $1
+        WHERE id = $2 AND tenant_id = $3`,
+      [newTotalMxn, noteId, tenantId]
+    )
+
+    // Actualizar el CXC tipo 'remisión' (si existe y sin cobros).
+    await client.query(
+      `UPDATE accounts_receivable
+          SET amount_total = $1
+        WHERE tenant_id = $2 AND document_type = 'remission'
+          AND document_id = $3 AND amount_paid = 0`,
+      [newTotalMxn, tenantId, noteId]
+    )
+
+    // Espejar el precio al pedido (sales_order_lines) para mantener consistencia.
+    // El subtotal de la línea del pedido es GENERATED → se recalcula solo.
+    for (const ch of changes) {
+      const solId = byId[ch.lineId].sales_order_line_id
+      if (!solId) continue
+      await client.query(
+        `UPDATE sales_order_lines
+            SET unit_price = $1, discount_pct = $2
+          WHERE id = $3
+            AND sales_order_id IN (SELECT id FROM sales_orders WHERE tenant_id = $4)`,
+        [ch.newUnitPrice, ch.newDiscountPct, solId, tenantId]
+      )
+    }
+
+    // Historial del documento (la observación) + auditoría.
+    await client.query(
+      `INSERT INTO document_status_log
+         (tenant_id, entity_type, entity_id, from_status, to_status, changed_by, notes, metadata)
+       VALUES ($1, 'delivery_note', $2, $3, $3, $4, $5, $6)`,
+      [tenantId, noteId, note.status, userId, cleanReason,
+       JSON.stringify({ action: 'price_adjusted', changes, newTotalMxn })]
+    )
+    await audit({
+      tenantId, userId, action: 'delivery_note.price_adjusted',
+      resource: 'delivery_notes', resourceId: noteId,
+      payload: { docNumber: note.document_number, reason: cleanReason, changes, newTotalMxn },
+      ipAddress, userAgent,
+    })
+
+    return {
+      id: noteId, document_number: note.document_number,
+      total_mxn: newTotalMxn, changed: changes.length,
+    }
+  })
+}
+
 async function getOrderLines(client, salesOrderId) {
   const { rows } = await client.query(
     `SELECT product_id AS "productId", quantity AS "quantityOrdered",
@@ -978,4 +1167,5 @@ function createError(status, message) {
 module.exports = {
   createDeliveryNote, listDeliveryNotes, getDeliveryNote,
   recordDelivery, markAsSentByEmail, setNoInvoice, cancelDelivery, deleteDelivery,
+  adjustDeliveryNotePrices,
 }

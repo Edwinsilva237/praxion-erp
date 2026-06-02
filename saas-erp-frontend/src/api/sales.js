@@ -43,6 +43,10 @@ export const salesApi = {
     }).then(r => r.data),
   cancelDeliveryNote: (id, body) =>
     api.post(`${B}/delivery-notes/${id}/cancel`, body || {}).then(r => r.data),
+  // Corrige precios de una remisión NO facturada (con observación obligatoria).
+  // lines: [{ lineId, unitPrice, discountPct? }]
+  adjustPrices: (id, { lines, reason }) =>
+    api.post(`${B}/delivery-notes/${id}/adjust-prices`, { lines, reason }).then(r => r.data),
   deleteDeliveryNote: (id) =>
     api.delete(`${B}/delivery-notes/${id}`).then(r => r.data),
 }

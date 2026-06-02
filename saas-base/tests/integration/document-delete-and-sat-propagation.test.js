@@ -575,3 +575,119 @@ describe('K) Cotización: se puede reenviar aunque ya esté convertida', () => {
       .rejects.toThrow(/cancelada/i)
   })
 })
+
+describe('L) Corregir precio de una remisión no facturada (mig 187)', () => {
+  let tenantId, userId, partnerId, productId, seq = 0
+
+  beforeAll(async () => {
+    const info = await createTenant({ label: 'pricefix', planSlug: 'owner' })
+    tenantId = info.tenant.id
+    userId   = info.user.id
+    partnerId = await makePartner(tenantId)
+    productId = (await productService.createProduct({
+      tenantId, userId, sku: 'PFX-1', name: 'Producto precio',
+      type: 'resale', isProduced: false, satUnitCode: 'H87',
+    })).id
+  })
+
+  // Crea pedido (vía servicio, para no fallar por columnas NOT NULL) + remisión
+  // manual que referencia su línea, opcionalmente con CXC de remisión.
+  async function makeRemisionado({ status = 'delivered', unitPrice = 100, qty = 10, withCxc = false } = {}) {
+    seq++
+    const order = await orderService.createOrder({
+      tenantId, partnerId, userId, force: true,
+      lines: [{ productId, quantity: qty, unit: 'pieza', unitPrice }],
+    })
+    const { rows: sol } = await withBypass(() => query(
+      `SELECT id FROM sales_order_lines WHERE sales_order_id = $1`, [order.id]
+    ))
+    const solId = sol[0].id
+    const total = qty * unitPrice
+    const { rows: dn } = await withBypass(() => query(
+      `INSERT INTO delivery_notes
+         (tenant_id, type, document_number, partner_id, sales_order_id, status,
+          currency, subtotal_mxn, tax_mxn, total_mxn)
+       VALUES ($1,'sale',$2,$3,$4,$5,'MXN',$6,0,$6) RETURNING id`,
+      [tenantId, `REM-PFX-${seq}`, partnerId, order.id, status, total]
+    ))
+    const noteId = dn[0].id
+    const { rows: dnl } = await withBypass(() => query(
+      `INSERT INTO delivery_note_lines
+         (delivery_note_id, product_id, sales_order_id, sales_order_line_id,
+          quantity_ordered, quantity_delivered, unit, unit_price, discount_pct, line_number)
+       VALUES ($1,$2,$3,$4,$5,$5,'pieza',$6,0,1) RETURNING id`,
+      [noteId, productId, order.id, solId, qty, unitPrice]
+    ))
+    const lineId = dnl[0].id
+    if (withCxc) {
+      await withBypass(() => query(
+        `INSERT INTO accounts_receivable
+           (tenant_id, partner_id, document_type, document_id, document_number,
+            currency, exchange_rate, amount_total, issue_date, created_by)
+         VALUES ($1,$2,'remission',$3,$4,'MXN',1,$5,CURRENT_DATE,$6)`,
+        [tenantId, partnerId, noteId, `REM-PFX-${seq}`, total, userId]
+      ))
+    }
+    return { orderId: order.id, solId, noteId, lineId }
+  }
+
+  test('corrige el precio, recalcula total + CXC y espeja al pedido + deja observación', async () => {
+    const { solId, noteId, lineId } = await makeRemisionado({ unitPrice: 100, qty: 10, withCxc: true })
+
+    const res = await deliveryNoteService.adjustDeliveryNotePrices({
+      tenantId, noteId, userId,
+      reason: 'Precio mal capturado, corregido a la tarifa autorizada del cliente.',
+      lines: [{ lineId, unitPrice: 80 }],
+    })
+    expect(res.changed).toBe(1)
+    expect(res.total_mxn).toBe(800)
+
+    const { rows: dnl } = await withBypass(() => query(`SELECT unit_price FROM delivery_note_lines WHERE id=$1`, [lineId]))
+    expect(parseFloat(dnl[0].unit_price)).toBe(80)
+    const { rows: dn } = await withBypass(() => query(`SELECT total_mxn FROM delivery_notes WHERE id=$1`, [noteId]))
+    expect(parseFloat(dn[0].total_mxn)).toBe(800)
+    const { rows: ar } = await withBypass(() => query(
+      `SELECT amount_total FROM accounts_receivable WHERE document_type='remission' AND document_id=$1`, [noteId]))
+    expect(parseFloat(ar[0].amount_total)).toBe(800)
+    // Espejo al pedido.
+    const { rows: sol } = await withBypass(() => query(`SELECT unit_price FROM sales_order_lines WHERE id=$1`, [solId]))
+    expect(parseFloat(sol[0].unit_price)).toBe(80)
+    // Observación en el historial del documento.
+    const { rows: log } = await withBypass(() => query(
+      `SELECT notes FROM document_status_log
+        WHERE entity_type='delivery_note' AND entity_id=$1 AND notes IS NOT NULL
+        ORDER BY created_at DESC LIMIT 1`, [noteId]))
+    expect(log[0].notes).toMatch(/tarifa autorizada/i)
+  })
+
+  test('exige observación (mínimo 5 caracteres)', async () => {
+    const { noteId, lineId } = await makeRemisionado()
+    await expect(deliveryNoteService.adjustDeliveryNotePrices({
+      tenantId, noteId, userId, reason: 'x', lines: [{ lineId, unitPrice: 50 }],
+    })).rejects.toThrow(/observación/i)
+  })
+
+  test('bloquea si la remisión ya tiene factura activa', async () => {
+    const { noteId, lineId } = await makeRemisionado()
+    const { rows: inv } = await withBypass(() => query(
+      `INSERT INTO invoices (tenant_id, type, document_number, partner_id, status)
+       VALUES ($1,'issued','E-PFX',$2,'stamped') RETURNING id`, [tenantId, partnerId]))
+    await withBypass(() => query(
+      `INSERT INTO invoice_lines (invoice_id, product_id, description, quantity, unit_price, line_number, delivery_note_line_id)
+       VALUES ($1,$2,'x',10,100,1,$3)`, [inv[0].id, productId, lineId]))
+
+    await expect(deliveryNoteService.adjustDeliveryNotePrices({
+      tenantId, noteId, userId, reason: 'intento de corrección', lines: [{ lineId, unitPrice: 50 }],
+    })).rejects.toThrow(/factura activa/i)
+  })
+
+  test('bloquea si el CXC de la remisión ya tiene cobros', async () => {
+    const { noteId, lineId } = await makeRemisionado({ withCxc: true })
+    await withBypass(() => query(
+      `UPDATE accounts_receivable SET amount_paid = 100
+        WHERE document_type='remission' AND document_id=$1`, [noteId]))
+    await expect(deliveryNoteService.adjustDeliveryNotePrices({
+      tenantId, noteId, userId, reason: 'intento con cobro previo', lines: [{ lineId, unitPrice: 50 }],
+    })).rejects.toThrow(/cobros/i)
+  })
+})
