@@ -157,6 +157,22 @@ async function cleanupTestTenants() {
       )
     `, [slugPattern])
 
+    // Líneas de documentos cuya FK product_id es RESTRICT (no CASCADE). Si el
+    // CASCADE del tenant borra `products` antes que estas líneas, viola la FK.
+    // Pre-borrarlas (vía su documento padre del tenant) evita el problema.
+    await query(`
+      DELETE FROM invoice_lines il USING invoices iv, tenants t
+       WHERE il.invoice_id = iv.id AND iv.tenant_id = t.id AND t.slug LIKE $1
+    `, [slugPattern])
+    await query(`
+      DELETE FROM delivery_note_lines dnl USING delivery_notes dn, tenants t
+       WHERE dnl.delivery_note_id = dn.id AND dn.tenant_id = t.id AND t.slug LIKE $1
+    `, [slugPattern])
+    await query(`
+      DELETE FROM sales_order_lines sol USING sales_orders so, tenants t
+       WHERE sol.sales_order_id = so.id AND so.tenant_id = t.id AND t.slug LIKE $1
+    `, [slugPattern])
+
     // Finalmente el tenant — CASCADE limpia el resto
     await query(`DELETE FROM tenants WHERE slug LIKE $1`, [slugPattern])
   })

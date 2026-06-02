@@ -391,3 +391,94 @@ describe('G) Permisos finos de evidencia aislados de la edición', () => {
     expect(await hasPermission(evidenceUserId, 'purchases', 'update')).toBe(false)
   })
 })
+
+describe('H) getDeliveryNote no duplica líneas por facturas canceladas', () => {
+  let tenantId, userId, partnerId, productId
+
+  beforeAll(async () => {
+    const info = await createTenant({ label: 'remdup', planSlug: 'owner' })
+    tenantId = info.tenant.id
+    userId   = info.user.id
+    partnerId = await makePartner(tenantId)
+    const p = await productService.createProduct({
+      tenantId, userId, sku: 'DUP-1', name: 'Producto dup',
+      type: 'resale', isProduced: false, satUnitCode: 'H87',
+    })
+    productId = p.id
+  })
+
+  test('una línea referenciada por una factura CANCELADA y una ACTIVA aparece UNA vez', async () => {
+    const { rows: dn } = await withBypass(() => query(
+      `INSERT INTO delivery_notes (tenant_id, type, document_number, partner_id, status)
+       VALUES ($1,'sale','REM-DUP-1',$2,'delivered') RETURNING id`,
+      [tenantId, partnerId]
+    ))
+    const noteId = dn[0].id
+    const { rows: dnl } = await withBypass(() => query(
+      `INSERT INTO delivery_note_lines
+         (delivery_note_id, product_id, quantity_ordered, quantity_delivered, unit_price, line_number)
+       VALUES ($1,$2,100,100,5,1) RETURNING id`,
+      [noteId, productId]
+    ))
+    const lineId = dnl[0].id
+
+    // Factura CANCELADA (intento fallido) que referencia la línea.
+    const { rows: invC } = await withBypass(() => query(
+      `INSERT INTO invoices (tenant_id, type, document_number, partner_id, status)
+       VALUES ($1,'issued','E-CANCEL',$2,'cancelled') RETURNING id`, [tenantId, partnerId]
+    ))
+    await withBypass(() => query(
+      `INSERT INTO invoice_lines (invoice_id, product_id, description, quantity, unit_price, line_number, delivery_note_line_id)
+       VALUES ($1,$2,'x',100,5,1,$3)`, [invC[0].id, productId, lineId]
+    ))
+
+    // Factura ACTIVA (la buena) que referencia la MISMA línea.
+    const { rows: invA } = await withBypass(() => query(
+      `INSERT INTO invoices (tenant_id, type, document_number, partner_id, status)
+       VALUES ($1,'issued','E-4538',$2,'stamped') RETURNING id`, [tenantId, partnerId]
+    ))
+    await withBypass(() => query(
+      `INSERT INTO invoice_lines (invoice_id, product_id, description, quantity, unit_price, line_number, delivery_note_line_id)
+       VALUES ($1,$2,'x',100,5,1,$3)`, [invA[0].id, productId, lineId]
+    ))
+
+    const note = await deliveryNoteService.getDeliveryNote({ tenantId, noteId })
+    // Sin el fix saldrían 2 filas (fantasma por la cancelada). Con el fix: 1.
+    expect(note.lines).toHaveLength(1)
+    expect(note.lines[0].invoice_number).toBe('E-4538')
+  })
+})
+
+describe('I) Guard anti-duplicado de pedidos (override con force)', () => {
+  let tenantId, userId, partnerId, productId
+
+  beforeAll(async () => {
+    const info = await createTenant({ label: 'orddup', planSlug: 'owner' })
+    tenantId = info.tenant.id
+    userId   = info.user.id
+    partnerId = await makePartner(tenantId)
+    const p = await productService.createProduct({
+      tenantId, userId, sku: 'ODUP-1', name: 'Producto pedido',
+      type: 'resale', isProduced: false, satUnitCode: 'H87',
+    })
+    productId = p.id
+  })
+
+  const orderArgs = (force) => ({
+    tenantId, partnerId, userId, force,
+    lines: [{ productId, quantity: 10, unit: 'pieza', unitPrice: 5 }],
+  })
+
+  test('bloquea un 2º pedido idéntico reciente; force lo permite', async () => {
+    const first = await orderService.createOrder(orderArgs(false))
+    expect(first.order_number).toBeTruthy()
+
+    // Segundo idéntico (mismo cliente + mismo total, < 5 min) → bloqueado.
+    await expect(orderService.createOrder(orderArgs(false)))
+      .rejects.toThrow(/duplicado/i)
+
+    // Con force=true se crea de todos modos (pedido legítimo repetido).
+    const forced = await orderService.createOrder(orderArgs(true))
+    expect(forced.id).not.toBe(first.id)
+  })
+})

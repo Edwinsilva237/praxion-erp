@@ -229,7 +229,7 @@ function PedidoForm({ onClose, onCreated }) {
   }
 
   const mutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (force = false) => {
       const validLines = lines.filter(l => l.product?.id && l.quantity && l.unit_price)
       if (!partner?.id)         throw new Error('Selecciona un cliente.')
       if (!validLines.length)   throw new Error('Agrega al menos una línea con cantidad y precio.')
@@ -246,6 +246,7 @@ function PedidoForm({ onClose, onCreated }) {
         scheduledDate:     scheduledDate || null,
         directInvoice,
         notes:             notes || null,
+        force,
         lines: validLines.map(l => ({
           productId:               l.product.id,
           quantity:                parseFloat(l.quantity),
@@ -267,10 +268,20 @@ function PedidoForm({ onClose, onCreated }) {
       onCreated?.(order)
       onClose()
     },
-    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al crear el pedido'),
+    onError: (e) => {
+      // Guard anti-duplicado: el backend pide confirmación. Si el usuario
+      // acepta, reintenta forzando la creación.
+      if (e.response?.data?.code === 'POSSIBLE_DUPLICATE_ORDER') {
+        if (window.confirm(`${e.response.data.error}\n\n¿Crear el pedido de todos modos?`)) {
+          mutation.mutate(true)
+        }
+        return
+      }
+      setError(e.response?.data?.error || e.message || 'Error al crear el pedido')
+    },
   })
 
-  function handleSubmit(e) { e.preventDefault(); setError(null); mutation.mutate() }
+  function handleSubmit(e) { e.preventDefault(); setError(null); mutation.mutate(false) }
 
   const showQuotationWarning = partnerProfile?.requires_quotation
 

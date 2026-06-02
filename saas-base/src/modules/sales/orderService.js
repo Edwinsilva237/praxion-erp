@@ -238,6 +238,7 @@ async function getSuggestedPrice({ tenantId, partnerId, productId, orderCurrency
 async function createOrder({
   tenantId, partnerId, deliveryAddressId, currency,
   lines = [], poNumber, scheduledDate, driverId, directInvoice, notes,
+  force = false,
   userId, ipAddress, userAgent,
 }) {
   return withTransaction(async (client) => {
@@ -303,6 +304,30 @@ async function createOrder({
     const tax = 0
     const total = subtotal
     const factor = resolvedCurrency === 'USD' ? exchangeRateValue : 1
+
+    // Guard anti-duplicado (override con force): un pedido NO cancelado del
+    // mismo cliente, con el mismo total, creado hace < 5 min, casi siempre es un
+    // reintento por timeout (servidor lento marcó error pero el pedido SÍ se
+    // creó). Pedimos confirmar antes de duplicar; force=true lo salta (pedido
+    // legítimo repetido).
+    if (!force) {
+      const totalMxn = total * factor
+      const { rows: dup } = await client.query(
+        `SELECT order_number FROM sales_orders
+          WHERE tenant_id = $1 AND partner_id = $2 AND status <> 'cancelled'
+            AND created_at > NOW() - INTERVAL '5 minutes'
+            AND ROUND(total_mxn, 2) = ROUND($3::numeric, 2)
+          ORDER BY created_at DESC LIMIT 1`,
+        [tenantId, partnerId, totalMxn]
+      )
+      if (dup.length) {
+        const e = createError(409,
+          `Parece un pedido duplicado: ya creaste el pedido ${dup[0].order_number} de este cliente con el mismo total hace unos minutos. Si es intencional, confirma para crearlo de todos modos.`)
+        e.code = 'POSSIBLE_DUPLICATE_ORDER'
+        e.details = { orderNumber: dup[0].order_number }
+        throw e
+      }
+    }
 
     // Crear pedido
     const { rows } = await client.query(

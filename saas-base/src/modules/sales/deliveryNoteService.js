@@ -417,8 +417,16 @@ async function getDeliveryNote({ tenantId, noteId }) {
             iv.use_cfdi        AS invoice_use_cfdi
      FROM delivery_note_lines dnl
      JOIN products p ON p.id = dnl.product_id
-     LEFT JOIN invoice_lines il ON il.delivery_note_line_id = dnl.id
-     LEFT JOIN invoices iv ON iv.id = il.invoice_id AND iv.status <> 'cancelled'
+     -- Solo considerar líneas de facturas NO canceladas. Sin esto, las líneas
+     -- de facturas canceladas (intentos fallidos) seguían apuntando a la dnl y
+     -- el join producía filas FANTASMA: la misma línea aparecía duplicada (una
+     -- "facturada en la activa" + otra "pendiente" por la cancelada). Una dnl se
+     -- factura completa en a lo más UNA factura activa → máx 1 fila por dnl.
+     LEFT JOIN invoice_lines il
+            ON il.delivery_note_line_id = dnl.id
+           AND EXISTS (SELECT 1 FROM invoices iv2
+                        WHERE iv2.id = il.invoice_id AND iv2.status <> 'cancelled')
+     LEFT JOIN invoices iv ON iv.id = il.invoice_id
      WHERE dnl.delivery_note_id = $1 ORDER BY dnl.line_number`,
     [noteId]
   )
