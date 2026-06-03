@@ -463,7 +463,10 @@ export default function Sidebar({ onClose }) {
       </nav>
 
       {/* ── Footer usuario ───────────────────────────────────────────── */}
-      <div className="border-t border-line-subtle px-2 py-2 flex items-center gap-1">
+      {/* paddingBottom con safe-area: en móvil (barra de navegación del sistema)
+          el perfil + cerrar sesión quedaban DETRÁS de los botones de Android. */}
+      <div className="border-t border-line-subtle px-2 pt-2 flex items-center gap-1 shrink-0"
+        style={{ paddingBottom: 'calc(0.5rem + env(safe-area-inset-bottom))' }}>
         <NavLink
           to="/mi-perfil"
           className={({ isActive }) => clsx(
