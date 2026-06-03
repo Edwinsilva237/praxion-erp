@@ -71,24 +71,47 @@ const PAGE_SIZE = 25
 const PENDING_STATUSES = ['confirmed', 'in_delivery', 'partially_delivered']
 
 // Calcula urgencia de entrega: comparar scheduled_date contra hoy.
-// - overdue: ya pasó
-// - today: es hoy
-// - future: en el futuro
-// - none: sin fecha programada
+// - overdue:  ya pasó (vencido)
+// - today:    es hoy
+// - tomorrow: es mañana
+// - future:   a más de un día
+// - none:     sin fecha programada
 function getDeliveryUrgency(scheduledDate) {
   if (!scheduledDate) return 'none'
   const today = new Date(); today.setHours(0, 0, 0, 0)
   const sched = new Date(scheduledDate); sched.setHours(0, 0, 0, 0)
+  const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1)
   if (sched < today) return 'overdue'
-  if (sched.getTime() === today.getTime()) return 'today'
+  if (sched.getTime() === today.getTime())    return 'today'
+  if (sched.getTime() === tomorrow.getTime()) return 'tomorrow'
   return 'future'
 }
 
+// Color de fondo de la fila por urgencia (escritorio).
 const URGENCY_ROW_CLASS = {
-  overdue: 'bg-status-danger/20 hover:bg-status-danger/25',
-  today:   'bg-status-warning/20 hover:bg-status-warning/25',
-  future:  'bg-status-success/15 hover:bg-status-success/20',
-  none:    'hover:bg-surface-elevated/40',
+  overdue:  'bg-status-danger/20 hover:bg-status-danger/25',
+  today:    'bg-status-warning/20 hover:bg-status-warning/25',
+  tomorrow: 'bg-status-info/20 hover:bg-status-info/25',
+  future:   'bg-status-success/15 hover:bg-status-success/20',
+  none:     'hover:bg-surface-elevated/40',
+}
+
+// Borde izquierdo de color por urgencia (tarjetas móviles).
+const URGENCY_BORDER = {
+  overdue:  'border-l-4 border-l-status-danger',
+  today:    'border-l-4 border-l-status-warning',
+  tomorrow: 'border-l-4 border-l-status-info',
+  future:   'border-l-4 border-l-status-success',
+  none:     '',
+}
+
+// Color del texto de la fecha por urgencia.
+const URGENCY_TEXT_CLASS = {
+  overdue:  'text-status-danger',
+  today:    'text-status-warning',
+  tomorrow: 'text-status-info',
+  future:   'text-status-success',
+  none:     'text-ink-secondary',
 }
 
 export default function VentasPedidos() {
@@ -269,18 +292,28 @@ export default function VentasPedidos() {
                   <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-brand-500/10 border border-brand-500/30">
                     <span className="text-sm font-bold text-brand-300 uppercase tracking-wider">⏳ Por entregar · {pendingOrders.length}</span>
                   </div>
-                  {pendingOrders.map(o => (
+                  {pendingOrders.map(o => {
+                    const urgency = getDeliveryUrgency(o.scheduled_date)
+                    const urgWord = urgency === 'overdue' ? ' · vencido'
+                                  : urgency === 'today'    ? ' · hoy'
+                                  : urgency === 'tomorrow' ? ' · mañana' : ''
+                    return (
                     <button key={o.id} type="button" onClick={() => setSelectedId(o.id)}
                       className={clsx('w-full text-left border rounded-xl px-3 py-2.5 transition-colors',
                         selectedId === o.id ? 'border-brand-500 bg-brand-500/10'
-                          : 'border-line-subtle bg-surface-primary hover:bg-surface-elevated/40')}>
+                          : clsx('border-line-subtle bg-surface-primary hover:bg-surface-elevated/40', URGENCY_BORDER[urgency]))}>
                       <span className="font-mono font-semibold text-brand-300">{o.order_number}</span>
                       <p className="mt-0.5 font-medium text-ink-primary truncate">{o.partner_name}</p>
                       {o.partner_tax_name && o.partner_tax_name !== o.partner_name && (
                         <p className="text-[11px] text-ink-muted truncate">{o.partner_tax_name}</p>
                       )}
+                      {o.scheduled_date && (
+                        <p className={clsx('text-[11px] font-semibold mt-0.5', URGENCY_TEXT_CLASS[urgency])}>
+                          Entrega: {fmtDateOnly(o.scheduled_date)}{urgWord}
+                        </p>
+                      )}
                     </button>
-                  ))}
+                  )})}
                 </div>
               )}
               {doneOrders.length > 0 && (
@@ -326,7 +359,7 @@ export default function VentasPedidos() {
                     <td colSpan={6} className="px-4 py-2.5 text-sm font-bold text-brand-300 uppercase tracking-wider">
                       ⏳ Por entregar · {pendingOrders.length}
                       <span className="ml-3 text-[10px] font-medium text-ink-muted normal-case tracking-normal">
-                        🔴 atrasado · 🟡 entrega hoy · 🟢 entrega futura
+                        🔴 vencido · 🟡 hoy · 🔵 mañana · 🟢 + de 1 día
                       </span>
                     </td>
                   </tr>
@@ -364,10 +397,7 @@ export default function VentasPedidos() {
                         {o.partner_rfc && <p className="text-[10px] text-ink-muted font-mono">{o.partner_rfc}</p>}
                       </td>
                       <td className="text-xs text-ink-secondary">{fmtDate(o.created_at)}</td>
-                      <td className={clsx('text-xs font-semibold',
-                        urgency === 'overdue' ? 'text-status-danger' :
-                        urgency === 'today'   ? 'text-status-warning' :
-                        urgency === 'future'  ? 'text-status-success' : 'text-ink-secondary')}
+                      <td className={clsx('text-xs font-semibold', URGENCY_TEXT_CLASS[urgency])}
                         title={late ? 'Fecha programada vencida' : undefined}>
                         {fmtDateOnly(o.scheduled_date)}
                         {urgency === 'overdue' && (
