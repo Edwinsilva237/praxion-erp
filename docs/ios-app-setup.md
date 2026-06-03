@@ -22,11 +22,14 @@ descubrimiento de correo). NO se reescribe nada del backend.
 
 - `@capacitor/ios` en `package.json` (lockstep con los demás `@capacitor/*` 8.x)
   + scripts `npm run sync:ios` (`vite build && cap sync ios`) y `npm run open:ios`.
-- **`capacitor.config.json` con `server.iosScheme: "https"`** ← CRÍTICO. El
-  webview de iOS por default usa origen `capacitor://localhost`, que el CORS del
-  backend (`saas-base/src/app.js`, solo acepta `http(s)://localhost|127.0.0.1|192.168.*`
-  + dominio) **NO** permite → bloquearía TODAS las llamadas API. Con `iosScheme:
-  https` el origen es `https://localhost`, que sí pasa (igual que Android).
+- **CORS para el origen nativo de iOS.** ⚠️ OJO: `server.iosScheme: "https"` **NO
+  funciona** — WKWebView reserva el scheme `https`, así que Capacitor lo descarta
+  (`CAPInstanceDescriptor.normalize()` → `WKWebView.handlesURLScheme("https")==true`)
+  y vuelve al default. El webview de iOS SIEMPRE usa origen **`capacitor://localhost`**.
+  Por eso el backend (`saas-base/src/app.js`) ya incluye `capacitor://localhost`
+  (e `ionic://localhost`) en la allowlist de CORS. Sin esto el preflight daba **500**
+  ("CORS bloqueado") y la app no conectaba. Android no necesita nada: su
+  `androidScheme` default es `https` → origen `https://localhost` (ya permitido).
 - `src/hooks/useDocumentScanner.js` limitado a **Android** (`Capacitor.getPlatform()
   === 'android'`): el escáner de documentos ML Kit no existe en iOS; en iOS el
   caller cae al input de cámara/archivo HTML (que abre la cámara nativa). Sin esto
@@ -97,8 +100,8 @@ En Xcode:
 
 - **NO hay sideload en iOS.** No se reparte un `.ipa` por correo como el APK. Para
   iPhones de otras personas: TestFlight (requiere Apple Developer de paga).
-- **Origen del webview**: por eso forzamos `iosScheme: https`. Si alguien quita
-  ese bloque, la app no habla con el backend.
+- **Origen del webview**: en iOS es SIEMPRE `capacitor://localhost` (no se puede
+  cambiar a `https` — ver arriba). El backend debe permitir ese origen en su CORS.
 - **Backend directo a onrender**: la app pega a `https://praxion-api.onrender.com/api`
   directo (no al dominio Cloudflare: Cloudflare no devuelve el CORS preflight para
   el origen `localhost` del webview). El warm-up al abrir mitiga el arranque frío.

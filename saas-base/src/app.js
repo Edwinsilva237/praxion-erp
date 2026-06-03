@@ -32,6 +32,13 @@ const corsOrigin = (origin, callback) => {
     /^https?:\/\/localhost(:\d+)?$/,
     /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
     /^https?:\/\/192\.168\.\d+\.\d+(:\d+)?$/,
+    // Apps nativas (Capacitor). El webview de iOS usa el origen `capacitor://localhost`:
+    // NO se puede forzar `https` como iosScheme (WKWebView reserva ese scheme y
+    // Capacitor lo descarta volviendo al default `capacitor://`). Android usa
+    // `https://localhost` (androidScheme default) y ya cae en el primer patrón.
+    // Sin esto, el preflight del iOS daba 500 ("CORS bloqueado") → la app no conectaba.
+    /^capacitor:\/\/localhost$/,
+    /^ionic:\/\/localhost$/,
   ]
 
   if (config.appUrl) {

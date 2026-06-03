@@ -1,8 +1,5 @@
 {
   "appId": "com.praxionops.erp",
   "appName": "Praxion",
-  "webDir": "dist",
-  "server": {
-    "iosScheme": "https"
-  }
+  "webDir": "dist"
 }

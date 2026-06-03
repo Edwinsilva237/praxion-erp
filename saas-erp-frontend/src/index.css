@@ -17,6 +17,11 @@
   html, body {
     overflow-x: hidden;
     background: #0B0F12;
+    /* iOS WKWebView infla el texto/contenido automáticamente ("text autosizing"),
+       lo que en pantallas grandes (ej. iPhone Pro Max) se ve como zoom. Lo fijamos
+       al 100% para que respete el tamaño real. Android no lo necesita pero no estorba. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
 
   body {

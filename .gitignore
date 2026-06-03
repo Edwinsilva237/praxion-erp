@@ -73,3 +73,7 @@ files/
 # ── Config local de Claude Code ─────────────────────────────────────────
 .claude/
 .tmp-docx/
+
+# ── Proyectos nativos Capacitor (se regeneran con npx cap add) ──────────
+saas-erp-frontend/ios/
+saas-erp-frontend/android/
