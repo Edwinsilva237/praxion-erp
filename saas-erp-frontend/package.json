@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "sync:android": "vite build && cap sync android",
-    "open:android": "cap open android"
+    "open:android": "cap open android",
+    "sync:ios": "vite build && cap sync ios",
+    "open:ios": "cap open ios"
   },
   "dependencies": {
     "@capacitor-mlkit/barcode-scanning": "^8.1.0",
@@ -17,6 +19,7 @@
     "@capacitor/cli": "^8.3.4",
     "@capacitor/core": "^8.3.4",
     "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/ios": "^8.4.0",
     "@capacitor/preferences": "^8.0.1",
     "@capacitor/share": "^8.0.1",
     "@capgo/capacitor-printer": "^8.0.14",

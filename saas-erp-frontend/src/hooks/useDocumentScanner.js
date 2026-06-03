@@ -7,14 +7,18 @@ import { Capacitor } from '@capacitor/core'
  *
  * Reutilizable: evidencia de entrega, facturas de proveedor, recepciones, etc.
  *
- * En web (escritorio) NO está disponible → `isSupported` es false y el caller
- * debe ofrecer el input de archivo normal como respaldo.
+ * Disponible SOLO en Android: Google ML Kit Document Scanner no tiene
+ * implementación en iOS, así que en iOS (y en web de escritorio) `isSupported`
+ * es false y el caller cae al input de cámara/archivo normal como respaldo
+ * (que en iOS abre la cámara nativa con `capture`).
  *
  * El plugin se importa de forma diferida (dynamic import) para que NO entre al
  * bundle web (es nativo, solo Android).
  */
 export function useDocumentScanner() {
-  const isSupported = Capacitor.isNativePlatform()
+  // ⚠️ Solo Android: el plugin no existe en iOS (reventaría con "not
+  // implemented"). En iOS el caller usa el respaldo de cámara/archivo HTML.
+  const isSupported = Capacitor.getPlatform() === 'android'
 
   // Devuelve { file, pageCount } con un PDF listo para subir, o { cancelled }
   // si el usuario cerró el escáner. Lanza si algo falla (el caller decide).
