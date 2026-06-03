@@ -58,7 +58,7 @@ services:
       - key: JWT_SECRET
         sync: false
       - key: JWT_EXPIRES_IN
-        value: 12h
+        value: 8h
       - key: JWT_REFRESH_EXPIRES_IN
         value: 30d
 

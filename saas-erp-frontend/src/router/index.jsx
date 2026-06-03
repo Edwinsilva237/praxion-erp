@@ -1,7 +1,6 @@
-import { lazy, Suspense, useState, useEffect } from 'react'
+import { lazy, Suspense } from 'react'
 import { createBrowserRouter, Navigate, Outlet, useLocation } from 'react-router-dom'
 import useAuthStore from '@/store/useAuthStore'
-import { ensureFreshToken, accessTokenNeedsRefresh } from '@/api/axios'
 import AppShell from '@/components/layout/AppShell'
 import Spinner from '@/components/ui/Spinner'
 
@@ -98,23 +97,7 @@ const RequireAuth = () => {
   const user   = useAuthStore((s) => s.user)
   const { pathname } = useLocation()
 
-  // Refresh proactivo: si el access token llegó vencido (sesión de ayer), lo
-  // renovamos ANTES de montar las páginas (que disparan sus consultas). Así la
-  // primera pantalla de la mañana no encadena 401 → refresh → reintento. Si el
-  // token ya estaba fresco, bootReady arranca en true y no hay espera visible.
-  const [bootReady, setBootReady] = useState(() => !isAuthenticated || !accessTokenNeedsRefresh())
-  useEffect(() => {
-    if (bootReady) return
-    let alive = true
-    ensureFreshToken().finally(() => { if (alive) setBootReady(true) })
-    return () => { alive = false }
-  }, [bootReady])
-
   if (!isAuthenticated) return <Navigate to="/login" replace />
-
-  if (!bootReady) {
-    return <div className="min-h-screen flex items-center justify-center"><Spinner /></div>
-  }
 
   // Tenant suspendido: encerramos al usuario en /suspendido. Excepción: los
   // platform admins pueden navegar a /superadmin (para reactivarse a sí

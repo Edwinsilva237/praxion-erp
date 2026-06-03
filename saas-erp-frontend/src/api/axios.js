@@ -77,17 +77,11 @@ export const API_BASE_URL = baseURL
 // login) y también desde la pantalla de login mientras el usuario teclea.
 // `no-cors`: la respuesta es opaca pero la petición SÍ llega y despierta al
 // server (clave en el webview nativo, cuyo origen no está en el CORS del API).
-let lastWarmAt = 0
 export function warmUpServer() {
   const base = API_BASE_URL
   // Solo tiene sentido con base absoluta (web prod o app nativa). En dev la base
   // es '/api' (relativa, vía proxy de Vite) → no hay arranque frío que calentar.
   if (!/^https?:\/\//i.test(base)) return
-  // Throttle: el warm-up se dispara al cargar el módulo Y al volver el foco
-  // (visibilitychange) → evita pings duplicados cuando ambos coinciden.
-  const now = Date.now()
-  if (now - lastWarmAt < 5000) return
-  lastWarmAt = now
   const healthUrl = base.replace(/\/api\/?$/, '') + '/health'
   try { fetch(healthUrl, { mode: 'no-cors', cache: 'no-store' }).catch(() => {}) } catch { /* noop */ }
 }
@@ -101,72 +95,6 @@ const api = axios.create({
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 })
-
-// ── Refresh del token — UNA sola vía compartida ────────────────────────────
-// El access token vive pocas horas; una sesión dejada abierta de un día para
-// otro siempre llega vencida. Dos cosas pueden querer renovarlo casi a la vez:
-// el interceptor de respuesta (ante un 401) y el refresh proactivo (al arrancar
-// / volver del background). El backend ROTA el refresh token y revoca el viejo
-// al usarlo (uso único) → si ambos renovaran con el mismo token, el segundo
-// daría 401 y deslogueo falso. Por eso ambos pasan por `performTokenRefresh`,
-// deduplicado en un único vuelo. Usa axios "pelado" (NO la instancia `api`)
-// para no re-entrar en este mismo interceptor → evita recursión/deadlock.
-function decodeJwtExp(token) {
-  try {
-    const part = token.split('.')[1]
-    if (!part) return null
-    const payload = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/')))
-    return typeof payload.exp === 'number' ? payload.exp : null
-  } catch { return null }
-}
-
-// ¿El access token está vencido o a punto de vencer (< 30s)? Si no se puede
-// decodificar el exp devolvemos false (que lo maneje el interceptor con su 401).
-export function accessTokenNeedsRefresh() {
-  const token = localStorage.getItem('erp_access_token')
-  if (!token) return false
-  const exp = decodeJwtExp(token)
-  if (exp == null) return false
-  return (exp * 1000) - Date.now() < 30000
-}
-
-let refreshInFlight = null
-// Renueva el access token usando el refresh token. Deduplicado: llamadas
-// concurrentes comparten el MISMO vuelo (clave para no quemar dos veces el
-// refresh token de uso único). Resuelve al nuevo access token; rechaza si falla.
-function performTokenRefresh() {
-  if (refreshInFlight) return refreshInFlight
-  const p = (async () => {
-    const refreshToken = localStorage.getItem('erp_refresh_token')
-    if (!refreshToken) throw new Error('No hay refresh token')
-    const slug = localStorage.getItem('erp_tenant_slug') || 'demo'
-    // Timeout amplio: en el primer arranque de la mañana la conexión del
-    // dispositivo puede estar fría; con 15s fallaba la renovación y botaba a login.
-    const { data } = await axios.post(
-      `${API_BASE_URL.replace(/\/$/, '')}/auth/refresh`,
-      { refreshToken },
-      { timeout: 60000, headers: { 'Content-Type': 'application/json', 'X-Tenant-Slug': slug } }
-    )
-    localStorage.setItem('erp_access_token', data.accessToken)
-    if (data.refreshToken) localStorage.setItem('erp_refresh_token', data.refreshToken)
-    api.defaults.headers.common.Authorization = `Bearer ${data.accessToken}`
-    return data.accessToken
-  })()
-  refreshInFlight = p
-  // Libera el vuelo al terminar (éxito o error) sin tocar la promesa devuelta.
-  p.catch(() => {}).finally(() => { if (refreshInFlight === p) refreshInFlight = null })
-  return p
-}
-
-// Renueva proactivamente si el token está por vencer. Idempotente; NUNCA rechaza
-// (resuelve a boolean) — si el refresh falla, las consultas siguientes caen en el
-// 401 del interceptor (que redirige a login si el refresh ya murió). Sin refresh
-// token (ej. sesión impersonada, que por diseño no se renueva) no hace nada.
-export function ensureFreshToken() {
-  if (!accessTokenNeedsRefresh()) return Promise.resolve(false)
-  if (!localStorage.getItem('erp_refresh_token')) return Promise.resolve(false)
-  return performTokenRefresh().then(() => true, () => false)
-}
 
 // ── Detección de "servidor lento / despertando" ────────────────────────────
 // Si una petición tarda más de SLOW_MS sin responder (típico cuando el backend
@@ -282,10 +210,14 @@ api.interceptors.response.use(
       }
 
       try {
-        // Vía compartida con el refresh proactivo (deduplicada) → nunca se quema
-        // el refresh token de uso único dos veces. Bare axios por dentro, así que
-        // un 401 del propio refresh NO re-entra aquí (sin recursión).
-        const newToken = await performTokenRefresh()
+        // Usar api (no axios) para que lleve X-Tenant-Slug automáticamente.
+        // Timeout amplio: en el primer arranque de la mañana el servidor puede
+        // estar despertando; con 15s fallaba la renovación y botaba al login.
+        const { data } = await api.post('/auth/refresh', { refreshToken }, { timeout: 60000 })
+        const newToken = data.accessToken
+        localStorage.setItem('erp_access_token', newToken)
+        if (data.refreshToken) localStorage.setItem('erp_refresh_token', data.refreshToken)
+        api.defaults.headers.common.Authorization = `Bearer ${newToken}`
         processQueue(null, newToken)
         original.headers.Authorization = `Bearer ${newToken}`
         return api(original)
@@ -301,19 +233,5 @@ api.interceptors.response.use(
     return Promise.reject(error)
   }
 )
-
-// Al volver el foco a la pestaña / app (visibilitychange → visible): calienta la
-// conexión Y renueva el token si venció estando en segundo plano. Cubre el caso
-// "dejé la sesión abierta de ayer": la app no se recarga, así que el refresh al
-// montar RequireAuth no se dispara, pero esto sí — el token queda fresco antes
-// de que el usuario toque nada.
-if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      warmUpServer()
-      ensureFreshToken()
-    }
-  })
-}
 
 export default api
