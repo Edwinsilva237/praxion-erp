@@ -179,12 +179,15 @@ const router = createBrowserRouter([
       { path: '/produccion/historico',         element: <ProduccionHistorico /> },
       { path: '/produccion/programacion',    element: <ProduccionProgramacion /> },
       { path: '/ventas',              element: <VentasPedidos /> },
+      { path: '/ventas/:id',          element: <VentasPedidos /> },     // deep-link a un pedido (nueva pestaña)
       { path: '/cotizaciones',        element: <VentasCotizaciones /> },
       { path: '/remisiones',          element: <VentasRemisiones /> },
+      { path: '/remisiones/:id',      element: <VentasRemisiones /> },  // deep-link a una remisión
       { path: '/compras/ordenes',     element: <ComprasOrdenes /> },
       { path: '/compras/recepciones', element: <ComprasRecepciones /> },
       { path: '/compras/facturas',    element: <ComprasFacturas /> },
       { path: '/facturacion',         element: <Facturacion /> },
+      { path: '/facturacion/:id',     element: <Facturacion /> },       // deep-link a una factura
       { path: '/finanzas/reporte-contable', element: <ReporteContable /> },
       { path: '/reportes/ventas',           element: <ReportesVentas /> },
       { path: '/reportes/produccion',       element: <ReportesProduccion /> },

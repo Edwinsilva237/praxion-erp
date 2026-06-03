@@ -13,6 +13,7 @@ import Can from '@/components/auth/Can'
 import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob, printBlob } from '@/utils/downloadBlob'
 import { useDocumentScanner } from '@/hooks/useDocumentScanner'
+import { LIVE_LIST } from '@/config/livePolling'
 import clsx from 'clsx'
 import api from '@/api/axios'
 import { Capacitor } from '@capacitor/core'
@@ -495,8 +496,10 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
                 </div>
               )}
 
-              {/* Acciones */}
-              <div className="flex flex-wrap gap-2 border-t border-line-subtle pt-4">
+              {/* Acciones — fijas al fondo del panel: en móvil quedaban fuera de
+                  vista (había que scrollear hasta abajo). sticky bottom-0 las
+                  mantiene siempre visibles. */}
+              <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-4 flex flex-wrap gap-2 border-t border-line-subtle bg-surface-primary">
                 <button onClick={handlePDF} disabled={genPdf}
                   className="btn-secondary btn-sm">
                   {genPdf ? <Spinner size="sm" /> : (
@@ -1118,6 +1121,7 @@ export default function ComprasRecepciones() {
       page, limit: 20,
     }),
     keepPreviousData: true,
+    ...LIVE_LIST,
   })
 
   const receipts = data?.data || []

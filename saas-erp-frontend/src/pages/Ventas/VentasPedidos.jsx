@@ -9,6 +9,9 @@ import { PedidoDetallePanel } from '@/components/ventas/PedidoDetallePanel'
 import CollapsibleFilters from '@/components/ui/CollapsibleFilters'
 import ScanButton from '@/components/scanner/ScanButton'
 import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
+import { LIVE_LIST } from '@/config/livePolling'
+import DocLink from '@/components/ui/DocLink'
+import { useDeepLinkDoc } from '@/hooks/useDeepLinkDoc'
 import clsx from 'clsx'
 
 // Mini barra de progreso de entrega con dos segmentos:
@@ -125,9 +128,10 @@ export default function VentasPedidos() {
   // pendientes. El usuario los muestra con el toggle de la sección.
   const [showDone, setShowDone]         = useState(false)
 
-  // Modal y panel
+  // Modal y panel. selectedId + deep-link: si la URL es /ventas/:id (nueva
+  // pestaña) el panel abre solo; el clic normal lo abre in-app.
   const [showForm, setShowForm]         = useState(false)
-  const [selectedId, setSelectedId]     = useState(null)
+  const { selectedId, setSelectedId, close: closeDoc, href: docHref } = useDeepLinkDoc('/ventas')
   const [createdMsg, setCreatedMsg]     = useState(null)
 
   const queryParams = useMemo(() => {
@@ -142,6 +146,7 @@ export default function VentasPedidos() {
     queryKey: ['sales-orders', queryParams],
     queryFn:  () => salesApi.listOrders(queryParams),
     keepPreviousData: true,
+    ...LIVE_LIST,
   })
 
   // Filtro local por search (sobre número, cliente, RFC)
@@ -374,7 +379,7 @@ export default function VentasPedidos() {
                         'cursor-pointer transition-colors',
                         selectedId === o.id ? 'bg-brand-500/15' : URGENCY_ROW_CLASS[urgency]
                       )}>
-                      <td className="font-mono font-semibold text-brand-300">{o.order_number}</td>
+                      <td className="font-mono font-semibold text-brand-300"><DocLink to={docHref(o.id)} onOpen={() => setSelectedId(o.id)}>{o.order_number}</DocLink></td>
                       <td>
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <p className="font-medium text-ink-primary">{o.partner_name}</p>
@@ -446,7 +451,7 @@ export default function VentasPedidos() {
                         'cursor-pointer transition-colors',
                         selectedId === o.id ? 'bg-brand-500/15' : 'bg-surface-elevated/40 opacity-60 hover:opacity-100 hover:bg-surface-elevated/60'
                       )}>
-                      <td className="font-mono font-semibold text-brand-300">{o.order_number}</td>
+                      <td className="font-mono font-semibold text-brand-300"><DocLink to={docHref(o.id)} onOpen={() => setSelectedId(o.id)}>{o.order_number}</DocLink></td>
                       <td>
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <p className="font-medium text-ink-primary">{o.partner_name}</p>
@@ -523,7 +528,7 @@ export default function VentasPedidos() {
       {selectedId && (
         <PedidoDetallePanel
           orderId={selectedId}
-          onClose={() => setSelectedId(null)}
+          onClose={closeDoc}
         />
       )}
     </div>

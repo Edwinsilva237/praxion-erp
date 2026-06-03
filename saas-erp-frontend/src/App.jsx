@@ -8,7 +8,11 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
-      refetchOnWindowFocus: false,
+      // Auto-refresca al volver el foco a la pestaña/app y al reconectar. Las
+      // listas usan keepPreviousData → actualiza en segundo plano, sin parpadeo
+      // ni F5. (Antes false; el polling "vivo" por pantalla está en livePolling.js.)
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
       staleTime: 60 * 1000, // 1 min por defecto
     },
   },

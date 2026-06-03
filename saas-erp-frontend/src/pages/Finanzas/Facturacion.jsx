@@ -10,6 +10,8 @@ import CollapsibleFilters from '@/components/ui/CollapsibleFilters'
 import { FacturaFormModal } from '@/components/facturacion/FacturaFormModal'
 import { FacturaDetallePanel } from '@/components/facturacion/FacturaDetallePanel'
 import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
+import DocLink from '@/components/ui/DocLink'
+import { useDeepLinkDoc } from '@/hooks/useDeepLinkDoc'
 import clsx from 'clsx'
 
 const STATUS_OPTS = [
@@ -30,7 +32,7 @@ export default function Facturacion() {
   const [page, setPage]                 = useState(1)
 
   const [showForm, setShowForm]         = useState(false)
-  const [selectedId, setSelectedId]     = useState(null)
+  const { selectedId, setSelectedId, close: closeDoc, href: docHref } = useDeepLinkDoc('/facturacion')
   const [createdMsg, setCreatedMsg]     = useState(null)
 
   const queryParams = useMemo(() => {
@@ -197,7 +199,7 @@ export default function Facturacion() {
                       selectedId === i.id ? 'bg-brand-500/10' : 'hover:bg-surface-elevated/40'
                     )}>
                     <td>
-                      <p className="font-mono font-semibold text-teal-300">{i.document_number}</p>
+                      <p className="font-mono font-semibold text-teal-300"><DocLink to={docHref(i.id)} onOpen={() => setSelectedId(i.id)}>{i.document_number}</DocLink></p>
                       {i.cfdi_uuid && (
                         <p className="text-[10px] text-ink-muted font-mono break-all">
                           {i.cfdi_uuid.substring(0, 8)}…{i.cfdi_uuid.substring(i.cfdi_uuid.length - 4)}
@@ -271,7 +273,7 @@ export default function Facturacion() {
       {selectedId && (
         <FacturaDetallePanel
           invoiceId={selectedId}
-          onClose={() => setSelectedId(null)}
+          onClose={closeDoc}
         />
       )}
     </div>

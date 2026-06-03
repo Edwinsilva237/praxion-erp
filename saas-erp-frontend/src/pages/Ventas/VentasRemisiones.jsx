@@ -8,6 +8,9 @@ import { RemisionFormModal } from '@/components/ventas/RemisionFormModal'
 import { RemisionDetallePanel } from '@/components/ventas/RemisionDetallePanel'
 import CollapsibleFilters from '@/components/ui/CollapsibleFilters'
 import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
+import { LIVE_LIST } from '@/config/livePolling'
+import DocLink from '@/components/ui/DocLink'
+import { useDeepLinkDoc } from '@/hooks/useDeepLinkDoc'
 import clsx from 'clsx'
 
 const STATUS_OPTS = [
@@ -91,7 +94,7 @@ export default function VentasRemisiones() {
   const [page, setPage]                 = useState(1)
 
   const [showForm, setShowForm]         = useState(false)
-  const [selectedId, setSelectedId]     = useState(null)
+  const { selectedId, setSelectedId, close: closeDoc, href: docHref } = useDeepLinkDoc('/remisiones')
   const [createdMsg, setCreatedMsg]     = useState(null)
 
   const queryParams = useMemo(() => {
@@ -107,6 +110,7 @@ export default function VentasRemisiones() {
     queryKey: ['delivery-notes', queryParams],
     queryFn:  () => salesApi.listDeliveryNotes(queryParams),
     keepPreviousData: true,
+    ...LIVE_LIST,
   })
 
   const notes = useMemo(() => {
@@ -317,7 +321,7 @@ export default function VentasRemisiones() {
                         'cursor-pointer transition-colors',
                         selectedId === n.id ? 'bg-brand-500/15' : URGENCY_ROW_CLASS[urgency]
                       )}>
-                      <td className="font-mono font-semibold text-purple-300">{n.document_number}</td>
+                      <td className="font-mono font-semibold text-purple-300"><DocLink to={docHref(n.id)} onOpen={() => setSelectedId(n.id)}>{n.document_number}</DocLink></td>
                       <td>
                         <p className="font-medium text-ink-primary">{n.partner_name}</p>
                         {n.partner_tax_name && n.partner_tax_name !== n.partner_name && (
@@ -366,7 +370,7 @@ export default function VentasRemisiones() {
                       'cursor-pointer transition-colors opacity-80',
                       selectedId === n.id ? 'bg-brand-500/15 opacity-100' : 'hover:bg-surface-elevated/40 hover:opacity-100'
                     )}>
-                    <td className="font-mono font-semibold text-purple-300">{n.document_number}</td>
+                    <td className="font-mono font-semibold text-purple-300"><DocLink to={docHref(n.id)} onOpen={() => setSelectedId(n.id)}>{n.document_number}</DocLink></td>
                     <td>
                       <p className="font-medium text-ink-primary">{n.partner_name}</p>
                       {n.partner_tax_name && n.partner_tax_name !== n.partner_name && (
@@ -435,7 +439,7 @@ export default function VentasRemisiones() {
       {selectedId && (
         <RemisionDetallePanel
           noteId={selectedId}
-          onClose={() => setSelectedId(null)}
+          onClose={closeDoc}
         />
       )}
     </div>
