@@ -145,8 +145,15 @@ services:
     envVars:
       - key: VITE_APP_NAME
         value: Praxion
+      # ⚠️ Apunta a onrender DIRECTO, NO al dominio Cloudflare api.praxionops.com:
+      # Cloudflare estaba devolviendo el preflight OPTIONS con 200 y SIN headers
+      # CORS → el navegador bloqueaba toda llamada de la web ("no se conecta al
+      # servidor"). onrender directo sí devuelve el preflight correcto (204 +
+      # access-control-allow-origin para *.praxionops.com). Las apps nativas ya
+      # usan este endpoint. Para volver a api.praxionops.com hay que arreglar el
+      # manejo de OPTIONS en Cloudflare primero.
       - key: VITE_API_URL
-        value: https://api.praxionops.com/api
+        value: https://praxion-api.onrender.com/api
       - key: VITE_SENTRY_DSN
         sync: false
       - key: VITE_SENTRY_ENV
