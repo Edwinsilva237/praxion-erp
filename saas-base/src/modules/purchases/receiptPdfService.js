@@ -91,8 +91,18 @@ async function generateReceiptPDF({ tenantId, receiptId }) {
     const htx = headerTextX(!!logoBuffer)
     doc.rect(40, 40, W, 70).fill(azul)
     drawHeaderLogo(doc, logoBuffer)
-    doc.fillColor('white').fontSize(18).font('Helvetica-Bold')
-       .text(rec.emisor_nombre || rec.tenant_name || 'EMISOR', htx, 52, { width: W * 0.6 - (htx - 55) })
+
+    // Nombre del emisor en UNA línea: si la razón social es larga, encogemos la
+    // fuente (18→10) en vez de dejar que envuelva y se encime con el RFC (y=74).
+    const emisorName  = rec.emisor_nombre || rec.tenant_name || 'EMISOR'
+    const emisorNameW = W * 0.6 - (htx - 55)
+    let emisorSize = 18
+    doc.font('Helvetica-Bold')
+    while (emisorSize > 10 && doc.fontSize(emisorSize).widthOfString(emisorName) > emisorNameW) {
+      emisorSize -= 0.5
+    }
+    doc.fillColor('white').fontSize(emisorSize).font('Helvetica-Bold')
+       .text(emisorName, htx, 52, { width: emisorNameW, lineBreak: false, ellipsis: true })
 
     doc.fontSize(9).font('Helvetica')
     if (rec.emisor_rfc) {
