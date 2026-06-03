@@ -138,3 +138,55 @@ Los cambios quedan en local por default. Solo cuando el usuario dice literalment
 **"actualiza en línea"** se hace `git add + commit + push` a `origin/main` (Render
 redeploya el backend/web solo). El proyecto iOS nativo (`ios/`) NO se commitea
 (como `android/`): se regenera con `npx cap add ios`.
+
+## Bitácora — fix safe-area iOS (2026-06-03)
+
+**Síntoma reportado:** en el módulo de Compras → Recepciones, al abrir una recepción
+se abre un modal de detalle que se "salía" de la pantalla y quedaba **encimado con la
+barra superior del sistema de iOS** (la X de cerrar y las acciones quedaban tapadas
+por la barra de estado / notch). Además faltaban los botones **Editar** y **Cancelar
+recepción** que ya existían en web.
+
+**Causa real (importante):** NO fue un bug que hubiera que arreglar en esta máquina.
+El repo local estaba **16 commits atrás** de `origin/main`. Los dos arreglos ya
+existían río arriba y solo faltaba traerlos con `git pull`:
+
+- `792cb8a` — *Recepciones móvil: panel de detalle respeta safe-area (X de cerrar y
+  acciones visibles)*. Reestructuró el modal al patrón canónico de los demás paneles:
+  header fijo con `paddingTop: calc(1rem + env(safe-area-inset-top))`, cuerpo scrolleable,
+  footer de acciones fijo con `paddingBottom: calc(0.75rem + env(safe-area-inset-bottom))`.
+  Se quitó el `sticky bottom` (no funcionaba en el webview).
+- `b3f7674` — *Recepciones: editar y cancelar una recepción en borrador* (los botones
+  Editar/Cancelar). Solo se muestran si `receipt.status === 'draft'` **y** el usuario
+  tiene permiso `purchases:update` (`<Can do="purchases:update">`). Si la recepción ya
+  se confirmó, desaparecen a propósito — esto explicó el "sigo sin ver los botones":
+  la recepción de prueba ya no estaba en borrador.
+- Fixes de backend que vinieron en el mismo pull: `72a60d8` y `be8b312` (error 500 al
+  editar/crear recepción por constraints `srl_qty_positive` y columna `code` de
+  `raw_materials`), más migraciones `189`/`190`.
+
+**Archivos tocados por el fix de safe-area:** un solo archivo de la capa **web**:
+`saas-erp-frontend/src/pages/Compras/ComprasRecepciones.jsx` (commit `792cb8a`,
+51 inserciones / 50 borrados). El viewport ya traía `viewport-fit=cover` en
+`index.html` desde antes.
+
+**Commit / estado:** el fix vive en `792cb8a`; los botones en `b3f7674`. Tras el
+`git pull --ff-only` el HEAD quedó en `50314bc` (que es lo que se sincronizó al
+dispositivo). Esta bitácora se commitea aparte (su propio hash).
+
+**⚠️ Nativo: NO se tocó nada nativo.** El arreglo es 100% CSS/JSX en la capa web vía
+`env(safe-area-inset-*)`. **No** se modificó `Info.plist`, **ni** config de Capacitor
+`StatusBar`, **ni** nada dentro de `ios/`. Por eso es totalmente reproducible en otra
+máquina sin editar Xcode: basta con
+
+```bash
+cd saas-erp-frontend
+git pull --ff-only origin main
+rm -rf ios/App/build        # build viejo no borrable por xcodebuild → rompe pod install
+npm run sync:ios            # vite build + cap sync ios (copia web + pod install)
+npm run open:ios            # abrir Xcode y Run
+```
+
+(El `rm -rf ios/App/build` fue necesario porque CocoaPods corre `xcodebuild clean` y
+fallaba al no poder borrar un directorio `build/` previo "no creado por el build
+system". Es directorio de salida intermedia, seguro de borrar.)
