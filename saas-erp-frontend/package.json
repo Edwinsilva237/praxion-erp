@@ -33,6 +33,7 @@
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.52.1",
     "react-router-dom": "^6.24.0",
+    "visionkit-scanner": "file:local-plugins/visionkit-scanner",
     "zod": "^3.23.8",
     "zustand": "^4.5.4"
   },

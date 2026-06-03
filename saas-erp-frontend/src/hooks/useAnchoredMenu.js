@@ -36,24 +36,44 @@ export function useAnchoredMenu(open, onOutside, { maxHeight = 256 } = {}) {
       if (!el) return
       const r = el.getBoundingClientRect()
       const gap = 4
-      const below = window.innerHeight - r.bottom - gap
+      // iOS: con el teclado abierto, el viewport VISUAL se desplaza dentro del de
+      // LAYOUT (al que está anclado `position:fixed`). getBoundingClientRect da
+      // coords del viewport visual, así que el menú fixed se descolocaba "hacia
+      // arriba, fuera del formulario". Compensamos con visualViewport.offset*.
+      // En Android/escritorio (sin visualViewport o sin teclado) offset = 0 → no-op.
+      const vv = window.visualViewport
+      const offTop = vv ? vv.offsetTop : 0
+      const offLeft = vv ? vv.offsetLeft : 0
+      const visH = vv ? vv.height : window.innerHeight // alto VISIBLE (descuenta teclado)
+      const below = visH - r.bottom - gap
       const above = r.top - gap
       // Abrir hacia arriba sólo si abajo no cabe razonablemente y arriba hay más espacio.
       const openUp = below < 200 && above > below
       setMenuPos({
-        left: r.left,
+        left: r.left + offLeft,
         width: r.width,
         ...(openUp
-          ? { bottom: window.innerHeight - r.top + gap, maxHeight: Math.min(maxHeight, above) }
-          : { top: r.bottom + gap, maxHeight: Math.min(maxHeight, below) }),
+          ? { bottom: window.innerHeight - r.top - offTop + gap, maxHeight: Math.min(maxHeight, above) }
+          : { top: r.bottom + offTop + gap, maxHeight: Math.min(maxHeight, below) }),
       })
     }
     update()
     window.addEventListener('scroll', update, true) // capture: capta scroll de cualquier ancestro
     window.addEventListener('resize', update)
+    // El teclado de iOS dispara eventos en visualViewport (no en window): sin
+    // esto el menú no se reubicaría al abrir/cerrar el teclado.
+    const vv = window.visualViewport
+    if (vv) {
+      vv.addEventListener('resize', update)
+      vv.addEventListener('scroll', update)
+    }
     return () => {
       window.removeEventListener('scroll', update, true)
       window.removeEventListener('resize', update)
+      if (vv) {
+        vv.removeEventListener('resize', update)
+        vv.removeEventListener('scroll', update)
+      }
     }
   }, [open, maxHeight])
 

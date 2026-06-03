@@ -1,0 +1,21 @@
+{
+  "name": "visionkit-scanner",
+  "version": "1.0.0",
+  "description": "Escáner de documentos nativo de iOS (VisionKit) para Capacitor — equivalente al de Notas/Archivos de Apple: detección de bordes, auto-recorte, multipágina → PDF.",
+  "type": "module",
+  "main": "src/index.js",
+  "module": "src/index.js",
+  "files": [
+    "src/",
+    "ios/",
+    "VisionkitScanner.podspec"
+  ],
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    }
+  },
+  "peerDependencies": {
+    "@capacitor/core": "^8.0.0"
+  }
+}

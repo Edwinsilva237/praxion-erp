@@ -93,7 +93,11 @@ export default function Autocomplete({ value, onChange, onSearch, placeholder = 
       >
         <input
           type="text"
-          className="flex-1 bg-transparent outline-none text-sm"
+          // appearance-none + p-0 + leading-normal: en iOS el <input> trae métricas
+          // nativas (altura/relleno) que lo desbordan hacia arriba dentro del wrapper
+          // .input; las reseteamos para que `items-center` lo centre bien. min-w-0
+          // evita que el flex-1 fuerce overflow.
+          className="flex-1 min-w-0 bg-transparent outline-none text-sm appearance-none p-0 leading-normal"
           placeholder={placeholder}
           value={displayValue}
           onChange={handleInput}
