@@ -33,7 +33,11 @@ router.get('/queue', checkPermission('production','read'), async (req,res,next) 
 })
 
 // ── Órdenes ───────────────────────────────────────────────────────────────────
-router.get('/orders', checkPermission('production','read'), async (req,res,next) => {
+// La LISTA de órdenes (pantalla de planeación) usa read_orders, separado de
+// production:read para poder ocultársela a un operador sin tocar captura. El
+// DETALLE (/orders/:id) y la cola (/queue) siguen en production:read porque la
+// captura los necesita (mig 189).
+router.get('/orders', checkPermission('production','read_orders'), async (req,res,next) => {
   try {
     const { status,lineId,page,limit } = req.query
     const result = await svc.listOrders({ tenantId:tid(req), status, lineId, page:parseInt(page||1), limit:parseInt(limit||50) })
@@ -602,9 +606,10 @@ router.get('/scheduled-shifts/my-today', async (req,res,next) => {
   catch(err){next(err)}
 })
 // Mis turnos: SOLO los del usuario logueado (miembro o operator legacy) en un
-// rango de fechas. Self-scoped — no requiere production:read_schedule, así el
-// capturista ve los suyos sin poder ver los de toda la planta.
-router.get('/scheduled-shifts/mine', async (req,res,next) => {
+// rango de fechas. Self-scoped (no expone los de toda la planta), pero gateado
+// por production:read_own_shifts para poder mostrar/ocultar la pantalla por rol
+// independiente de "Órdenes de producción" (mig 189).
+router.get('/scheduled-shifts/mine', checkPermission('production','read_own_shifts'), async (req,res,next) => {
   try {
     const { dateFrom, dateTo } = req.query
     res.json(await svcSched.listScheduledShifts({

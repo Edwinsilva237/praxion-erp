@@ -196,7 +196,7 @@ export const ROLE_TEMPLATES = [
     description: 'Consulta todo el sistema pero no modifica nada. Incluye todos los reportes.',
     matches: (p) =>
       p.action === 'read' ||
-      (p.resource === 'production' && ['read_schedule', 'read_history'].includes(p.action)) ||
+      (p.resource === 'production' && ['read_schedule', 'read_history', 'read_orders', 'read_own_shifts'].includes(p.action)) ||
       p.resource === 'reports',
   },
 ]

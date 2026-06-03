@@ -66,13 +66,20 @@ export default function Dashboard() {
   // Evita exponer datos comerciales (ventas, CXC, compras) a operadores.
   const hasCommercialAccess = can('sales','read') || can('financials','read') || can('purchases','read')
   const canCapture          = can('production','create')
-  const canReadProduction   = can('production','read')
+  const canReadOrders       = can('production','read_orders')
+  const canReadOwnShifts     = can('production','read_own_shifts')
 
+  // Operador sin acceso comercial → su pantalla de trabajo. Orden de preferencia:
+  // captura → órdenes → mis turnos (cada una gateada por su permiso, para no
+  // aterrizar en una pantalla que el rol no puede ver tras separar permisos).
   if (!hasCommercialAccess && canCapture) {
     return <Navigate to="/produccion/captura" replace />
   }
-  if (!hasCommercialAccess && canReadProduction) {
+  if (!hasCommercialAccess && canReadOrders) {
     return <Navigate to="/produccion/ordenes" replace />
+  }
+  if (!hasCommercialAccess && canReadOwnShifts) {
+    return <Navigate to="/produccion/mis-turnos" replace />
   }
 
   const canReadSales     = can('sales', 'read')

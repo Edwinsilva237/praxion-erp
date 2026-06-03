@@ -24,7 +24,7 @@ export const MOBILE_TABS = [
     key:         'production-orders',
     label:       'Órdenes',
     to:          '/produccion/ordenes',
-    permission:  'production:read',
+    permission:  'production:read_orders',
     iconKey:     'orders',
   },
   {

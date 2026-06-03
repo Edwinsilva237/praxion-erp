@@ -46,12 +46,12 @@ export const NAV_SECTIONS = [
   {
     label: 'Producción',
     items: [
-      { label: 'Órdenes',         to: '/produccion/ordenes',      iconKey: 'factory',  permission: 'production:read',    module: 'production' },
+      { label: 'Órdenes',         to: '/produccion/ordenes',      iconKey: 'factory',  permission: 'production:read_orders', module: 'production' },
       { label: 'Recetas',         to: '/produccion/recetas',      iconKey: 'receipt',  permission: 'recipes:read',       module: 'production' },
       { label: 'Especificaciones', to: '/produccion/especificaciones', iconKey: 'card', permission: 'products:read',     module: 'production' },
       { label: 'Captura',         to: '/produccion/captura',      iconKey: 'pencil',   permission: 'production:create',  module: 'production' },
       { label: 'Validación',      to: '/produccion/validacion',   iconKey: 'check',    permission: 'production:approve', module: 'production' },
-      { label: 'Mis turnos',      to: '/produccion/mis-turnos',   iconKey: 'calendar', permission: 'production:read',          module: 'production', hideWhenSelfStart: true },
+      { label: 'Mis turnos',      to: '/produccion/mis-turnos',   iconKey: 'calendar', permission: 'production:read_own_shifts', module: 'production', hideWhenSelfStart: true },
       { label: 'Programación',    to: '/produccion/programacion', iconKey: 'calendar', permission: 'production:read_schedule', module: 'production', hideWhenSelfStart: true },
       { label: 'Histórico',       to: '/produccion/historico',    iconKey: 'history',  permission: 'production:read_history',  module: 'production' },
     ],
