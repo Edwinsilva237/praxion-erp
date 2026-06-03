@@ -370,10 +370,11 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
   return createPortal(
     <div className="fixed inset-0 z-[9998] flex">
       <div className="hidden sm:block flex-1 bg-black/30" onClick={onClose} />
-      <div className="w-full max-w-xl bg-surface-primary h-full overflow-y-auto shadow-card flex flex-col">
+      <div className="w-full max-w-xl bg-surface-primary h-full shadow-card flex flex-col">
 
-        {/* Header */}
-        <div className="sticky top-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3 z-10">
+        {/* Header — fijo arriba, respeta el notch/barra de estado del móvil */}
+        <div className="shrink-0 bg-surface-primary border-b border-line-subtle px-5 py-4 flex items-start gap-3"
+          style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top))' }}>
           <div className="flex-1 min-w-0">
             {isLoading ? (
               <div className="skeleton h-5 w-40" />
@@ -403,7 +404,7 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
           </button>
         </div>
 
-        <div className="flex-1 p-5 flex flex-col gap-5">
+        <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-5">
           {isLoading ? (
             <div className="flex justify-center py-16"><Spinner /></div>
           ) : error || !receipt ? (
@@ -496,52 +497,6 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
                 </div>
               )}
 
-              {/* Acciones — fijas al fondo del panel: en móvil quedaban fuera de
-                  vista (había que scrollear hasta abajo). sticky bottom-0 las
-                  mantiene siempre visibles. */}
-              <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-4 flex flex-wrap gap-2 border-t border-line-subtle bg-surface-primary">
-                <button onClick={handlePDF} disabled={genPdf}
-                  className="btn-secondary btn-sm">
-                  {genPdf ? <Spinner size="sm" /> : (
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                    </svg>
-                  )}
-                  Descargar PDF
-                </button>
-                <button onClick={handlePrint} disabled={genPdf}
-                  className="btn-secondary btn-sm">
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
-                  </svg>
-                  Imprimir
-                </button>
-                {receipt.status === 'draft' && (
-                  <>
-                    <Can do="purchases:update">
-                      <button onClick={() => onEdit?.(receipt)} className="btn-secondary btn-sm">
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                        </svg>
-                        Editar
-                      </button>
-                    </Can>
-                    <Can do="purchases:update">
-                      <button onClick={() => { setActErr(null); setCancel(true) }}
-                        className="btn-secondary btn-sm text-status-danger hover:bg-status-danger/10">
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
-                        </svg>
-                        Cancelar recepción
-                      </button>
-                    </Can>
-                    <button onClick={() => setConf(true)} className="btn-primary btn-sm">
-                      Confirmar → Mover a inventario
-                    </button>
-                  </>
-                )}
-              </div>
-
               {/* Confirmar modal */}
               {confirming && createPortal(
                 <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4">
@@ -603,6 +558,52 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
             </>
           )}
         </div>
+
+        {/* Footer de acciones — fijo abajo, respeta el safe-area inferior del móvil
+            (antes las acciones quedaban tras la barra inferior / fuera de vista). */}
+        {!isLoading && !error && receipt && (
+          <div className="shrink-0 flex flex-wrap gap-2 border-t border-line-subtle bg-surface-primary px-5 pt-3"
+            style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
+            <button onClick={handlePDF} disabled={genPdf} className="btn-secondary btn-sm">
+              {genPdf ? <Spinner size="sm" /> : (
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                </svg>
+              )}
+              Descargar PDF
+            </button>
+            <button onClick={handlePrint} disabled={genPdf} className="btn-secondary btn-sm">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+              </svg>
+              Imprimir
+            </button>
+            {receipt.status === 'draft' && (
+              <>
+                <Can do="purchases:update">
+                  <button onClick={() => onEdit?.(receipt)} className="btn-secondary btn-sm">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                    </svg>
+                    Editar
+                  </button>
+                </Can>
+                <Can do="purchases:update">
+                  <button onClick={() => { setActErr(null); setCancel(true) }}
+                    className="btn-secondary btn-sm text-status-danger hover:bg-status-danger/10">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                    Cancelar recepción
+                  </button>
+                </Can>
+                <button onClick={() => setConf(true)} className="btn-primary btn-sm">
+                  Confirmar → Mover a inventario
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>,
     document.body
