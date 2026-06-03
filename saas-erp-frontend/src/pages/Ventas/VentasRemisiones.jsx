@@ -12,6 +12,7 @@ import clsx from 'clsx'
 
 const STATUS_OPTS = [
   ['',                    'Todos los estados'],
+  ['__invoiceable__',     '🧾 Listas para facturar'],
   ['issued',              'Emitida'],
   ['sent_by_email',       'Enviada por correo'],
   ['partially_delivered', 'Entrega parcial'],
@@ -43,6 +44,45 @@ const URGENCY_ROW_CLASS = {
   none:    'hover:bg-surface-elevated/40',
 }
 
+// ── Tag de facturación para quien factura (identificación visual rápida) ──────
+// Estados mutuamente excluyentes, en orden de prioridad. Los accionables (listo /
+// falta) van en chip SÓLIDO para que salten a la vista; los cerrados (facturada /
+// no se factura) en chip sutil.
+const CHIP_BASE = 'text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded'
+function invoiceTag(n) {
+  if (n.status === 'cancelled') return null                       // el Badge ya dice "Cancelada"
+  if (n.invoice_id) {
+    return { label: 'Facturada', cls: 'badge-teal',
+             title: n.invoice_number ? `Factura ${n.invoice_number}` : 'Ya facturada' }
+  }
+  if (n.no_invoice) {
+    return { label: 'No se factura', cls: 'badge-gray',
+             title: 'Marcada como que no requiere factura' }
+  }
+  if (n.status !== 'delivered') {
+    return { label: 'Falta entregar', cls: `${CHIP_BASE} bg-status-warning text-white`,
+             title: 'Registra la entrega de la remisión antes de poder facturar' }
+  }
+  // Entregada y se va a facturar: ¿el cliente tiene los datos fiscales para timbrar?
+  const missing = []
+  if (!n.partner_rfc)             missing.push('RFC')
+  if (!n.partner_tax_name)        missing.push('razón social')
+  if (!n.partner_tax_regime_code) missing.push('régimen')
+  if (!n.partner_zip)             missing.push('CP')
+  if (missing.length) {
+    return { label: `Falta ${missing.join(', ')}`, cls: `${CHIP_BASE} bg-status-warning text-white`,
+             title: `Completa los datos fiscales del cliente para timbrar: ${missing.join(', ')}` }
+  }
+  return { label: 'Listo para facturar', cls: `${CHIP_BASE} bg-status-info text-white`,
+           title: 'Entregada y con datos fiscales completos — lista para emitir factura' }
+}
+
+function InvoiceChip({ note }) {
+  const t = invoiceTag(note)
+  if (!t) return null
+  return <span className={t.cls} title={t.title}>{t.label}</span>
+}
+
 export default function VentasRemisiones() {
   const [statusFilter, setStatusFilter] = useState('')
   const [search, setSearch]             = useState('')
@@ -56,7 +96,8 @@ export default function VentasRemisiones() {
 
   const queryParams = useMemo(() => {
     const p = { page, limit: PAGE_SIZE, type: 'sale' }
-    if (statusFilter) p.status = statusFilter
+    if (statusFilter === '__invoiceable__') p.invoiceable = true
+    else if (statusFilter)                  p.status = statusFilter
     if (from)         p.from   = from
     if (to)           p.to     = to
     return p
@@ -216,6 +257,7 @@ export default function VentasRemisiones() {
                       {n.partner_tax_name && n.partner_tax_name !== n.partner_name && (
                         <p className="text-[11px] text-ink-muted truncate">{n.partner_tax_name}</p>
                       )}
+                      <div className="mt-1"><InvoiceChip note={n} /></div>
                     </button>
                   ))}
                 </div>
@@ -233,6 +275,7 @@ export default function VentasRemisiones() {
                       {n.partner_tax_name && n.partner_tax_name !== n.partner_name && (
                         <p className="text-[11px] text-ink-muted truncate">{n.partner_tax_name}</p>
                       )}
+                      <div className="mt-1"><InvoiceChip note={n} /></div>
                     </button>
                   ))}
                 </div>
@@ -292,8 +335,7 @@ export default function VentasRemisiones() {
                       <td>
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <Badge status={n.status} />
-                          {n.invoice_id && <span className="badge-teal">Facturada</span>}
-                          {!n.invoice_id && n.no_invoice && <span className="badge-gray">Sin factura</span>}
+                          <InvoiceChip note={n} />
                           {n.price_adjusted && (
                             <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-status-info/15 text-status-info">
                               Precio corregido
@@ -337,8 +379,7 @@ export default function VentasRemisiones() {
                     <td>
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <Badge status={n.status} />
-                        {n.invoice_id && <span className="badge-teal">Facturada</span>}
-                        {!n.invoice_id && n.no_invoice && <span className="badge-gray">Sin factura</span>}
+                        <InvoiceChip note={n} />
                         {n.price_adjusted && (
                           <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-status-info/15 text-status-info">
                             Precio corregido
