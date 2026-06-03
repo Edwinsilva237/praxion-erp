@@ -141,8 +141,15 @@ async function getReceipt({ tenantId, receiptId }) {
 async function insertReceiptLinesAndLots(client, {
   tenantId, receiptId, warehouseId, resolvedPartnerId, receivedDate, cfg, lines, userId,
 }) {
+  let lineNumber = 0
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
+    const qtyReceived = Math.round(parseFloat(line.quantityReceived) * 10000) / 10000
+    // La tabla exige quantity_received > 0 (constraint srl_qty_positive). Saltamos
+    // líneas en 0 / negativo / NaN en vez de reventar con 500 — pasaba al editar una
+    // recepción que ya tenía una línea recibida en 0 (dato viejo previo a la restricción).
+    if (!(qtyReceived > 0)) continue
+    lineNumber++
     const { rows: lineRows } = await client.query(
       `INSERT INTO supplier_receipt_lines
          (supplier_receipt_id, purchase_order_line_id, item_type, item_id,
@@ -154,11 +161,11 @@ async function insertReceiptLinesAndLots(client, {
        line.purchaseOrderLineId || null,
        line.itemType || null, line.itemId || null,
        line.description || null,
-       Math.round(parseFloat(line.quantityReceived) * 10000) / 10000,
+       qtyReceived,
        line.unit || 'kg', line.unitPrice || 0,
        line.warehouseId || warehouseId,
        line.isGeneric || false, line.genericCategory || null,
-       i + 1, line.notes || null]
+       lineNumber, line.notes || null]
     )
     const lineId = lineRows[0].id
 
@@ -168,7 +175,7 @@ async function insertReceiptLinesAndLots(client, {
     //   - lot_number lo da el usuario (line.lotNumber) o se autogenera.
     //   - expiry_date solo si uses_expiry=true.
     if (cfg.uses_lots && line.itemType === 'raw_material' && line.itemId && !line.isGeneric) {
-      const qty = Math.round(parseFloat(line.quantityReceived) * 10000) / 10000
+      const qty = qtyReceived
       if (qty > 0) {
         // Auto-generar lot_number si no vino del cliente.
         let lotNumber = (line.lotNumber || '').trim()
