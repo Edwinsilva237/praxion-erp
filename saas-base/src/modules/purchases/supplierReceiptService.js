@@ -174,7 +174,7 @@ async function insertReceiptLinesAndLots(client, {
         let lotNumber = (line.lotNumber || '').trim()
         if (!lotNumber) {
           const { rows: rmRows } = await client.query(
-            `SELECT sku FROM raw_materials WHERE id = $1`, [line.itemId]
+            `SELECT code FROM raw_materials WHERE id = $1`, [line.itemId]
           )
           const pattern = cfg.lot_number_pattern || '{YYYY}{MM}{DD}-{SKU}-{SEQ}'
           // Secuencia diaria por MP (cuántos lotes ya hay hoy para esta MP)
@@ -185,7 +185,7 @@ async function insertReceiptLinesAndLots(client, {
           )
           lotNumber = generateLotNumber(pattern, {
             date: receivedDate || new Date(),
-            sku:  rmRows[0]?.sku || 'MP',
+            sku:  rmRows[0]?.code || 'MP',
             seq:  (seqRows[0]?.n || 0) + 1,
           })
         }
