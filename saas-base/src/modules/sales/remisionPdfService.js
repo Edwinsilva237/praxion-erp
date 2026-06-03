@@ -101,8 +101,20 @@ async function generateRemisionPDF({ tenantId, noteId, showPrices = true }) {
     const htx = headerTextX(!!logoBuffer)
     doc.rect(40, 40, W, 70).fill(azul)
     drawHeaderLogo(doc, logoBuffer)
-    doc.fillColor('white').fontSize(18).font('Helvetica-Bold')
-       .text(note.emisor_nombre || note.tenant_name || 'EMISOR', htx, 52, { width: W * 0.6 - (htx - 55) })
+
+    // Nombre del emisor en UNA sola línea: si la razón social es larga, encogemos
+    // la fuente (18 → 10) hasta que entre, en vez de dejar que envuelva a una 2ª
+    // línea que se encimaría con el RFC de abajo (y=74). El ellipsis es la red de
+    // seguridad para nombres absurdamente largos.
+    const emisorName  = note.emisor_nombre || note.tenant_name || 'EMISOR'
+    const emisorNameW = W * 0.6 - (htx - 55)
+    let emisorSize = 18
+    doc.font('Helvetica-Bold')
+    while (emisorSize > 10 && doc.fontSize(emisorSize).widthOfString(emisorName) > emisorNameW) {
+      emisorSize -= 0.5
+    }
+    doc.fillColor('white').fontSize(emisorSize).font('Helvetica-Bold')
+       .text(emisorName, htx, 52, { width: emisorNameW, lineBreak: false, ellipsis: true })
 
     doc.fontSize(9).font('Helvetica')
     if (note.emisor_rfc) {
@@ -152,7 +164,7 @@ async function generateRemisionPDF({ tenantId, noteId, showPrices = true }) {
 
     doc.rect(40, y + 14, halfW, 52).fill(gris)
     doc.fillColor(negro).fontSize(8).font('Helvetica-Bold')
-       .text(note.partner_tax_name || note.partner_name || '', 45, y + 18, { width: halfW - 10 })
+       .text(note.partner_tax_name || note.partner_name || '', 45, y + 18, { width: halfW - 10, lineBreak: false, ellipsis: true })
     doc.font('Helvetica').fillColor(grisText)
        .text(`RFC: ${note.partner_rfc || '-'}`, 45, y + 30)
        .text(`${note.partner_city || ''} ${note.partner_state ? `, ${note.partner_state}` : ''} ${note.partner_zip || ''}`.trim() || '-',
@@ -165,7 +177,7 @@ async function generateRemisionPDF({ tenantId, noteId, showPrices = true }) {
 
     doc.rect(rx, y + 14, halfW, 52).fill(gris)
     doc.fillColor(negro).fontSize(8).font('Helvetica-Bold')
-       .text(note.address_alias || 'Domicilio principal', rx + 5, y + 18, { width: halfW - 10 })
+       .text(note.address_alias || 'Domicilio principal', rx + 5, y + 18, { width: halfW - 10, lineBreak: false, ellipsis: true })
     doc.font('Helvetica').fillColor(grisText)
        .text(note.delivery_address || note.partner_address || '-', rx + 5, y + 30, { width: halfW - 10 })
        .text(`${note.delivery_city || note.partner_city || ''} ${note.delivery_state || note.partner_state ? `, ${note.delivery_state || note.partner_state}` : ''} ${note.delivery_zip || note.partner_zip || ''}`.trim() || '',
