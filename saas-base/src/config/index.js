@@ -26,7 +26,11 @@ const config = {
 
   jwt: {
     secret: optional('JWT_SECRET', DEFAULT_JWT_SECRET),
-    expiresIn: optional('JWT_EXPIRES_IN', '15m'),
+    // Default a la par de producción (render.yaml). Un access token corto (15m)
+    // hacía que cualquier entorno sin la env explícita encadenara refresh cada
+    // pocos minutos; 8h cubre una jornada. El refresh proactivo del frontend
+    // renueva sin fricción cuando sí vence (sesión de un día para otro).
+    expiresIn: optional('JWT_EXPIRES_IN', '8h'),
     refreshExpiresIn: optional('JWT_REFRESH_EXPIRES_IN', '7d'),
   },
 
