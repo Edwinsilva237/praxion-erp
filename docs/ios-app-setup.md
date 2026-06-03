@@ -105,14 +105,29 @@ En Xcode:
   Ver `saas-erp-frontend/src/api/axios.js`.
 - **Cámara en Simulador**: no existe; barras solo se prueba en device real.
 
+## Iconos + splash (fuentes YA en el repo)
+
+Las imágenes fuente ya están versionadas en `saas-erp-frontend/assets/`
+(`icon-only.png` 1024² SIN alfa = iOS-safe, `icon-foreground/background.png` para
+Android adaptive, `splash.png`/`splash-dark.png` 2732²). Generadas con
+`node scripts/gen-app-icons.cjs` desde `public/praxion-isotipo.svg` (marca
+blanca+verde sobre #0B0F12). Para producir los iconos+splash de iOS (requiere que
+`ios/` ya exista por `cap add ios`):
+
+```bash
+cd saas-erp-frontend
+npx capacitor-assets generate --ios   # escribe en ios/App/App/Assets.xcassets
+```
+
+Esto crea el `AppIcon.appiconset` (todos los tamaños) + el splash. Label de la app:
+"Praxion". Si cambias el arte: edita el SVG → `node scripts/gen-app-icons.cjs` →
+re-corre el comando de arriba. *(El `icon-only.png` se aplana sin canal alfa a
+propósito — App Store rechaza iconos con transparencia.)*
+
 ## Después del Simulador (siguiente)
 
-1. **Iconos**: `npx capacitor-assets generate --ios` (necesita `assets/` con los
-   PNG fuente; si no están, regenerar con `node scripts/gen-app-icons.cjs` —
-   aplana `public/praxion-isotipo.svg` con sharp). Label de la app: "Praxion".
-2. **Splash screen**.
-3. **Correr en iPhone físico** (Apple ID gratis, firma caduca cada 7 días).
-4. **Apple Developer de paga** → TestFlight → repartir a usuarios.
+1. **Correr en iPhone físico** (Apple ID gratis, firma caduca cada 7 días).
+2. **Apple Developer de paga** → TestFlight → repartir a usuarios.
 
 ## Convención del proyecto
 
