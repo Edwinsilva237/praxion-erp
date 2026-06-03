@@ -344,6 +344,13 @@ async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, 
             WHERE il.delivery_note_line_id = dnl.id AND iv.status <> 'cancelled'
          )
     )`)
+    // Excluir las ya facturadas de forma CONSOLIDADA (sus líneas no tienen
+    // invoice_line, la liga vive en invoice_remissions — mig 190).
+    filters.push(`NOT EXISTS (
+      SELECT 1 FROM invoice_remissions ir
+        JOIN invoices iv ON iv.id = ir.invoice_id
+       WHERE ir.delivery_note_id = dn.id AND iv.status <> 'cancelled'
+    )`)
   }
 
   const where = filters.length ? `AND ${filters.join(' AND ')}` : ''
@@ -370,7 +377,19 @@ async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, 
      FROM delivery_notes dn
      JOIN business_partners bp ON bp.id = dn.partner_id
      LEFT JOIN sales_orders so ON so.id = dn.sales_order_id
-     LEFT JOIN invoices inv ON inv.delivery_note_id = dn.id AND inv.status <> 'cancelled'
+     -- Factura activa de la remisión: liga directa (delivery_note_id) O consolidada
+     -- (invoice_remissions, donde delivery_note_id queda NULL). Sin la 2ª rama las
+     -- remisiones consolidadas se veían como NO facturadas (mig 190).
+     LEFT JOIN LATERAL (
+       SELECT iv.id, iv.document_number, iv.status
+         FROM invoices iv
+        WHERE iv.status <> 'cancelled'
+          AND ( iv.delivery_note_id = dn.id
+                OR EXISTS (SELECT 1 FROM invoice_remissions ir
+                            WHERE ir.invoice_id = iv.id AND ir.delivery_note_id = dn.id) )
+        ORDER BY iv.created_at DESC
+        LIMIT 1
+     ) inv ON true
      WHERE dn.tenant_id = $1 ${where}
      ORDER BY ${invoiceable ? 'bp.name ASC, dn.delivered_at DESC NULLS LAST,' : ''}
               dn.issue_date DESC, dn.document_number DESC
@@ -459,6 +478,35 @@ async function getDeliveryNote({ tenantId, noteId }) {
       ORDER BY dsl.created_at DESC`,
     [tenantId, noteId]
   )
+
+  // Factura CONSOLIDADA: la remisión se liga vía invoice_remissions (su
+  // delivery_note_id quedó NULL y sus dnl no tienen invoice_line). Rellenamos
+  // note.invoice_id + las líneas para que el detalle muestre "Facturada en X" en
+  // vez de "Pendiente de facturar" (mig 190). Solo si no se detectó por header.
+  if (!note.invoice_id) {
+    const { rows: consol } = await query(
+      `SELECT iv.id, iv.document_number, iv.status, iv.use_cfdi
+         FROM invoice_remissions ir
+         JOIN invoices iv ON iv.id = ir.invoice_id
+        WHERE ir.delivery_note_id = $1 AND iv.status <> 'cancelled'
+        ORDER BY iv.created_at DESC LIMIT 1`,
+      [noteId]
+    )
+    if (consol.length) {
+      const c = consol[0]
+      note.invoice_id = c.id
+      note.invoice_number = c.document_number
+      note.invoice_status = c.status
+      for (const l of lines) {
+        if (!l.invoice_id) {
+          l.invoice_id = c.id
+          l.invoice_number = c.document_number
+          l.invoice_status = c.status
+          l.invoice_use_cfdi = c.use_cfdi
+        }
+      }
+    }
+  }
 
   return { ...note, lines, contacts, priceAdjustments }
 }

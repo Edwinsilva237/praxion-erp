@@ -375,6 +375,19 @@ async function createFromRemission({
     if (!noteRows.length) throw createError(404, 'Remisión no encontrada o no está entregada.')
     const note = noteRows[0]
 
+    // Bloquear si la remisión ya está en una factura CONSOLIDADA: su
+    // delivery_note_id quedó NULL, así que el chequeo de líneas de abajo no la
+    // vería y se podría doble-facturar (mig 190 / invoice_remissions).
+    const { rows: consolRows } = await client.query(
+      `SELECT iv.document_number FROM invoice_remissions ir
+         JOIN invoices iv ON iv.id = ir.invoice_id
+        WHERE ir.delivery_note_id = $1 AND iv.status <> 'cancelled' LIMIT 1`,
+      [deliveryNoteId]
+    )
+    if (consolRows.length) {
+      throw createError(409, `La remisión ya fue facturada (consolidada en ${consolRows[0].document_number}).`)
+    }
+
     // Bloquear split si la remisión tiene pagos en su AR
     const { rows: arRows } = await client.query(
       `SELECT id, amount_total, amount_paid FROM accounts_receivable
@@ -706,10 +719,18 @@ async function createFromRemissions({
       throw createError(400, `Las siguientes remisiones no están entregadas: ${notDelivered.map(n => n.document_number).join(', ')}.`)
     }
 
-    // Validar que ninguna tenga factura
+    // Validar que ninguna tenga factura: liga directa (delivery_note_id) O
+    // consolidada (invoice_remissions). Sin el segundo chequeo una remisión ya
+    // consolidada podía re-facturarse (su delivery_note_id quedó NULL).
     const { rows: existing } = await client.query(
-      `SELECT delivery_note_id FROM invoices
-        WHERE delivery_note_id = ANY($1::uuid[]) AND status <> 'cancelled'`,
+      `SELECT dn_id FROM (
+         SELECT delivery_note_id AS dn_id FROM invoices
+          WHERE delivery_note_id = ANY($1::uuid[]) AND status <> 'cancelled'
+         UNION
+         SELECT ir.delivery_note_id FROM invoice_remissions ir
+           JOIN invoices iv ON iv.id = ir.invoice_id
+          WHERE ir.delivery_note_id = ANY($1::uuid[]) AND iv.status <> 'cancelled'
+       ) q`,
       [deliveryNoteIds]
     )
     if (existing.length > 0) {
@@ -902,6 +923,16 @@ async function createFromRemissions({
        issueDate, dueDate,
        `Consolida remisiones: ${notesRows.map(n => n.document_number).join(', ')}`,
        userId]
+    )
+
+    // Liga estructural factura↔remisión (mig 190). La consolidada deja
+    // delivery_note_id en NULL, así que ESTA es la única liga consultable: sin
+    // ella la lista/detalle de remisiones no detectan la factura.
+    await client.query(
+      `INSERT INTO invoice_remissions (invoice_id, delivery_note_id)
+       SELECT $1, unnest($2::uuid[])
+       ON CONFLICT DO NOTHING`,
+      [invoice.id, deliveryNoteIds]
     )
 
     await audit({
