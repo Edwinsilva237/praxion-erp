@@ -24,6 +24,24 @@ const EMPTY_LINE = () => ({
   unit_price: '', oc_line_id: null, oc_qty_original: null,
 })
 
+// Mapea una línea de una recepción existente (getReceipt) al shape del form,
+// para precargar al EDITAR un borrador.
+function mapReceiptLineToForm(l) {
+  return {
+    oc_line_id:       l.purchase_order_line_id || null,
+    oc_qty_original:  l.ordered_qty != null ? parseFloat(l.ordered_qty) : null,
+    item_type:        l.item_type || 'raw_material',
+    item:             { id: l.item_id, label: l.item_name || l.description || '—' },
+    unit:             l.unit || 'kg',
+    unit_price:       l.unit_price != null ? String(l.unit_price) : '',
+    qty_ordered:      l.ordered_qty != null ? String(parseFloat(l.ordered_qty)) : '',
+    qty_received:     l.quantity_received != null ? String(parseFloat(l.quantity_received)) : '',
+    lot_number:       l.lot_number || '',
+    manufacturer_lot: l.manufacturer_lot || '',
+    expiry_date:      l.lot_expiry_date ? String(l.lot_expiry_date).split('T')[0] : '',
+  }
+}
+
 function DiffBadge({ ordered, received, unit }) {
   if (!ordered || !received) return null
   const diff = parseFloat(received) - parseFloat(ordered)
@@ -278,9 +296,11 @@ function EvidenciaSection({ receiptId, existingFilename, existingMimetype, onUpl
 }
 
 // ── Panel de detalle lateral ──────────────────────────────────────────────────
-function DetallePanel({ receiptId, onClose }) {
+function DetallePanel({ receiptId, onClose, onEdit }) {
   const qc = useQueryClient()
   const [confirming, setConf]   = useState(false)
+  const [cancelling, setCancel] = useState(false)
+  const [cancelReason, setCancelReason] = useState('')
   const [actionErr, setActErr]  = useState(null)
   const [genPdf, setGenPdf]     = useState(false)
 
@@ -304,6 +324,22 @@ function DetallePanel({ receiptId, onClose }) {
       setConf(false)
     },
     onError: (e) => setActErr(e.response?.data?.error || 'Error al confirmar'),
+  })
+
+  const cancelMutation = useMutation({
+    mutationFn: () => purchasesApi.cancelReceipt(receiptId, { reason: cancelReason || undefined }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['purchase-receipts'] })
+      qc.invalidateQueries({ queryKey: ['receipt-detail', receiptId] })
+      // Cancelar un borrador borra sus lotes (que ya contaban como stock).
+      qc.invalidateQueries({ queryKey: ['inv-stock'] })
+      qc.invalidateQueries({ queryKey: ['inv-levels'] })
+      qc.invalidateQueries({ queryKey: ['inv-levels-summary'] })
+      qc.invalidateQueries({ queryKey: ['inv-item-detail'] })
+      setCancel(false)
+      onClose()
+    },
+    onError: (e) => setActErr(e.response?.data?.error || 'Error al cancelar'),
   })
 
   async function handlePDF() {
@@ -478,9 +514,28 @@ function DetallePanel({ receiptId, onClose }) {
                   Imprimir
                 </button>
                 {receipt.status === 'draft' && (
-                  <button onClick={() => setConf(true)} className="btn-primary btn-sm">
-                    Confirmar → Mover a inventario
-                  </button>
+                  <>
+                    <Can do="purchases:update">
+                      <button onClick={() => onEdit?.(receipt)} className="btn-secondary btn-sm">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                        </svg>
+                        Editar
+                      </button>
+                    </Can>
+                    <Can do="purchases:update">
+                      <button onClick={() => { setActErr(null); setCancel(true) }}
+                        className="btn-secondary btn-sm text-status-danger hover:bg-status-danger/10">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                        Cancelar recepción
+                      </button>
+                    </Can>
+                    <button onClick={() => setConf(true)} className="btn-primary btn-sm">
+                      Confirmar → Mover a inventario
+                    </button>
+                  </>
                 )}
               </div>
 
@@ -509,6 +564,39 @@ function DetallePanel({ receiptId, onClose }) {
                 </div>,
                 document.body
               )}
+
+              {/* Cancelar modal */}
+              {cancelling && createPortal(
+                <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4">
+                  <div className="card w-full max-w-sm p-6 flex flex-col gap-4">
+                    <div className="w-10 h-10 rounded-xl bg-status-danger/15 flex items-center justify-center">
+                      <svg className="w-5 h-5 text-status-danger" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M5.07 19h13.86a2 2 0 001.74-3L13.74 4a2 2 0 00-3.48 0L3.33 16a2 2 0 001.74 3z"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <h2 className="text-base font-semibold text-ink-primary">Cancelar recepción</h2>
+                      <p className="text-sm text-ink-secondary mt-1">
+                        El borrador quedará cancelado y no se podrá confirmar. Si había creado lotes, se
+                        eliminarán (no movieron inventario). No se puede deshacer.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="label">Motivo (opcional)</label>
+                      <input className="input" placeholder="Ej: capturado por error, OC equivocada..."
+                        value={cancelReason} onChange={e => setCancelReason(e.target.value)} />
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setCancel(false)} className="btn-secondary flex-1">Volver</button>
+                      <button onClick={() => cancelMutation.mutate()} disabled={cancelMutation.isPending}
+                        className="btn-primary flex-1 bg-status-danger hover:bg-red-700">
+                        {cancelMutation.isPending ? <Spinner size="sm" /> : 'Sí, cancelar'}
+                      </button>
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
             </>
           )}
         </div>
@@ -519,18 +607,19 @@ function DetallePanel({ receiptId, onClose }) {
 }
 
 // ── Modal nueva recepción ─────────────────────────────────────────────────────
-function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
+function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onCreated }) {
   const qc = useQueryClient()
+  const isEdit = !!editReceipt
 
-  const [ocId, setOcId]           = useState(preselectedOcId || '')
+  const [ocId, setOcId]           = useState(editReceipt?.purchase_order_id || preselectedOcId || '')
   const [ocData, setOcData]       = useState(null)
   const [ocLoading, setOcLoading] = useState(false)
-  const [warehouseId, setWH]      = useState('')
-  const [docType, setDocType]     = useState('remision')
-  const [docNumber, setDocNumber] = useState('')
-  const [receiptDate, setDate]    = useState(new Date().toISOString().split('T')[0])
-  const [notes, setNotes]         = useState('')
-  const [lines, setLines]         = useState([])
+  const [warehouseId, setWH]      = useState(editReceipt?.warehouse_id || '')
+  const [docType, setDocType]     = useState(editReceipt?.document_type || 'remision')
+  const [docNumber, setDocNumber] = useState(editReceipt?.document_number || '')
+  const [receiptDate, setDate]    = useState(String(editReceipt?.received_date || new Date().toISOString()).split('T')[0])
+  const [notes, setNotes]         = useState(editReceipt?.notes || '')
+  const [lines, setLines]         = useState(() => isEdit ? (editReceipt.lines || []).map(mapReceiptLineToForm) : [])
   const [evidence, setEvidence]   = useState(null)  // File
   const [evidenceOpen, setEvidenceOpen] = useState(false)
   const [error, setError]         = useState(null)
@@ -588,6 +677,15 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
 
   useEffect(() => { if (preselectedOcId) loadOC(preselectedOcId) }, [preselectedOcId])
 
+  // En edición: las líneas ya vienen precargadas del borrador; solo cargamos la
+  // OC para la tarjeta de referencia y el partner (NO re-derivamos las líneas).
+  useEffect(() => {
+    if (!isEdit || !editReceipt.purchase_order_id) return
+    setOcLoading(true)
+    purchasesApi.getOrder(editReceipt.purchase_order_id)
+      .then(setOcData).catch(() => {}).finally(() => setOcLoading(false))
+  }, [])
+
   function updateLine(idx, key, val) {
     setLines(prev => prev.map((l, i) => i !== idx ? l : { ...l, [key]: val }))
   }
@@ -605,14 +703,14 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
 
   const mutation = useMutation({
     mutationFn: async () => {
-      if (!ocId)        throw new Error('Selecciona una OC.')
+      if (!ocId && !isEdit) throw new Error('Selecciona una OC.')
       if (!warehouseId) throw new Error('Selecciona el almacén de destino.')
       const validLines = lines.filter(l => l.item?.id && (l.qty_received || l.qty_ordered))
       if (!validLines.length) throw new Error('Sin líneas con cantidad.')
 
-      const receipt = await purchasesApi.createReceipt({
+      const body = {
         partnerId:       ocData?.partner_id || null,
-        purchaseOrderId: ocId,
+        purchaseOrderId: ocId || null,
         warehouseId,
         receivedDate:    receiptDate,
         documentType:    docType,
@@ -632,20 +730,31 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
           manufacturerLot: l.manufacturer_lot ? l.manufacturer_lot.trim() : null,
           expiryDate:      l.expiry_date || null,
         })),
-      })
+      }
 
+      // Editar un borrador: reemplaza líneas + encabezado. La evidencia se
+      // gestiona aparte (en el panel de detalle), por eso aquí no se sube.
+      if (isEdit) return purchasesApi.updateReceipt(editReceipt.id, body)
+
+      const receipt = await purchasesApi.createReceipt(body)
       // Subir evidencia si hay
       if (evidence) {
         const fd = new FormData()
         fd.append('file', evidence)
         await purchasesApi.uploadEvidence(receipt.id, fd)
       }
-
       return receipt
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['purchase-receipts'] })
       qc.invalidateQueries({ queryKey: ['purchase-orders'] })
+      if (isEdit) {
+        qc.invalidateQueries({ queryKey: ['receipt-detail', editReceipt.id] })
+        // Editar reemplaza los lotes del borrador → refrescar inventario.
+        qc.invalidateQueries({ queryKey: ['inv-stock'] })
+        qc.invalidateQueries({ queryKey: ['inv-levels'] })
+        qc.invalidateQueries({ queryKey: ['inv-levels-summary'] })
+      }
       onCreated()
       onClose()
     },
@@ -654,7 +763,7 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
 
   function handleSubmit(e) {
     e.preventDefault(); setError(null)
-    if (!ocId) { setError('Selecciona una OC.'); return }
+    if (!ocId && !isEdit) { setError('Selecciona una OC.'); return }
     if (!warehouseId) { setError('Selecciona el almacén.'); return }
     const excess = getExcess()
     if (excess.length > 0) { setExcess(excess); return }
@@ -666,8 +775,10 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
       <div className="card w-full max-w-2xl p-6 max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <div>
-            <h2 className="text-base font-semibold text-ink-primary">Nueva recepción</h2>
-            <p className="text-xs text-ink-muted mt-0.5">El inventario se actualiza al confirmar</p>
+            <h2 className="text-base font-semibold text-ink-primary">{isEdit ? 'Editar recepción' : 'Nueva recepción'}</h2>
+            <p className="text-xs text-ink-muted mt-0.5">
+              {isEdit ? `${editReceipt.receipt_number} · borrador` : 'El inventario se actualiza al confirmar'}
+            </p>
           </div>
           <button onClick={onClose} className="btn-ghost btn-icon text-ink-muted">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -725,8 +836,13 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
               Orden de compra <span className="text-status-danger">*</span>
             </p>
             <div>
-              <label className="label">Selecciona la OC a recibir</label>
-              {openOrders.length === 0 ? (
+              <label className="label">{isEdit ? 'OC de la recepción' : 'Selecciona la OC a recibir'}</label>
+              {isEdit ? (
+                <div className="input bg-surface-elevated/40 text-ink-secondary cursor-default flex items-center gap-2">
+                  <span className="font-mono">{editReceipt.purchase_order_number || ocData?.order_number || '—'}</span>
+                  <span className="text-ink-muted text-xs">(no se puede cambiar al editar)</span>
+                </div>
+              ) : openOrders.length === 0 ? (
                 <div className="input bg-status-warning/10 border-status-warning/40 text-status-warning text-sm">
                   No hay OC enviadas pendientes de recepción
                 </div>
@@ -763,8 +879,8 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
             )}
           </div>
 
-          {/* Solo si hay OC cargada */}
-          {ocId && lines.length > 0 && (
+          {/* Solo si hay OC cargada (o estamos editando un borrador) */}
+          {(ocId || isEdit) && lines.length > 0 && (
             <>
               {/* Documento */}
               <div className="bg-surface-elevated/60 border border-line-subtle rounded-xl p-4 flex flex-col gap-3">
@@ -902,7 +1018,8 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
                   value={notes} onChange={e => setNotes(e.target.value)} />
               </div>
 
-              {/* Evidencia */}
+              {/* Evidencia (solo al crear; al editar se gestiona en el detalle) */}
+              {!isEdit && (
               <div className="border border-line-subtle rounded-xl overflow-hidden">
                 <button type="button" onClick={() => setEvidenceOpen(p => !p)}
                   className="w-full flex items-center justify-between px-4 py-3 bg-surface-elevated/40 hover:bg-surface-elevated/60 transition-colors">
@@ -930,6 +1047,7 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
                   </div>
                 )}
               </div>
+              )}
             </>
           )}
 
@@ -942,9 +1060,9 @@ function NuevaRecepcionModal({ preselectedOcId, onClose, onCreated }) {
           <div className="flex gap-2 pt-1">
             <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancelar</button>
             <button type="submit"
-              disabled={mutation.isPending || !ocId || lines.length === 0 || !!excessWarning}
+              disabled={mutation.isPending || (!ocId && !isEdit) || lines.length === 0 || !!excessWarning}
               className="btn-primary flex-1">
-              {mutation.isPending ? <Spinner size="sm" /> : 'Guardar recepción'}
+              {mutation.isPending ? <Spinner size="sm" /> : (isEdit ? 'Guardar cambios' : 'Guardar recepción')}
             </button>
           </div>
         </form>
@@ -962,6 +1080,7 @@ export default function ComprasRecepciones() {
 
   const [showNew, setShowNew]   = useState(!!preselectedOcId)
   const [detailId, setDetailId] = useState(null)
+  const [editReceipt, setEditReceipt] = useState(null)
   const [success, setSuccess]   = useState(null)
 
   // Filtros
@@ -1185,7 +1304,11 @@ export default function ComprasRecepciones() {
       )}
 
       {detailId && (
-        <DetallePanel receiptId={detailId} onClose={() => setDetailId(null)} />
+        <DetallePanel
+          receiptId={detailId}
+          onClose={() => setDetailId(null)}
+          onEdit={(r) => { setDetailId(null); setEditReceipt(r) }}
+        />
       )}
 
       {showNew && (
@@ -1193,6 +1316,14 @@ export default function ComprasRecepciones() {
           preselectedOcId={preselectedOcId || undefined}
           onClose={() => setShowNew(false)}
           onCreated={() => setSuccess('Recepción guardada. Confírmala para actualizar el inventario.')}
+        />
+      )}
+
+      {editReceipt && (
+        <NuevaRecepcionModal
+          editReceipt={editReceipt}
+          onClose={() => setEditReceipt(null)}
+          onCreated={() => setSuccess('Recepción actualizada.')}
         />
       )}
     </div>

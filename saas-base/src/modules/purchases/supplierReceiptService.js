@@ -116,18 +116,121 @@ async function getReceipt({ tenantId, receiptId }) {
             COALESCE(rm.unit, pt.sale_unit)  AS item_unit,
             pol.quantity   AS ordered_qty,
             pol.unit_price AS ordered_price,
-            w.name         AS warehouse_name
+            w.name         AS warehouse_name,
+            rl.lot_number       AS lot_number,
+            rl.manufacturer_lot AS manufacturer_lot,
+            rl.expiry_date      AS lot_expiry_date
      FROM supplier_receipt_lines srl
      LEFT JOIN purchase_order_lines pol ON pol.id  = srl.purchase_order_line_id
      LEFT JOIN raw_materials        rm  ON rm.id   = srl.item_id AND srl.item_type = 'raw_material'
      LEFT JOIN products             pt  ON pt.id   = srl.item_id AND srl.item_type = 'product'
      LEFT JOIN warehouses           w   ON w.id    = srl.warehouse_id
+     LEFT JOIN raw_material_lots    rl  ON rl.supplier_receipt_line_id = srl.id
      WHERE srl.supplier_receipt_id = $1
      ORDER BY srl.line_number`,
     [receiptId]
   )
 
   return { ...rows[0], lines }
+}
+
+// Inserta las líneas de una recepción y, si el tenant usa lotes, crea un
+// raw_material_lot por cada línea de MP. Compartido por createReceipt y
+// updateReceipt (al editar un borrador se borran las líneas/lotes viejos y se
+// re-insertan con esto, para no divergir la lógica).
+async function insertReceiptLinesAndLots(client, {
+  tenantId, receiptId, warehouseId, resolvedPartnerId, receivedDate, cfg, lines, userId,
+}) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const { rows: lineRows } = await client.query(
+      `INSERT INTO supplier_receipt_lines
+         (supplier_receipt_id, purchase_order_line_id, item_type, item_id,
+          description, quantity_received, unit, unit_price,
+          warehouse_id, is_generic, generic_category, line_number, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       RETURNING id`,
+      [receiptId,
+       line.purchaseOrderLineId || null,
+       line.itemType || null, line.itemId || null,
+       line.description || null,
+       Math.round(parseFloat(line.quantityReceived) * 10000) / 10000,
+       line.unit || 'kg', line.unitPrice || 0,
+       line.warehouseId || warehouseId,
+       line.isGeneric || false, line.genericCategory || null,
+       i + 1, line.notes || null]
+    )
+    const lineId = lineRows[0].id
+
+    // SaaS v2 §4.3.1: crear raw_material_lot si aplica.
+    //   - Solo para items tipo raw_material (no genéricos / servicios).
+    //   - Solo si el tenant tiene uses_lots=true.
+    //   - lot_number lo da el usuario (line.lotNumber) o se autogenera.
+    //   - expiry_date solo si uses_expiry=true.
+    if (cfg.uses_lots && line.itemType === 'raw_material' && line.itemId && !line.isGeneric) {
+      const qty = Math.round(parseFloat(line.quantityReceived) * 10000) / 10000
+      if (qty > 0) {
+        // Auto-generar lot_number si no vino del cliente.
+        let lotNumber = (line.lotNumber || '').trim()
+        if (!lotNumber) {
+          const { rows: rmRows } = await client.query(
+            `SELECT sku FROM raw_materials WHERE id = $1`, [line.itemId]
+          )
+          const pattern = cfg.lot_number_pattern || '{YYYY}{MM}{DD}-{SKU}-{SEQ}'
+          // Secuencia diaria por MP (cuántos lotes ya hay hoy para esta MP)
+          const { rows: seqRows } = await client.query(
+            `SELECT COUNT(*)::int AS n FROM raw_material_lots
+             WHERE raw_material_id = $1 AND DATE(received_at) = CURRENT_DATE`,
+            [line.itemId]
+          )
+          lotNumber = generateLotNumber(pattern, {
+            date: receivedDate || new Date(),
+            sku:  rmRows[0]?.sku || 'MP',
+            seq:  (seqRows[0]?.n || 0) + 1,
+          })
+        }
+
+        await client.query(
+          `INSERT INTO raw_material_lots
+             (tenant_id, raw_material_id, lot_number, manufacturer_lot,
+              manufacture_date, expiry_date, best_before_date, received_at,
+              supplier_id, supplier_receipt_id, supplier_receipt_line_id,
+              warehouse_id, quantity_received, quantity_remaining,
+              unit_cost, total_cost, created_by_user_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8,$9,$10,$11,$12,$12,$13,$14,$15)
+           ON CONFLICT (raw_material_id, lot_number) DO NOTHING`,
+          [tenantId, line.itemId, lotNumber,
+           line.manufacturerLot || null,
+           line.manufactureDate || null,
+           cfg.uses_expiry ? (line.expiryDate || null) : null,
+           cfg.uses_expiry ? (line.bestBeforeDate || null) : null,
+           resolvedPartnerId || null, receiptId, lineId,
+           line.warehouseId || warehouseId,
+           qty,
+           parseFloat(line.unitPrice || 0),
+           parseFloat(line.unitPrice || 0) * qty,
+           userId]
+        )
+      }
+    }
+  }
+}
+
+// Bloquea editar/cancelar un borrador si algún lote ya fue consumido. Los lotes
+// de la recepción se crean YA en borrador y FEFO/FIFO los puede consumir aunque
+// la recepción no se haya confirmado; si quantity_remaining < quantity_received
+// el lote ya alimentó producción → deshacer corrompería inventario.
+async function assertReceiptLotsUntouched(client, tenantId, receiptId) {
+  const { rows } = await client.query(
+    `SELECT COUNT(*)::int AS consumed
+       FROM raw_material_lots
+      WHERE tenant_id = $1 AND supplier_receipt_id = $2
+        AND quantity_remaining < quantity_received - 0.0001`,
+    [tenantId, receiptId]
+  )
+  if (rows[0].consumed > 0) {
+    throw createError(409, 'No se puede editar/cancelar: ya se consumió material de los lotes de esta recepción.')
+  }
 }
 
 async function createReceipt({
@@ -182,79 +285,10 @@ async function createReceipt({
     )
     const receipt = rows[0]
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-      const { rows: lineRows } = await client.query(
-        `INSERT INTO supplier_receipt_lines
-           (supplier_receipt_id, purchase_order_line_id, item_type, item_id,
-            description, quantity_received, unit, unit_price,
-            warehouse_id, is_generic, generic_category, line_number, notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-         RETURNING id`,
-        [receipt.id,
-         line.purchaseOrderLineId || null,
-         line.itemType || null, line.itemId || null,
-         line.description || null,
-         Math.round(parseFloat(line.quantityReceived) * 10000) / 10000,
-         line.unit || 'kg', line.unitPrice || 0,
-         line.warehouseId || warehouseId,
-         line.isGeneric || false, line.genericCategory || null,
-         i + 1, line.notes || null]
-      )
-      const lineId = lineRows[0].id
-
-      // SaaS v2 §4.3.1: crear raw_material_lot si aplica.
-      //   - Solo para items tipo raw_material (no genéricos / servicios).
-      //   - Solo si el tenant tiene uses_lots=true.
-      //   - lot_number lo da el usuario (line.lotNumber) o se autogenera.
-      //   - expiry_date solo si uses_expiry=true.
-      if (cfg.uses_lots && line.itemType === 'raw_material' && line.itemId && !line.isGeneric) {
-        const qty = Math.round(parseFloat(line.quantityReceived) * 10000) / 10000
-        if (qty > 0) {
-          // Auto-generar lot_number si no vino del cliente.
-          let lotNumber = (line.lotNumber || '').trim()
-          if (!lotNumber) {
-            const { rows: rmRows } = await client.query(
-              `SELECT sku FROM raw_materials WHERE id = $1`, [line.itemId]
-            )
-            const pattern = cfg.lot_number_pattern || '{YYYY}{MM}{DD}-{SKU}-{SEQ}'
-            // Secuencia diaria por MP (cuántos lotes ya hay hoy para esta MP)
-            const { rows: seqRows } = await client.query(
-              `SELECT COUNT(*)::int AS n FROM raw_material_lots
-               WHERE raw_material_id = $1 AND DATE(received_at) = CURRENT_DATE`,
-              [line.itemId]
-            )
-            lotNumber = generateLotNumber(pattern, {
-              date: receivedDate || new Date(),
-              sku:  rmRows[0]?.sku || 'MP',
-              seq:  (seqRows[0]?.n || 0) + 1,
-            })
-          }
-
-          await client.query(
-            `INSERT INTO raw_material_lots
-               (tenant_id, raw_material_id, lot_number, manufacturer_lot,
-                manufacture_date, expiry_date, best_before_date, received_at,
-                supplier_id, supplier_receipt_id, supplier_receipt_line_id,
-                warehouse_id, quantity_received, quantity_remaining,
-                unit_cost, total_cost, created_by_user_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8,$9,$10,$11,$12,$12,$13,$14,$15)
-             ON CONFLICT (raw_material_id, lot_number) DO NOTHING`,
-            [tenantId, line.itemId, lotNumber,
-             line.manufacturerLot || null,
-             line.manufactureDate || null,
-             cfg.uses_expiry ? (line.expiryDate || null) : null,
-             cfg.uses_expiry ? (line.bestBeforeDate || null) : null,
-             resolvedPartnerId || null, receipt.id, lineId,
-             line.warehouseId || warehouseId,
-             qty,
-             parseFloat(line.unitPrice || 0),
-             parseFloat(line.unitPrice || 0) * qty,
-             userId]
-          )
-        }
-      }
-    }
+    await insertReceiptLinesAndLots(client, {
+      tenantId, receiptId: receipt.id, warehouseId, resolvedPartnerId,
+      receivedDate, cfg, lines, userId,
+    })
 
     await audit({
       tenantId, userId, action: 'supplier_receipt.created',
@@ -264,6 +298,77 @@ async function createReceipt({
     })
 
     return receipt
+  })
+}
+
+// Edita una recepción EN BORRADOR: reemplaza por completo sus líneas (y lotes)
+// y los campos del encabezado editables. La OC y el proveedor NO cambian (si la
+// OC está mal, cancela y crea otra). No toca recepciones confirmadas/canceladas.
+async function updateReceipt({
+  tenantId, receiptId, warehouseId, receivedDate,
+  documentType, documentNumber, lines = [], notes,
+  userId, ipAddress, userAgent,
+}) {
+  return withTransaction(async (client) => {
+    const { rows: rRows } = await client.query(
+      `SELECT * FROM supplier_receipts WHERE id = $1 AND tenant_id = $2`,
+      [receiptId, tenantId]
+    )
+    if (rRows.length === 0) throw createError(404, 'Recepción no encontrada.')
+    const receipt = rRows[0]
+    if (receipt.status !== 'draft') throw createError(409, 'Solo se puede editar una recepción en borrador.')
+    if (!warehouseId) throw createError(400, 'warehouseId es requerido.')
+    if (lines.length === 0) throw createError(400, 'Se requiere al menos una línea.')
+
+    // No editar si algún lote del borrador ya se consumió.
+    await assertReceiptLotsUntouched(client, tenantId, receiptId)
+
+    const { rows: cfgRows } = await client.query(
+      `SELECT uses_lots, uses_expiry, lot_number_pattern
+       FROM tenant_process_config WHERE tenant_id = $1`,
+      [tenantId]
+    )
+    const cfg = cfgRows[0] || { uses_lots: false, uses_expiry: false, lot_number_pattern: null }
+
+    const newDate = receivedDate || receipt.received_date
+
+    // Reemplazo total de líneas + lotes del borrador (no movieron inventario).
+    // Los lotes referencian a las líneas (FK) → borrar lotes primero.
+    await client.query(
+      `DELETE FROM raw_material_lots WHERE tenant_id = $1 AND supplier_receipt_id = $2`,
+      [tenantId, receiptId]
+    )
+    await client.query(
+      `DELETE FROM supplier_receipt_lines WHERE supplier_receipt_id = $1`,
+      [receiptId]
+    )
+
+    await client.query(
+      `UPDATE supplier_receipts
+         SET warehouse_id = $1, received_date = $2,
+             document_type = $3, document_number = $4, notes = $5
+       WHERE id = $6 AND tenant_id = $7`,
+      [warehouseId, newDate, documentType || null, documentNumber || null,
+       notes || null, receiptId, tenantId]
+    )
+
+    await insertReceiptLinesAndLots(client, {
+      tenantId, receiptId, warehouseId,
+      resolvedPartnerId: receipt.partner_id,
+      receivedDate: newDate, cfg, lines, userId,
+    })
+
+    await audit({
+      tenantId, userId, action: 'supplier_receipt.updated',
+      resource: 'supplier_receipts', resourceId: receiptId,
+      payload: { receiptNumber: receipt.receipt_number, linesCount: lines.length },
+      ipAddress, userAgent,
+    })
+
+    const { rows } = await client.query(
+      `SELECT * FROM supplier_receipts WHERE id = $1`, [receiptId]
+    )
+    return rows[0]
   })
 }
 
@@ -397,21 +502,40 @@ async function confirmReceipt({ tenantId, receiptId, userId, ipAddress, userAgen
 }
 
 async function cancelReceipt({ tenantId, receiptId, reason, userId, ipAddress, userAgent }) {
-  const { rows } = await query(
-    `UPDATE supplier_receipts SET status = 'cancelled'
-     WHERE id = $1 AND tenant_id = $2 AND status = 'draft'
-     RETURNING id, receipt_number`,
-    [receiptId, tenantId]
-  )
-  if (rows.length === 0) throw createError(404, 'Recepcion no encontrada o no se puede cancelar.')
+  return withTransaction(async (client) => {
+    const { rows: rRows } = await client.query(
+      `SELECT id, receipt_number, status FROM supplier_receipts
+       WHERE id = $1 AND tenant_id = $2`,
+      [receiptId, tenantId]
+    )
+    if (rRows.length === 0) throw createError(404, 'Recepción no encontrada.')
+    if (rRows[0].status !== 'draft') throw createError(409, 'Solo se puede cancelar una recepción en borrador.')
 
-  await audit({
-    tenantId, userId, action: 'supplier_receipt.cancelled',
-    resource: 'supplier_receipts', resourceId: receiptId,
-    payload: { reason }, ipAddress, userAgent,
+    // No cancelar si algún lote del borrador ya se consumió.
+    await assertReceiptLotsUntouched(client, tenantId, receiptId)
+
+    // Borrar los lotes creados en borrador: no movieron inventario, pero SÍ
+    // cuentan como stock disponible (FEFO/FIFO). Si no se borran, el material
+    // cancelado seguiría apareciendo como existencia.
+    await client.query(
+      `DELETE FROM raw_material_lots WHERE tenant_id = $1 AND supplier_receipt_id = $2`,
+      [tenantId, receiptId]
+    )
+
+    const { rows } = await client.query(
+      `UPDATE supplier_receipts SET status = 'cancelled'
+       WHERE id = $1 AND tenant_id = $2 RETURNING id, receipt_number`,
+      [receiptId, tenantId]
+    )
+
+    await audit({
+      tenantId, userId, action: 'supplier_receipt.cancelled',
+      resource: 'supplier_receipts', resourceId: receiptId,
+      payload: { reason }, ipAddress, userAgent,
+    })
+
+    return rows[0]
   })
-
-  return rows[0]
 }
 
 async function updatePurchaseOrderStatus(client, tenantId, purchaseOrderId) {
@@ -452,6 +576,6 @@ function createError(status, message) {
 
 module.exports = {
   listReceipts, getReceipt,
-  createReceipt, confirmReceipt, cancelReceipt,
+  createReceipt, updateReceipt, confirmReceipt, cancelReceipt,
   uploadEvidence, getEvidenceFile,
 }

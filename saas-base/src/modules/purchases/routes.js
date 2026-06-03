@@ -419,6 +419,25 @@ router.post('/receipts/:id/confirm', checkPermission('purchases', 'create'), asy
 })
 
 /**
+ * PUT /api/purchases/receipts/:id
+ * Edita una recepción EN BORRADOR (reemplaza líneas + encabezado editable).
+ * Body: { warehouseId, receivedDate?, documentType?, documentNumber?, notes?, lines: [...] }
+ */
+router.put('/receipts/:id', checkPermission('purchases', 'update'), async (req, res, next) => {
+  try {
+    const { warehouseId, lines } = req.body
+    if (!warehouseId) return res.status(400).json({ error: 'warehouseId es requerido.' })
+    if (!lines || lines.length === 0) return res.status(400).json({ error: 'Se requiere al menos una línea.' })
+
+    const receipt = await supplierReceiptService.updateReceipt({
+      tenantId: req.tenant.id, receiptId: req.params.id, ...req.body,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(receipt)
+  } catch (err) { next(err) }
+})
+
+/**
  * POST /api/purchases/receipts/:id/cancel
  * Body: { reason? }
  */

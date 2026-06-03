@@ -31,6 +31,7 @@ export const purchasesApi = {
   listReceipts:   (p) => api.get(`${B}/receipts`, { params: p }).then(r => r.data),
   getReceipt:     (id) => api.get(`${B}/receipts/${id}`).then(r => r.data),
   createReceipt:  (body) => api.post(`${B}/receipts`, body).then(r => r.data),
+  updateReceipt:  (id, body) => api.put(`${B}/receipts/${id}`, body).then(r => r.data),
   confirmReceipt: (id) => api.post(`${B}/receipts/${id}/confirm`).then(r => r.data),
   cancelReceipt:  (id, body) => api.post(`${B}/receipts/${id}/cancel`, body).then(r => r.data),
   listPendingInvoiceReceipts: (partnerId) =>
