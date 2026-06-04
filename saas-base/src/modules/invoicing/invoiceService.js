@@ -596,11 +596,17 @@ async function createFromRemission({
     }
 
     if (fullCoverage && remisionAr) {
+      // ⚠️ Actualizar amount_total al total CON IVA de la factura. La remisión NO
+      // lleva IVA (total_mxn = subtotal), así que el AR-remisión nació sin IVA; al
+      // facturar, la cobranza (Cuentas por cobrar / pagos recibidos) debe reflejar
+      // el total fiscal. `amount_paid` se preserva (no se toca) por si el cliente ya
+      // abonó la remisión → el saldo restante sube por el IVA, que es lo correcto.
       await client.query(
         `UPDATE accounts_receivable
-            SET document_type = 'invoice', document_id = $1, document_number = $2
-          WHERE id = $3`,
-        [invoice.id, docNumber, remisionAr.id]
+            SET document_type = 'invoice', document_id = $1, document_number = $2,
+                amount_total = $3
+          WHERE id = $4`,
+        [invoice.id, docNumber, totalMxn, remisionAr.id]
       )
     } else {
       await client.query(
