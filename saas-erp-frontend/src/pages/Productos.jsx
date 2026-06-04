@@ -50,7 +50,11 @@ const schema = z.object({
   sku:             z.string().min(1, 'Requerido').max(50),
   name:            z.string().min(2, 'Mínimo 2 caracteres').max(200),
   saleUnit:        z.string().min(1, 'Requerido'),
-  unitsPerPackage: z.coerce.number().int().positive().optional(),
+  // Mismo patrón que basePrice/gramsPerLinearMeter: acepta vacío/null. Sin esto,
+  // z.coerce.number() convierte ''/null → 0 y .positive() falla → el submit se
+  // bloqueaba en silencio (el campo está oculto en móvil `hidden sm:block`, así que
+  // el error no se veía). El backend usa `unitsPerPackage || 50` → vacío es seguro.
+  unitsPerPackage: z.union([z.coerce.number().int().positive(), z.literal(''), z.null()]).optional(),
   description:     z.string().optional().or(z.literal('')),
   satProductCode:  z.string().min(1, 'Requerido'),
   satUnitCode:     z.string().min(1, 'Requerido'),
