@@ -16,8 +16,31 @@
 const { createQueue, createWorker, enabled, registerWorkerInit } = require('../utils/queue')
 const { sendEmail } = require('../modules/email/emailService')
 const logger = require('../config/logger')
+const config = require('../config')
 
 const QUEUE_NAME = 'emails'
+
+// Dispara una alerta tenant_alerts (+ push a owner/admin) cuando un correo
+// tenant-scoped NO se pudo entregar. Solo si el job/opts trae `tenantId` (los
+// correos cross-tenant o de sistema sin tenant no alertan). Best-effort +
+// lazy-require para no acoplar el arranque (este módulo se carga muy temprano).
+function maybeAlertEmailFailure(data, err) {
+  const tenantId = data && data.tenantId
+  if (!tenantId) return
+  try {
+    const { dispatchAlert } = require('../modules/alerts/alertService')
+    const to = Array.isArray(data.to) ? data.to.join(', ') : data.to
+    dispatchAlert(null, {
+      tenantId,
+      type: 'email_delivery_failed',
+      severity: 'warning',
+      title: 'Correo no entregado',
+      body: `No se pudo enviar "${data.subject || '(sin asunto)'}" a ${to}.`,
+      payload: { to: data.to, subject: data.subject, error: err && err.message },
+      audience: { membershipRoles: ['owner', 'admin'] },
+    }).catch(() => {})
+  } catch { /* best-effort */ }
+}
 
 const emailQueue = createQueue(QUEUE_NAME)
 
@@ -35,8 +58,15 @@ const emailQueue = createQueue(QUEUE_NAME)
 async function enqueueEmail(opts, jobOpts = {}) {
   if (!enabled || !emailQueue) {
     // Fallback sincrónico — el caller ve la misma firma que antes.
-    const info = await sendEmail(opts)
-    return { queued: false, info }
+    try {
+      const info = await sendEmail(opts)
+      return { queued: false, info }
+    } catch (err) {
+      // Aun en modo síncrono, avisamos del fallo (si el correo es tenant-scoped)
+      // y re-lanzamos para preservar el contrato (el caller best-effort decide).
+      maybeAlertEmailFailure(opts, err)
+      throw err
+    }
   }
 
   const job = await emailQueue.add('send', opts, {
@@ -57,9 +87,19 @@ async function enqueueEmail(opts, jobOpts = {}) {
 // Si sendEmail tira, BullMQ marca el job como failed y aplica backoff
 // exponencial hasta agotar QUEUE_MAX_ATTEMPTS.
 function emailWorkerInit() {
-  return createWorker(QUEUE_NAME, async (job) => {
+  const worker = createWorker(QUEUE_NAME, async (job) => {
     return sendEmail(job.data)
   }, { concurrency: 5 })
+
+  // Fallo DEFINITIVO (agotó reintentos) → alerta tenant_alerts + push a admins.
+  // BullMQ emite 'failed' en cada intento; solo alertamos cuando ya no quedan.
+  if (worker) {
+    worker.on('failed', (job, err) => {
+      if ((job?.attemptsMade || 0) < config.queue.maxAttempts) return
+      maybeAlertEmailFailure(job?.data, err)
+    })
+  }
+  return worker
 }
 
 // Auto-registramos el initializer — app.js solo necesita llamar startWorkers().

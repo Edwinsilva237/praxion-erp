@@ -80,6 +80,7 @@ async function sendReceiptByEmail({ tenantId, paymentId, emails, userId, ipAddre
   `
 
   await enqueueEmail({
+    tenantId,
     to:        recipients,
     bcc:       copyEmail || undefined,
     replyTo:   copyEmail || undefined,

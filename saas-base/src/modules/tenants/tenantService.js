@@ -102,6 +102,7 @@ async function provisionTenant({ slug, name, plan = 'free', adminEmail, adminPas
     setImmediate(async () => {
       try {
         await enqueueEmail({
+          tenantId: tenant.id,
           to:      user.email,
           subject: `Bienvenido a ${config.email.fromName}`,
           html:    welcomeEmail({

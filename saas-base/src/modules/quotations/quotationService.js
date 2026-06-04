@@ -427,6 +427,7 @@ async function sendQuotation({ tenantId, quotationId, emails, skipEmail = false,
       })
 
       await sendMail({
+        tenantId,
         to:        recipients,
         bcc:       senderEmail || undefined,
         replyTo:   senderEmail || undefined,

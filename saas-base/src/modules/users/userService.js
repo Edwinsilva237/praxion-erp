@@ -121,6 +121,7 @@ async function inviteUser({ tenantId, tenantName, email, fullName, roleIds = [],
   let emailError = null
   try {
     await enqueueEmail({
+      tenantId,
       to:      user.email,
       subject: `Invitación a ${tenantName}`,
       html:    invitationEmail({
@@ -234,6 +235,7 @@ async function resendInvitation({ userId, tenantId, tenantName, invitedByName, r
   let emailError = null
   try {
     await enqueueEmail({
+      tenantId,
       to:      user.email,
       subject: `Invitación a ${tenantName}`,
       html:    invitationEmail({

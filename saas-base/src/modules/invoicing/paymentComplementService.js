@@ -367,6 +367,7 @@ async function sendComplementByEmail({
   `
 
   await enqueueEmail({
+    tenantId,
     to:        recipients,
     bcc:       copyEmail || undefined,
     replyTo:   copyEmail || undefined,

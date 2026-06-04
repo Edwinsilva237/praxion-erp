@@ -95,6 +95,30 @@ if (process.env.ENABLE_LOT_EXPIRY_CRON === 'true') {
   logger.info('[crons] Lot expiry cron habilitado (ENABLE_LOT_EXPIRY_CRON=true).')
 }
 
+// ── 4b) Stock bajo / punto de reorden ───────────────────────────────────────
+// Una vez al día (14:00 UTC ≈ 8:00 MX): por cada tenant que tenga niveles de
+// reorden/mínimo configurados, busca ítems activos por debajo y dispara alertas
+// tenant_alerts (con push a inventory:read). dispatchAlert dedupea, así un ítem
+// ya alertado no vuelve a sonar hasta que se resuelva → un aviso por ítem, no spam.
+const { checkLowStock } = require('./modules/inventory/inventoryLevelsService')
+
+registerCron('inventory.low-stock-scan', '0 14 * * *', () => withBypass(async () => {
+  const { query } = require('./db')
+  const { rows: tenants } = await query(
+    `SELECT DISTINCT tenant_id FROM inventory_levels
+      WHERE COALESCE(reorder_point, 0) > 0 OR COALESCE(min_stock, 0) > 0`
+  )
+  let total = 0
+  for (const t of tenants) {
+    try {
+      total += await checkLowStock(t.tenant_id)
+    } catch (err) {
+      logger.error(`[inventory.low-stock-scan] tenant ${t.tenant_id}: ${err.message}`)
+    }
+  }
+  if (total > 0) logger.info(`[inventory.low-stock-scan] ${total} alerta(s) nueva(s) de stock bajo en ${tenants.length} tenants.`)
+}))
+
 // ── 4) Notificaciones de mensajes del sistema ────────────────────────────────
 // Cada hora revisamos:
 //   a) Mensajes con notify_email=TRUE que ya empezaron y no se han notificado

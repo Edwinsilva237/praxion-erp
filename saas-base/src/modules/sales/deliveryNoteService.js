@@ -912,6 +912,7 @@ async function markAsSentByEmail({ tenantId, noteId, emails, userId, ipAddress, 
   })
 
   await enqueueEmail({
+    tenantId:  note.tenant_id,
     to:        recipients,
     bcc:       senderEmail || undefined,
     replyTo:   senderEmail || undefined,

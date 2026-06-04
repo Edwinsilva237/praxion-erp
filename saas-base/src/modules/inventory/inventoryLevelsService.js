@@ -2,6 +2,7 @@
 
 const { query } = require('../../db')
 const createError = require('http-errors')
+const { dispatchAlert } = require('../alerts/alertService')
 
 const VALID_TYPES = ['raw_material', 'product']
 
@@ -478,6 +479,70 @@ async function getItemDetail({ tenantId, itemType, itemId, warehouseId }) {
   }
 }
 
+/**
+ * Escaneo de stock bajo (para el cron diario): encuentra ítems ACTIVOS por
+ * debajo de su mínimo o punto de reorden (que el tenant haya configurado) y
+ * dispara una alerta tenant_alerts por cada uno. dispatchAlert dedupea por
+ * (tenant, type, source), así un ítem ya alertado (pendiente/reconocido) no
+ * vuelve a alertar hasta que se resuelva. La alerta manda push a inventory:read.
+ *
+ * @returns {Promise<number>} alertas NUEVAS disparadas (sin contar las dedupeadas).
+ */
+async function checkLowStock(tenantId) {
+  const { rows } = await query(
+    `SELECT il.id, il.item_type, il.item_id, il.warehouse_id,
+            il.min_stock, il.reorder_point,
+            w.name AS warehouse_name,
+            COALESCE(s.quantity, 0)::numeric AS current_stock,
+            COALESCE(s.unit,
+              CASE il.item_type WHEN 'raw_material'::inventory_item_type THEN 'kg' ELSE 'pza' END) AS unit,
+            CASE il.item_type
+              WHEN 'raw_material'::inventory_item_type THEN rm.name
+              WHEN 'product'::inventory_item_type      THEN p.name END AS item_name,
+            CASE
+              WHEN il.min_stock > 0 AND COALESCE(s.quantity, 0) < il.min_stock THEN 'below_min'
+              ELSE 'at_reorder'
+            END AS status
+       FROM inventory_levels il
+       JOIN warehouses w ON w.id = il.warehouse_id
+       LEFT JOIN raw_materials rm ON rm.id = il.item_id AND il.item_type = 'raw_material'::inventory_item_type
+       LEFT JOIN products p       ON p.id  = il.item_id AND il.item_type = 'product'::inventory_item_type
+       LEFT JOIN inventory_stock s ON s.warehouse_id = il.warehouse_id
+         AND s.item_type = il.item_type AND s.item_id = il.item_id AND s.status = 'available'
+      WHERE il.tenant_id = $1
+        AND COALESCE(CASE il.item_type
+              WHEN 'raw_material'::inventory_item_type THEN rm.is_active
+              WHEN 'product'::inventory_item_type      THEN p.is_active END, false) = true
+        AND (
+          (il.min_stock     > 0 AND COALESCE(s.quantity, 0) < il.min_stock)
+          OR (il.reorder_point > 0 AND COALESCE(s.quantity, 0) < il.reorder_point)
+        )`,
+    [tenantId]
+  )
+
+  let dispatched = 0
+  for (const r of rows) {
+    // eslint-disable-next-line no-await-in-loop
+    const res = await dispatchAlert(null, {
+      tenantId,
+      type: 'low_stock',
+      severity: r.status === 'below_min' ? 'critical' : 'warning',
+      title: `Stock bajo: ${r.item_name}`,
+      body: `${r.item_name} en ${r.warehouse_name}: ${parseFloat(r.current_stock)} ${r.unit} — ${r.status === 'below_min' ? 'bajo el mínimo' : 'en punto de reorden'}.`,
+      payload: {
+        itemType: r.item_type, itemId: r.item_id, warehouseId: r.warehouse_id,
+        currentStock: parseFloat(r.current_stock), minStock: r.min_stock,
+        reorderPoint: r.reorder_point, status: r.status,
+      },
+      sourceType: 'inventory_level',
+      sourceId: r.id,
+      audience: { permission: ['inventory', 'read'] },
+    })
+    if (res && !res.deduped) dispatched++
+  }
+  return dispatched
+}
+
 module.exports = {
   getLevelsByItem,
   upsertLevel,
@@ -486,4 +551,5 @@ module.exports = {
   listWithStatus,
   countByStatus,
   getItemDetail,
+  checkLowStock,
 }

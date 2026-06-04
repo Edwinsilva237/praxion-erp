@@ -167,6 +167,16 @@ router.get('/levels/summary', checkPermission('inventory', 'read'), async (req, 
   } catch (err) { next(err) }
 })
 
+// Disparo MANUAL del escaneo de stock bajo (el cron lo corre 1×/día a las 8 MX).
+// Re-evalúa ítems bajo mínimo/reorden y dispara alertas tenant_alerts + push.
+// dispatchAlert dedupea → no duplica alertas ya pendientes.
+router.post('/levels/low-stock-scan', checkPermission('inventory', 'read'), async (req, res, next) => {
+  try {
+    const dispatched = await levelsService.checkLowStock(req.tenant.id)
+    res.json({ dispatched })
+  } catch (err) { next(err) }
+})
+
 router.get('/levels/:itemType/:itemId', checkPermission('inventory', 'read'), async (req, res, next) => {
   try {
     const data = await levelsService.getLevelsByItem({
