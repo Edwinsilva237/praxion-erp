@@ -152,6 +152,27 @@ const config = {
     signedUrlTtl:    parseInt(optional('R2_SIGNED_URL_TTL', '300'), 10),
   },
 
+  // Firebase Cloud Messaging (push notifications a la app móvil). Si las 3
+  // credenciales no están, `pushService` queda en NO-OP silencioso (igual que
+  // SMTP/R2 vacíos): no se manda nada, no se carga firebase-admin, los tests
+  // siguen verde y el arranque nunca se rompe. Se habilita seteando las 3 env.
+  // Las credenciales salen de la Service Account del proyecto Firebase
+  // (Configuración → Cuentas de servicio → Generar nueva clave privada).
+  firebase: (() => {
+    const projectId   = optional('FIREBASE_PROJECT_ID', '')
+    const clientEmail = optional('FIREBASE_CLIENT_EMAIL', '')
+    // Render (y otros) entregan la clave en una sola línea con `\n` literales.
+    // La normalizamos a saltos de línea reales para que admin.credential.cert
+    // la acepte. Si se pega multilínea tal cual, el replace es inofensivo.
+    const privateKey  = optional('FIREBASE_PRIVATE_KEY', '').replace(/\\n/g, '\n')
+    return {
+      projectId,
+      clientEmail,
+      privateKey,
+      enabled: !!(projectId && clientEmail && privateKey),
+    }
+  })(),
+
   isProd: () => config.env === 'production',
   isDev: () => config.env === 'development',
   isTest: () => config.env === 'test',

@@ -33,3 +33,9 @@ process.env.STRIPE_SECRET_KEY  = ''
 process.env.R2_BUCKET          = ''
 process.env.SMTP_USER          = ''
 process.env.SMTP_PASS          = ''
+
+// Firebase/FCM deshabilitado en test: sin las 3 env, pushService queda en no-op
+// (no carga firebase-admin, no manda nada) → el hook de alertas no envía push.
+process.env.FIREBASE_PROJECT_ID   = ''
+process.env.FIREBASE_CLIENT_EMAIL = ''
+process.env.FIREBASE_PRIVATE_KEY  = ''

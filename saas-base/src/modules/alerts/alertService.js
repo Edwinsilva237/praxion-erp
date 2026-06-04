@@ -24,11 +24,33 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
+const pushService = require('../push/pushService')
 
 const VALID_SEVERITIES = ['info', 'warning', 'critical']
 
 function createError(status, message) {
   const err = new Error(message); err.status = status; return err
+}
+
+/**
+ * Side-effect best-effort: manda push de una alerta recién creada a su audiencia.
+ * Se invoca vía setImmediate desde dispatchAlert para correr DESPUÉS del COMMIT
+ * (dispatchAlert puede recibir un client transaccional) y nunca bloquear ni
+ * romper la transacción principal. Nunca lanza (pushService.notify es no-op
+ * si Firebase no está configurado).
+ */
+async function pushForAlert(alert, audience) {
+  await pushService.notify(alert.tenant_id, {
+    audience,
+    title: alert.title,
+    body: alert.body || '',
+    data: {
+      type: alert.type,
+      alertId: alert.id,
+      sourceType: alert.source_type,
+      sourceId: alert.source_id,
+    },
+  })
 }
 
 /**
@@ -43,6 +65,9 @@ async function dispatchAlert(clientOrNull, {
   title, body = null, payload = null,
   sourceType = null, sourceId = null,
   userId = null,
+  // Audiencia del push (ver audienceService). Default: quien puede ver alertas.
+  // Pasar p.ej. { membershipRoles: ['owner','admin'] } para alertas de admin.
+  audience = { permission: ['alerts', 'read'] },
 }) {
   if (!tenantId || !type || !title) {
     throw new Error('dispatchAlert: tenantId, type y title son requeridos.')
@@ -91,6 +116,14 @@ async function dispatchAlert(clientOrNull, {
     console.warn('[alertService] audit failed:', auditErr.message)
   }
   console.log(`[ALERT][${severity}][${type}] ${title} (tenant=${tenantId}, alert=${alert.id})`)
+
+  // Push best-effort fuera de la transacción: setImmediate garantiza que corre
+  // tras el COMMIT (si vino un client transaccional) y desacoplado del flujo.
+  setImmediate(() => {
+    pushForAlert(alert, audience).catch((err) =>
+      console.warn('[alertService] push failed:', err.message)
+    )
+  })
 
   return { ...alert, deduped: false }
 }

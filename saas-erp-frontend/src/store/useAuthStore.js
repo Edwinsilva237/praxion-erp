@@ -26,7 +26,19 @@ const useAuthStore = create(
         setSentryUser({ user, tenant })
       },
 
-      logout: () => {
+      logout: async () => {
+        // Dar de baja el token push ANTES de limpiar los tokens (la llamada al
+        // backend necesita el access token todavía presente). Capeado a 1.5s
+        // para que un logout offline no se cuelgue; si falla, el token se
+        // auto-sana por el UNIQUE(token) en el siguiente login.
+        try {
+          const { unregisterPushToken } = await import('@/hooks/usePushNotifications')
+          await Promise.race([
+            unregisterPushToken(),
+            new Promise((resolve) => setTimeout(resolve, 1500)),
+          ])
+        } catch { /* best-effort */ }
+
         localStorage.removeItem('erp_access_token')
         localStorage.removeItem('erp_refresh_token')
         localStorage.removeItem('erp_tenant_slug')

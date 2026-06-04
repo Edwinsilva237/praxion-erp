@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { tenantsApi } from '@/api/tenants'
 import useAuthStore from '@/store/useAuthStore'
+import { usePushNotifications } from '@/hooks/usePushNotifications'
 import Sidebar from './Sidebar'
 import Topbar from './Topbar'
 import BottomNav from './BottomNav'
@@ -14,6 +15,11 @@ export default function AppShell({ children }) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const location = useLocation()
   const refresh = useAuthStore((s) => s.refresh)
+
+  // Registro de notificaciones push (FCM) — solo en la app nativa, una vez.
+  // AppShell solo se monta autenticado, así que cubre login fresco y sesión
+  // persistida. No-op en web.
+  usePushNotifications()
 
   // Refresca permisos y roles desde /auth/me al cargar la app y al volver
   // del background. Así si un admin cambia los roles del usuario logueado,
