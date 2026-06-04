@@ -6,12 +6,19 @@ const codeFormatService = require('../code-formats/codeFormatService')
 
 // ─── Listado y detalle ───────────────────────────────────────────────────────
 
-async function listPartners({ tenantId, type, isActive, search, includeOccasional = false, page = 1, limit = 50 }) {
+async function listPartners({ tenantId, type, role, isActive, search, includeOccasional = false, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
 
-  if (type)     { params.push(type);    filters.push(`bp.type = $${params.length}`) }
+  // `role` = filtro por ROL inclusivo: un socio 'both' ES cliente Y proveedor, así
+  // que role='customer' también trae los 'both' (y role='supplier' igual). Es lo que
+  // usan los selectores (pedidos, OC, precios, pagos, etc.). `type` sigue siendo
+  // igualdad EXACTA (lo usa la pantalla de Socios para sus pestañas). Los literales
+  // van hardcoded (no interpolación de input) → sin riesgo de inyección.
+  if (role === 'customer')      { filters.push(`bp.type IN ('customer','both')`) }
+  else if (role === 'supplier') { filters.push(`bp.type IN ('supplier','both')`) }
+  else if (type)                { params.push(type); filters.push(`bp.type = $${params.length}`) }
   if (isActive !== undefined) { params.push(isActive); filters.push(`bp.is_active = $${params.length}`) }
   if (search) {
     // Busca por nombre comercial (name), razón social (tax_name) o RFC.

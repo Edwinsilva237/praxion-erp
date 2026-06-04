@@ -70,7 +70,7 @@ export default function EstadoDeCuenta({ direction }) {
 
   const searchPartners = async (q) => {
     const type = isReceivable ? 'customer' : 'supplier'
-    const res = await partnersApi.list({ search: q, type, limit: 20 })
+    const res = await partnersApi.list({ search: q, role: type, limit: 20 })
     return (res.data || res).map(p => ({ id: p.id, label: p.name, sub: p.rfc || '' }))
   }
 

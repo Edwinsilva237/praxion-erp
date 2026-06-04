@@ -54,7 +54,7 @@ function GastoModal({ categories, onClose, onSaved }) {
 
   const { data: suppliersResp } = useQuery({
     queryKey: ['partners', 'suppliers'],
-    queryFn:  () => partnersApi.list({ type: 'supplier' }),
+    queryFn:  () => partnersApi.list({ role: 'supplier' }),
     staleTime: 5 * 60 * 1000,
   })
   const suppliers = suppliersResp?.data || suppliersResp || []

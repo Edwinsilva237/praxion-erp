@@ -28,8 +28,8 @@ export default function PreciosCliente() {
   const [search, setSearch] = useState('')
 
   const searchPartners = useCallback(async (q) => {
-    const res = await partnersApi.list({ search: q, type: 'customer', limit: 20 })
-    return (res.data || res).map(p => ({ id: p.id, label: p.name, sub: [p.rfc, p.tax_name && p.tax_name !== p.name ? p.tax_name : null].filter(Boolean).join(' · ') }))
+    const res = await partnersApi.list({ search: q, role: 'customer', limit: 20 })
+    return (res.data || res).map(p => ({ id: p.id, label: p.name, type: p.type, sub: [p.rfc, p.tax_name && p.tax_name !== p.name ? p.tax_name : null, p.type === 'both' ? 'Ambos' : null].filter(Boolean).join(' · ') }))
   }, [])
 
   const { data: prices = [], isLoading, isFetching } = useQuery({
@@ -137,6 +137,7 @@ export default function PreciosCliente() {
         <div>
           <h1 className="text-xl font-semibold text-ink-primary">Precios por cliente</h1>
           <p className="text-xs text-ink-muted mt-0.5">
+            <strong className="text-ink-secondary">Precio de venta</strong> (lo que le cobras al cliente).
             Consulta y edita los precios especiales que cada cliente tiene negociados.
             <span className="text-status-warning"> Captura el precio por unidad base del producto</span>
             <span className="text-ink-muted"> — al usar una presentación con factor &gt;1 se multiplica automáticamente.</span>
@@ -193,6 +194,13 @@ export default function PreciosCliente() {
             onSearch={searchPartners}
             placeholder="Buscar cliente..." />
         </div>
+        {partner?.type === 'both' && (
+          <div className="w-full text-xs bg-brand-500/10 border border-brand-500/30 rounded-lg px-3 py-2 text-ink-secondary">
+            <span className="font-semibold text-brand-300">Ambos</span> — este socio es cliente y proveedor.
+            Aquí defines su <strong>precio de venta</strong>; su precio de compra se gestiona en{' '}
+            <strong>Compras → Precios por proveedor</strong>.
+          </div>
+        )}
         {partner && (
           <div className="sm:flex-1 sm:min-w-[200px]">
             <label className="label">Buscar producto</label>

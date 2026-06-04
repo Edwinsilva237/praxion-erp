@@ -97,7 +97,7 @@ export function PagoProveedorModal({ onClose, onSaved, initialPartnerId = null, 
   }, [pendingDocs.length, initialApId])
 
   const searchPartners = useCallback(async (q) => {
-    const res = await partnersApi.list({ search: q, type: 'supplier', limit: 20 })
+    const res = await partnersApi.list({ search: q, role: 'supplier', limit: 20 })
     return (res.data || res).map(p => ({ id: p.id, label: p.name, sub: p.rfc || '' }))
   }, [])
 

@@ -30,9 +30,9 @@ router.use(requireActiveTenant)
 
 router.get('/', checkPermission('business_partners', 'read'), async (req, res, next) => {
   try {
-    const { type, isActive, search, includeOccasional, page, limit } = req.query
+    const { type, role, isActive, search, includeOccasional, page, limit } = req.query
     const result = await partnerService.listPartners({
-      tenantId: req.tenant.id, type, search,
+      tenantId: req.tenant.id, type, role, search,
       isActive: isActive !== undefined ? isActive === 'true' : undefined,
       includeOccasional: includeOccasional === 'true',
       page: parseInt(page || 1, 10),

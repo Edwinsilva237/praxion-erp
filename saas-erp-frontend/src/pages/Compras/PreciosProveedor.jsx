@@ -33,8 +33,8 @@ export default function PreciosProveedor() {
   const [msg, setMsg]           = useState(null)
 
   const searchSuppliers = useCallback(async (q) => {
-    const res = await partnersApi.list({ search: q, type: 'supplier', limit: 20 })
-    return (res.data || res).map(p => ({ id: p.id, label: p.name, sub: p.rfc || '' }))
+    const res = await partnersApi.list({ search: q, role: 'supplier', limit: 20 })
+    return (res.data || res).map(p => ({ id: p.id, label: p.name, type: p.type, sub: [p.rfc, p.type === 'both' ? 'Ambos' : null].filter(Boolean).join(' · ') }))
   }, [])
 
   const { data, isLoading } = useQuery({
@@ -58,6 +58,7 @@ export default function PreciosProveedor() {
         <div>
           <h1 className="text-xl font-semibold text-ink-primary">Precios por proveedor</h1>
           <p className="text-xs text-ink-muted mt-0.5">
+            <strong className="text-ink-secondary">Precio de compra</strong> (lo que te cobra el proveedor).
             Precios negociados y aprendidos por proveedor. Se precargan al crear la orden de compra.
             El precio <strong>negociado</strong> gana sobre el aprendido automáticamente de OC/recepciones.
           </p>
@@ -87,6 +88,13 @@ export default function PreciosProveedor() {
           <p className="text-xs text-ink-muted mt-2">
             Elige un proveedor para ver y editar sus precios por artículo.
           </p>
+        )}
+        {supplier?.type === 'both' && (
+          <div className="text-xs bg-brand-500/10 border border-brand-500/30 rounded-lg px-3 py-2 text-ink-secondary mt-2">
+            <span className="font-semibold text-brand-300">Ambos</span> — este socio es proveedor y cliente.
+            Aquí defines su <strong>precio de compra</strong>; su precio de venta se gestiona en{' '}
+            <strong>Comercial → Precios por cliente</strong>.
+          </div>
         )}
       </div>
 

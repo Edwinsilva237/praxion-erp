@@ -277,7 +277,7 @@ function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
   const exchangeRate = parseFloat(customTC || tcData || 0)
 
   const searchPartners = useCallback(async (q) => {
-    const res = await partnersApi.list({ search: q, type: 'supplier', limit: 20 })
+    const res = await partnersApi.list({ search: q, role: 'supplier', limit: 20 })
     return (res.data || res).map(p => ({ id: p.id, label: p.name, sub: p.rfc || '' }))
   }, [])
 
@@ -542,7 +542,7 @@ function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
   const exchangeRate = parseFloat(customTC || tcData || 0)
 
   const searchPartners = useCallback(async (q) => {
-    const res = await partnersApi.list({ search: q, type: 'supplier', limit: 20 })
+    const res = await partnersApi.list({ search: q, role: 'supplier', limit: 20 })
     return (res.data || res).map(p => ({ id: p.id, label: p.name, sub: p.rfc || '' }))
   }, [])
 

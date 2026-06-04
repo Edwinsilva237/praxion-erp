@@ -84,6 +84,24 @@ describe('CRUD básico', () => {
       const res = await client.get('/api/business-partners').expect(200)
       expect(Array.isArray(res.body.data || res.body)).toBe(true)
     })
+
+    test("role=customer/supplier incluye a los socios 'both'; type exacto NO", async () => {
+      const created = await client.post('/api/business-partners', {
+        name: 'Socio Ambos QA', type: 'both', rfc: 'AMB010101AB1',
+        tax_name: 'SOCIO AMBOS QA', is_active: true,
+      })
+      expect(created.status).toBe(201)
+      const id = created.body.id
+
+      const ids = (r) => (r.body.data || r.body).map((p) => p.id)
+      const asCustomer   = await client.get('/api/business-partners?role=customer').expect(200)
+      const asSupplier   = await client.get('/api/business-partners?role=supplier').expect(200)
+      const exactCust    = await client.get('/api/business-partners?type=customer').expect(200)
+
+      expect(ids(asCustomer)).toContain(id)        // 'both' cuenta como cliente
+      expect(ids(asSupplier)).toContain(id)        // y como proveedor
+      expect(ids(exactCust)).not.toContain(id)     // type exacto (Socios) lo excluye
+    })
   })
 
   describe('Tenant actual', () => {
