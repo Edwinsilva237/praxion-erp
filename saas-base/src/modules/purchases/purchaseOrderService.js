@@ -2,6 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
+const pushService = require('../push/pushService')
 const { getRateForDate } = require('../exchange-rates/exchangeRateService')
 const documentSeriesService = require('../document-series/documentSeriesService')
 const supplierPriceService = require('./supplierPriceService')
@@ -156,7 +157,7 @@ async function createOrder({
   currency, lines = [], expectedDate, notes, taxRate,
   userId, ipAddress, userAgent,
 }) {
-  return withTransaction(async (client) => {
+  const order = await withTransaction(async (client) => {
     // Validaciones — partner es opcional (OC sin proveedor definido)
     if (lines.length === 0) throw createError(400, 'Se requiere al menos una línea.')
 
@@ -263,6 +264,16 @@ async function createOrder({
 
     return order
   })
+
+  // Push best-effort (post-commit): avisa a compras de la nueva OC.
+  pushService.notify(tenantId, {
+    audience: { permission: ['purchases', 'read'] },
+    title: 'Nueva orden de compra',
+    body: `OC ${order.order_number}`,
+    data: { type: 'purchase_order.created', orderId: order.id, route: '/compras/ordenes' },
+  }).catch(() => {})
+
+  return order
 }
 
 /**

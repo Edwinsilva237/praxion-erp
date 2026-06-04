@@ -2,6 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
+const pushService = require('../push/pushService')
 
 // ─── Helper: validar members[] contra catálogo y derivar legacy fields ───────
 //
@@ -172,7 +173,7 @@ async function scheduleShift({
     }
   }
 
-  return withTransaction(async (client) => {
+  const shift = await withTransaction(async (client) => {
     const normalized = await normalizeMembers(client, tenantId, {
       members, operatorIdLegacy: operatorId, supervisorIdLegacy: supervisorId,
     })
@@ -232,6 +233,22 @@ async function scheduleShift({
 
     return { ...created, members: memberRows }
   })
+
+  // Push best-effort (post-commit): avisa a los miembros asignados (menos quien
+  // programó el turno) que tienen un turno nuevo.
+  const recipientIds = (shift.members || [])
+    .map((m) => m.user_id)
+    .filter((id) => id && id !== userId)
+  if (recipientIds.length) {
+    pushService.notify(tenantId, {
+      audience: { userIds: recipientIds },
+      title: 'Tienes un turno asignado',
+      body: `Turno ${shift.shift_number} · ${shift.scheduled_date}`,
+      data: { type: 'shift.scheduled', shiftId: shift.id, route: '/produccion/mis-turnos' },
+    }).catch(() => {})
+  }
+
+  return shift
 }
 
 // ─── Horas programadas del operador (día y semana) ───────────────────────────

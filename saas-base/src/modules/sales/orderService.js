@@ -2,6 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
+const pushService = require('../push/pushService')
 const { getRateForDate } = require('../exchange-rates/exchangeRateService')
 const documentSeriesService = require('../document-series/documentSeriesService')
 
@@ -247,7 +248,7 @@ async function createOrder({
   force = false,
   userId, ipAddress, userAgent,
 }) {
-  return withTransaction(async (client) => {
+  const order = await withTransaction(async (client) => {
     // Obtener preferencias del cliente
     const { rows: partnerRows } = await client.query(
       `SELECT requires_po, requires_quotation, billing_notes,
@@ -396,6 +397,16 @@ async function createOrder({
 
     return order
   })
+
+  // Push best-effort (post-commit, fuera de la transacción): avisa a ventas.
+  pushService.notify(tenantId, {
+    audience: { permission: ['sales', 'read'] },
+    title: 'Nuevo pedido',
+    body: `Pedido ${order.order_number}`,
+    data: { type: 'sales_order.created', orderId: order.id, route: `/ventas/${order.id}` },
+  }).catch(() => {})
+
+  return order
 }
 
 /**

@@ -5,6 +5,7 @@ const { query, withTransaction } = require('../../db')
 const { audit }          = require('../../utils/audit')
 const storage            = require('../../utils/storage')
 const { recordMovement } = require('../inventory/inventoryService')
+const pushService = require('../push/pushService')
 const { generate: generateLotNumber } = require('../production/lotNumberGenerator')
 const documentSeriesService = require('../document-series/documentSeriesService')
 const supplierPriceService = require('./supplierPriceService')
@@ -245,7 +246,7 @@ async function createReceipt({
   warehouseId, receivedDate, documentType, documentNumber,
   lines = [], notes, userId, ipAddress, userAgent,
 }) {
-  return withTransaction(async (client) => {
+  const receipt = await withTransaction(async (client) => {
     if (!warehouseId) throw createError(400, 'warehouseId es requerido.')
     if (lines.length === 0) throw createError(400, 'Se requiere al menos una linea.')
 
@@ -306,6 +307,16 @@ async function createReceipt({
 
     return receipt
   })
+
+  // Push best-effort (post-commit): avisa a compras de la mercancía recibida.
+  pushService.notify(tenantId, {
+    audience: { permission: ['purchases', 'read'] },
+    title: 'Mercancía recibida',
+    body: `Recepción ${receipt.receipt_number}`,
+    data: { type: 'supplier_receipt.created', receiptId: receipt.id, route: '/compras/recepciones' },
+  }).catch(() => {})
+
+  return receipt
 }
 
 // Edita una recepción EN BORRADOR: reemplaza por completo sus líneas (y lotes)
