@@ -310,3 +310,28 @@ O probar un evento real (que OTRA cuenta confirme un pedido / timbre factura —
 - **Deja una nota al final de este doc** (qué quedó, token FCM confirmado, cualquier gotcha) y
   haz `git commit + push` de ESTE doc, para que la máquina Windows haga `git pull` y se entere
   (la memoria no viaja entre máquinas; este doc sí).
+
+---
+
+## ✅ HECHO 2026-06-04 — Push iOS LIVE y probado en iPhone físico
+
+Ejecutado desde la Mac. Push en iOS **funcionando de punta a punta**. Qué quedó:
+
+- **Podfile** (`ios/App/Podfile`): agregada `pod 'FirebaseMessaging'` dentro de `target 'App' do`.
+  Quedó instalado **FirebaseMessaging 12.14.0** (vía `npm run sync:ios` → `pod install`).
+- **AppDelegate.swift**: `import FirebaseCore` + `import FirebaseMessaging`; `FirebaseApp.configure()`
+  en `didFinishLaunchingWithOptions`; y se **agregaron** (no existían) los métodos
+  `didRegisterForRemoteNotificationsWithDeviceToken` (puente APNs→FCM que publica el **token FCM String**
+  en `.capacitorDidRegisterForRemoteNotifications`) y `didFailToRegisterForRemoteNotificationsWithError`.
+- **Capacidades en Xcode** (target App, Team de paga `Z69ZT5UW4M`, firma automática):
+  **Push Notifications** → generó `App/App.entitlements` con `aps-environment=development`;
+  **Background Modes → Remote notifications** → `UIBackgroundModes=[remote-notification]` en Info.plist.
+- **Verificación** (scripts de `saas-base`, contra prod `praxion-api.onrender.com`, tenant `gh-insumos-prod`):
+  - `poll-push-status.js` → `{ firebaseEnabled: true, deviceCount: 2, audienceAllCount: 10 }`.
+  - `send-test-push.js` → **`{ sent: 2, skipped: false, pruned: 0 }`** y la notificación **llegó al iPhone**.
+  - **`pruned: 0`** confirma que el token del iPhone es **FCM válido** (si fuera APNs crudo, Firebase lo
+    habría rechazado y pruned sería ≥1) → el puente del AppDelegate quedó bien.
+
+**Gotchas confirmados en la práctica:** solo device físico recibe push; mejor probar con la app en
+segundo plano. Nada que cambiar en el backend (ya estaba LIVE). `ios/` sigue gitignored, así que el
+único cambio versionado es ESTE doc.
