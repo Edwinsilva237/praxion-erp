@@ -975,8 +975,35 @@ async function markAsSentByEmail({ tenantId, noteId, emails, userId, ipAddress, 
 
 /**
  * Genera el registro CXC cuando la entrega es completa.
+ *
+ * ⚠️ Facturación anticipada (factura DIRECTA → entregas parciales): si las líneas
+ * de esta remisión pertenecen a un pedido que YA tiene una factura DIRECTA activa,
+ * la cuenta por cobrar ya existe por esa factura. Crear aquí otra CXC tipo
+ * 'remission' DUPLICARÍA el saldo del cliente. En ese caso la remisión es solo el
+ * comprobante de entrega → NO se genera CXC.
+ *
+ * "Factura directa" = `invoices.delivery_note_id IS NULL` **y** NO está en
+ * `invoice_remissions` (eso la distingue de una factura CONSOLIDADA, que también
+ * tiene delivery_note_id NULL pero sí está ligada a sus remisiones). El timing lo
+ * confirma: en el flujo normal (remisión → factura) este generateCXC corre en la
+ * ENTREGA, antes de que exista factura → el guard no encuentra nada y sí crea la CXC.
  */
 async function generateCXC(client, { tenantId, note, userId }) {
+  const { rows: directInvoice } = await client.query(
+    `SELECT 1
+       FROM delivery_note_lines dnl
+       JOIN invoice_lines il ON il.sales_order_line_id = dnl.sales_order_line_id
+       JOIN invoices inv     ON inv.id = il.invoice_id
+      WHERE dnl.delivery_note_id = $1
+        AND inv.tenant_id = $2
+        AND inv.status <> 'cancelled'
+        AND inv.delivery_note_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM invoice_remissions ir WHERE ir.invoice_id = inv.id)
+      LIMIT 1`,
+    [note.id, tenantId]
+  )
+  if (directInvoice.length) return  // pedido ya facturado directo → la CXC ya existe
+
   await client.query(
     `INSERT INTO accounts_receivable
        (tenant_id, partner_id, document_type, document_id, document_number,
@@ -1248,4 +1275,5 @@ module.exports = {
   createDeliveryNote, listDeliveryNotes, getDeliveryNote,
   recordDelivery, markAsSentByEmail, setNoInvoice, cancelDelivery, deleteDelivery,
   adjustDeliveryNotePrices,
+  generateCXC,  // exportado para test del guard de facturación anticipada
 }
