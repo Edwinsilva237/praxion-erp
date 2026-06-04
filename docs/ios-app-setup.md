@@ -190,3 +190,123 @@ npm run open:ios            # abrir Xcode y Run
 (El `rm -rf ios/App/build` fue necesario porque CocoaPods corre `xcodebuild clean` y
 fallaba al no poder borrar un directorio `build/` previo "no creado por el build
 system". Es directorio de salida intermedia, seguro de borrar.)
+
+---
+
+# Notificaciones push en iOS (FCM/APNs) — HANDOFF 2026-06-04
+
+> **Para el Claude de la Mac:** ejecuta esta sección paso a paso. El usuario YA hizo
+> toda la parte de consolas (Apple + Firebase) guiado desde Windows; aquí queda solo
+> la parte NATIVA (Podfile + AppDelegate + capacidades) + compilar y probar.
+
+## Qué YA está hecho (NO repetir)
+- **Backend FCM LIVE** (firebase-admin). 9 eventos push dirigidos por rol ya en prod
+  (commit `de132db`): pedido confirmado, remisión, entrega, factura timbrada, orden
+  de producción creada/completada, OC, recepción validada, turno. El que ejecuta la
+  acción NO se autonotifica (`excludeUserIds`).
+- **Firebase** proyecto `praxion-8312c` (el mismo de Android).
+- **App iOS registrada en Firebase** (bundle `com.praxionops.erp`). El usuario descargó
+  `GoogleService-Info.plist` y lo **arrastró al grupo "App" en Xcode** con el target App
+  marcado (verifícalo en el paso 1).
+- **Llave APNs Auth Key (.p8)** creada en Apple Developer (Sandbox & Production,
+  unrestricted) y **subida a Firebase → Cloud Messaging** con su Key ID + Team ID.
+  **Apple Developer de paga ACTIVA.**
+- **Código de push ya en el repo** (pull a `de132db` + `npm install` hechos en la Mac):
+  `@capacitor/push-notifications` en package.json, hook `src/hooks/usePushNotifications.js`
+  montado en `AppShell` (pide permiso + registra token + deep-link a `data.route`),
+  `src/api/push.js`, baja de token en `useAuthStore.logout`. Migración `191_device_tokens`
+  ya aplicada en prod (tabla `device_tokens` + endpoints `/api/push/register|unregister|broadcast`).
+
+## Por qué iOS necesita MÁS que Android (clave)
+El backend envía por **FCM**. En Android, `@capacitor/push-notifications` + `google-services.json`
+entrega un **token FCM** directo. En iOS, ese mismo plugin entrega el token de **APNs**, que
+FCM/firebase-admin **NO acepta**. Hay que agregar el **SDK de Firebase iOS** (`FirebaseMessaging`)
+y **puentear en AppDelegate**: APNs token → Firebase → **token FCM**, y publicar ESE token FCM en
+el evento `registration` del plugin (que es lo que el hook manda a `/api/push/register`).
+
+## Pasos a ejecutar
+
+### 1. Verificar el plist
+Confirma que `ios/App/App/GoogleService-Info.plist` existe **y está en el target "App"**
+(Xcode → target App → Build Phases → Copy Bundle Resources debe listarlo; o en el navegador,
+selecciónalo y en el inspector derecho "Target Membership" → App ✅). Si solo se copió a la
+carpeta pero no al target, agrégalo al target.
+
+### 2. Podfile — agregar Firebase
+En `ios/App/Podfile`, **dentro** del bloque `target 'App' do` (después de `capacitor_pods`),
+agrega una línea:
+```ruby
+  pod 'FirebaseMessaging'
+```
+NO toques el bloque `def capacitor_pods ... end` (eso lo regenera `cap sync`).
+
+### 3. AppDelegate.swift — inicializar Firebase y puentear APNs→FCM
+Edita `ios/App/App/AppDelegate.swift`:
+- Imports (arriba, junto a `import Capacitor`):
+  ```swift
+  import FirebaseCore
+  import FirebaseMessaging
+  ```
+- En `application(_:didFinishLaunchingWithOptions:)`, antes de `return true`:
+  ```swift
+  FirebaseApp.configure()
+  ```
+- **Reemplaza el cuerpo** del método `didRegisterForRemoteNotificationsWithDeviceToken` (hoy
+  publica el `deviceToken` APNs crudo) por el puente a FCM — debe publicar el **token FCM (String)**:
+  ```swift
+  func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+      Messaging.messaging().apnsToken = deviceToken
+      Messaging.messaging().token { token, error in
+          if let error = error {
+              NotificationCenter.default.post(name: .capacitorDidFailToRegisterForRemoteNotifications, object: error)
+          } else if let fcmToken = token {
+              NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: fcmToken)
+          }
+      }
+  }
+  ```
+- Deja `didFailToRegisterForRemoteNotificationsWithError` como está (ya publica el error).
+  Si AppDelegate no tuviera estos métodos, agrégalos. **Lo crítico:** el `object:` del post
+  `.capacitorDidRegisterForRemoteNotifications` debe ser el **token FCM (String)**, NO el `Data` de APNs.
+
+### 4. Pods + sync
+```bash
+cd saas-erp-frontend
+rm -rf ios/App/build        # evita el fallo de xcodebuild clean (ver gotcha de esta misma guía)
+npm run sync:ios            # vite build + cap sync ios → agrega CapacitorPushNotifications + pod install (baja FirebaseMessaging)
+```
+Si `pod install` no jala FirebaseMessaging: `cd ios/App && pod install`. (Primera vez tarda: baja Firebase.)
+
+### 5. Capacidades en Xcode
+`npm run open:ios`. Target **App** → **Signing & Capabilities**:
+- **Team** = la cuenta Apple Developer de **PAGA** (no el "Personal Team") — el push lo exige.
+- **+ Capability** → **Push Notifications**.
+- **+ Capability** → **Background Modes** → marca **Remote notifications**.
+Con firma automática + team de paga, Xcode habilita el App ID para push solo.
+
+### 6. Compilar en iPhone FÍSICO (el push NO funciona en Simulador)
+Run en el dispositivo → al abrir, la app pide permiso de notificaciones (aceptar) → inicia
+sesión → el **token FCM** se registra (debe aparecer una fila nueva en la tabla `device_tokens`
+para ese usuario en el tenant que abrió la app).
+
+### 7. Primera luz
+Como **owner/admin**: `POST /api/push/broadcast { "title": "Prueba iOS" }` (con un Bearer token
+válido + header `X-Tenant-Slug` del tenant) → el iPhone recibe (mejor con la app en segundo plano).
+Respuesta `{ sent: 1 }` = entregó; `{ skipped: true }` = no había token o Firebase off.
+O probar un evento real (que OTRA cuenta confirme un pedido / timbre factura — el actor no se autonotifica).
+
+## Gotchas iOS push
+- **Token FCM vs APNs:** si el token en `device_tokens` es un hex largo SIN dos-puntos, es APNs
+  (mal) → revisa el puente del AppDelegate. El FCM es una cadena larga con `:` y `_`/`-`.
+- **Solo device físico** (Simulador no recibe push real).
+- **Background Modes → Remote notifications** es obligatorio para recibir con la app cerrada.
+- **Ícono:** en iOS la notificación usa el ícono de la app (NO la silueta blanca tipo Android) →
+  no hay que generar nada extra.
+- **Deployment target:** FirebaseMessaging requiere iOS 13+ (el Podfile de Capacitor 8 ya pone 14.0).
+
+## Al terminar
+- `ios/` está **gitignored** (no se sube, igual que `android/`); el `GoogleService-Info.plist`
+  tampoco se commitea (config local). Si NO se tocó nada fuera de `ios/`, no hay nada que pushear.
+- **Deja una nota al final de este doc** (qué quedó, token FCM confirmado, cualquier gotcha) y
+  haz `git commit + push` de ESTE doc, para que la máquina Windows haga `git pull` y se entere
+  (la memoria no viaja entre máquinas; este doc sí).
