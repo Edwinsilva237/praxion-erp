@@ -89,12 +89,15 @@ async function registerInvoice({
     let dueDate = issueDate
     let resolvedCreditDays = creditDays
     if (supplierId && creditDays === 0) {
+      // El crédito de COMPRA es `supplier_credit_days` (los días que el PROVEEDOR te
+      // concede), NO `credit_days` (que es el crédito que TÚ le das al socio como
+      // CLIENTE). Usar el de cliente daba vencimientos y "contado" equivocados.
       const { rows: partner } = await client.query(
-        `SELECT credit_days FROM business_partners WHERE id = $1 AND tenant_id = $2`,
+        `SELECT supplier_credit_days FROM business_partners WHERE id = $1 AND tenant_id = $2`,
         [supplierId, tenantId]
       )
-      if (partner.length > 0 && partner[0].credit_days > 0) {
-        resolvedCreditDays = partner[0].credit_days
+      if (partner.length > 0 && partner[0].supplier_credit_days > 0) {
+        resolvedCreditDays = partner[0].supplier_credit_days
       }
     }
     if (resolvedCreditDays > 0) {
@@ -198,16 +201,17 @@ async function registerInvoice({
       apId = apRows[0]?.id || null
 
       // Para que el frontend pueda sugerir "marcar como pagada de contado".
-      // Criterio: inferimos "contado" cuando credit_days = 0 (el UI del
-      // catálogo solo expone días de crédito; ese es el único input real
-      // del usuario). credit_type queda como derivado.
+      // Criterio: "contado" cuando el PROVEEDOR no te da crédito → supplier_credit_days
+      // = 0/NULL. (Antes leía credit_days = el crédito que TÚ le das al socio como
+      // CLIENTE; campo equivocado para el contexto de COMPRA → no detectaba contado en
+      // socios que también son clientes con crédito.)
       const { rows: bpRows } = await client.query(
-        `SELECT credit_type, credit_days FROM business_partners WHERE id = $1 AND tenant_id = $2`,
+        `SELECT supplier_credit_days FROM business_partners WHERE id = $1 AND tenant_id = $2`,
         [supplierId, tenantId]
       )
       const bp = bpRows[0]
       partnerCreditType = bp
-        ? ((bp.credit_days == null || parseInt(bp.credit_days, 10) === 0) ? 'cash' : 'credit')
+        ? ((bp.supplier_credit_days == null || parseInt(bp.supplier_credit_days, 10) === 0) ? 'cash' : 'credit')
         : null
     }
 
