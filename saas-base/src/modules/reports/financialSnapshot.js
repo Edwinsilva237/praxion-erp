@@ -83,38 +83,51 @@ async function getSalesSnapshot(tenantId, from, to) {
 }
 
 async function getIvaSnapshot(tenantId, from, to) {
-  // IVA TRASLADADO: cobrado en facturas timbradas del mes (vigentes).
+  // AL COBRO (Ley del IVA art. 1-B): el IVA se causa cuando se COBRA / se PAGA,
+  // NO al facturar. Por eso el "IVA cobrado/pagado del mes" se calcula sobre los
+  // PAGOS del mes, prorrateando la porción de IVA de cada pago según la proporción
+  // IVA/total de su factura. (Antes se sumaba el IVA de las facturas EMITIDAS, lo
+  // que inflaba el "cobrado" cuando había facturas timbradas aún no pagadas.)
+  //
+  // Bonus: las notas de crédito y los descuentos quedan considerados solos —
+  // simplemente se cobra menos, y el prorrateo del pago real lo refleja.
+
+  // IVA COBRADO: porción de IVA de los cobros recibidos este mes, sobre facturas de
+  // ingreso timbradas. Cada cobro (ar_payments) apunta a UN AR vía ar_id.
   const { rows: trRows } = await query(`
-    SELECT
-      COALESCE(SUM(tax_transferred), 0)::numeric AS iva_transferred,
-      COALESCE(SUM(tax_withheld),    0)::numeric AS iva_withheld
-    FROM invoices
-    WHERE tenant_id = $1
-      AND cfdi_type = 'I'
-      AND status = 'stamped'
-      AND stamp_date >= $2 AND stamp_date < $3
+    SELECT COALESCE(SUM(ap.amount * (inv.tax_transferred / NULLIF(inv.total, 0))), 0)::numeric AS iva_cobrado
+      FROM ar_payments ap
+      JOIN accounts_receivable ar ON ar.id = ap.ar_id
+      JOIN invoices inv           ON inv.id = ar.document_id
+     WHERE ap.tenant_id = $1
+       AND ar.document_type = 'invoice'
+       AND inv.cfdi_type = 'I'
+       AND inv.status = 'stamped'
+       AND ap.payment_date >= $2 AND ap.payment_date < $3
   `, [tenantId, from, to])
 
-  // IVA ACREDITABLE: pagado en CFDI recibidos del mes (con UUID SAT real,
-  // excluye registros internos sin factura fiscal).
+  // IVA PAGADO: porción de IVA de los pagos a proveedor aplicados este mes, sobre
+  // CFDI recibidos (con UUID SAT). Un pago puede aplicarse a varias facturas
+  // (supplier_payment_applications.amount_applied por factura).
   const { rows: crRows } = await query(`
-    SELECT COALESCE(SUM(tax), 0)::numeric AS iva_creditable
-    FROM supplier_invoices
-    WHERE tenant_id = $1
-      AND uuid_sat IS NOT NULL
-      AND status != 'cancelled'
-      AND invoice_date >= $2 AND invoice_date < $3
+    SELECT COALESCE(SUM(spa.amount_applied * (si.tax / NULLIF(si.total, 0))), 0)::numeric AS iva_pagado
+      FROM supplier_payment_applications spa
+      JOIN supplier_payments sp ON sp.id = spa.supplier_payment_id
+      JOIN supplier_invoices  si ON si.id = spa.supplier_invoice_id
+     WHERE sp.tenant_id = $1
+       AND si.uuid_sat IS NOT NULL
+       AND si.status <> 'cancelled'
+       AND sp.payment_date >= $2 AND sp.payment_date < $3
   `, [tenantId, from, to])
 
-  const transferred = parseFloat(trRows[0].iva_transferred) || 0
-  const withheld    = parseFloat(trRows[0].iva_withheld)    || 0
-  const creditable  = parseFloat(crRows[0].iva_creditable)  || 0
-  const net         = transferred - creditable - withheld
+  const transferred = parseFloat(trRows[0].iva_cobrado) || 0
+  const creditable  = parseFloat(crRows[0].iva_pagado)  || 0
+  const net         = transferred - creditable
 
   return {
     transferred,
     creditable,
-    withheld,
+    withheld: 0,  // en base al cobro la retención se realiza al cobrar; no se modela aquí
     net,
     // Bandera útil para el frontend
     direction: net > 0 ? 'to_pay' : net < 0 ? 'in_favor' : 'balanced',
