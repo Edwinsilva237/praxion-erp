@@ -5,7 +5,7 @@ const { query, withTransaction } = require('../../db')
 const { audit }          = require('../../utils/audit')
 const storage            = require('../../utils/storage')
 const { recordMovement } = require('../inventory/inventoryService')
-const pushService = require('../push/pushService')
+const pushEvents = require('../push/pushEvents')
 const { generate: generateLotNumber } = require('../production/lotNumberGenerator')
 const documentSeriesService = require('../document-series/documentSeriesService')
 const supplierPriceService = require('./supplierPriceService')
@@ -308,14 +308,6 @@ async function createReceipt({
     return receipt
   })
 
-  // Push best-effort (post-commit): avisa a compras de la mercancía recibida.
-  pushService.notify(tenantId, {
-    audience: { permission: ['purchases', 'read'] },
-    title: 'Mercancía recibida',
-    body: `Recepción ${receipt.receipt_number}`,
-    data: { type: 'supplier_receipt.created', receiptId: receipt.id, route: '/compras/recepciones' },
-  }).catch(() => {})
-
   return receipt
 }
 
@@ -435,7 +427,7 @@ async function getEvidenceFile({ tenantId, receiptId }) {
 }
 
 async function confirmReceipt({ tenantId, receiptId, userId, ipAddress, userAgent }) {
-  return withTransaction(async (client) => {
+  const result = await withTransaction(async (client) => {
     const { rows: receiptRows } = await client.query(
       `SELECT * FROM supplier_receipts WHERE id = $1 AND tenant_id = $2 AND status = 'draft'`,
       [receiptId, tenantId]
@@ -517,6 +509,11 @@ async function confirmReceipt({ tenantId, receiptId, userId, ipAddress, userAgen
 
     return rows[0]
   })
+
+  // Push best-effort post-commit: recepción validada → compras + dueño de la OC.
+  pushEvents.receiptConfirmed(tenantId, { receiptId, actorUserId: userId })
+
+  return result
 }
 
 async function cancelReceipt({ tenantId, receiptId, reason, userId, ipAddress, userAgent }) {

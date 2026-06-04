@@ -2,7 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
-const pushService = require('../push/pushService')
+const pushEvents = require('../push/pushEvents')
 
 // ─── Helper: validar members[] contra catálogo y derivar legacy fields ───────
 //
@@ -239,14 +239,12 @@ async function scheduleShift({
   const recipientIds = (shift.members || [])
     .map((m) => m.user_id)
     .filter((id) => id && id !== userId)
-  if (recipientIds.length) {
-    pushService.notify(tenantId, {
-      audience: { userIds: recipientIds },
-      title: 'Tienes un turno asignado',
-      body: `Turno ${shift.shift_number} · ${shift.scheduled_date}`,
-      data: { type: 'shift.scheduled', shiftId: shift.id, route: '/produccion/mis-turnos' },
-    }).catch(() => {})
-  }
+  pushEvents.shiftAssigned(tenantId, {
+    userIds: recipientIds,
+    shiftNumber: shift.shift_number,
+    scheduledDate: shift.scheduled_date,
+    shiftId: shift.id,
+  })
 
   return shift
 }

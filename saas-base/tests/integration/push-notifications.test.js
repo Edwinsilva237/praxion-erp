@@ -14,6 +14,7 @@ const { createTenant, loginAs, authedClient, cleanupTestTenants } = require('../
 const deviceTokens   = require('../../src/modules/push/deviceTokenService')
 const audienceService = require('../../src/modules/push/audienceService')
 const pushService     = require('../../src/modules/push/pushService')
+const pushEvents      = require('../../src/modules/push/pushEvents')
 
 describe('Push notifications', () => {
   let A, B, adminClient
@@ -92,6 +93,58 @@ describe('Push notifications', () => {
     test('{ userIds } passthrough con dedupe', async () => {
       const ids = await audienceService.resolveAudience(A.tenant.id, { userIds: [A.user.id, A.user.id] })
       expect(ids).toEqual([A.user.id])
+    })
+  })
+
+  describe('audienceService.resolveRecipients (unión + exclusión)', () => {
+    test('une varias audiencias y dedupea al admin', async () => {
+      const ids = await audienceService.resolveRecipients(A.tenant.id, {
+        audiences: [{ permission: ['sales', 'read'] }, { permission: ['alerts', 'read'] }],
+      })
+      expect(ids).toContain(A.user.id)
+      // El admin tiene ambos permisos → debe aparecer UNA sola vez (dedup de la unión).
+      expect(ids.filter((id) => id === A.user.id)).toHaveLength(1)
+    })
+
+    test('excludeUserIds descuenta al actor (no se autonotifica)', async () => {
+      const ids = await audienceService.resolveRecipients(A.tenant.id, {
+        audience: 'all',
+        excludeUserIds: [A.user.id],
+      })
+      expect(ids).not.toContain(A.user.id)
+    })
+
+    test('audience singular sin exclusión incluye al admin', async () => {
+      const ids = await audienceService.resolveRecipients(A.tenant.id, {
+        audience: { permission: ['sales', 'read'] },
+      })
+      expect(ids).toContain(A.user.id)
+    })
+  })
+
+  describe('pushEvents (no-op sin Firebase, nunca lanza)', () => {
+    test('los helpers de evento resuelven sin lanzar con ids inexistentes', async () => {
+      // Sin Firebase + entidad inexistente → resuelven a undefined sin tirar.
+      await expect(
+        pushEvents.salesOrderConfirmed(A.tenant.id, { orderId: A.user.id, actorUserId: A.user.id })
+      ).resolves.toBeUndefined()
+      await expect(
+        pushEvents.purchaseOrderCreated(A.tenant.id, { orderId: A.user.id, actorUserId: A.user.id })
+      ).resolves.toBeUndefined()
+      await expect(
+        pushEvents.shiftAssigned(A.tenant.id, { userIds: [], shiftId: A.user.id })
+      ).resolves.toBeUndefined()
+    })
+
+    test('money() formatea MXN y tolera null', () => {
+      expect(pushEvents.money(4550)).toBe('$4,550.00')
+      expect(pushEvents.money(null)).toBeNull()
+      expect(pushEvents.money('no-num')).toBeNull()
+    })
+
+    test('body() une solo las partes no vacías con " · "', () => {
+      expect(pushEvents.body('Cliente', null, '$100', '')).toBe('Cliente · $100')
+      expect(pushEvents.body(null, undefined, '')).toBe('')
     })
   })
 

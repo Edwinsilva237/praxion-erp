@@ -19,7 +19,7 @@
 const config = require('../../config')
 const logger = require('../../config/logger')
 const { query } = require('../../db')
-const { resolveAudience } = require('./audienceService')
+const { resolveRecipients } = require('./audienceService')
 
 // Códigos de error de FCM que significan "este token ya no sirve" → podar.
 const DEAD_TOKEN_CODES = new Set([
@@ -141,13 +141,19 @@ async function sendToUsers(tenantId, userIds, { title, body, data = {} } = {}) {
 }
 
 /**
- * Resuelve una audiencia (ver audienceService) y manda el push. No lanza.
+ * Resuelve una o varias audiencias (ver audienceService), las une, descuenta a
+ * `excludeUserIds` (típicamente el usuario que ejecutó la acción — no debe
+ * recibir el push de su propio acto) y manda el push. No lanza.
+ *
+ * Acepta `audience` (una spec) o `audiences` (array de specs que se UNEN). Esto
+ * permite dirigir un evento a "todos los de facturación + el dueño del pedido"
+ * sin que pushService conozca la lógica de cada módulo.
  */
-async function notify(tenantId, { audience, title, body, data = {} } = {}) {
+async function notify(tenantId, { audience, audiences, excludeUserIds = [], title, body, data = {} } = {}) {
   const m = getMessaging()
   if (!m) return { sent: 0, skipped: true }
   try {
-    const userIds = await resolveAudience(tenantId, audience)
+    const userIds = await resolveRecipients(tenantId, { audience, audiences, excludeUserIds })
     if (!userIds.length) return { sent: 0, skipped: true }
     return await sendToUsers(tenantId, userIds, { title, body, data })
   } catch (err) {

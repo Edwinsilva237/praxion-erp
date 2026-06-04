@@ -2,7 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
-const pushService = require('../push/pushService')
+const pushEvents = require('../push/pushEvents')
 const { getRateForDate } = require('../exchange-rates/exchangeRateService')
 const documentSeriesService = require('../document-series/documentSeriesService')
 
@@ -398,14 +398,6 @@ async function createOrder({
     return order
   })
 
-  // Push best-effort (post-commit, fuera de la transacción): avisa a ventas.
-  pushService.notify(tenantId, {
-    audience: { permission: ['sales', 'read'] },
-    title: 'Nuevo pedido',
-    body: `Pedido ${order.order_number}`,
-    data: { type: 'sales_order.created', orderId: order.id, route: `/ventas/${order.id}` },
-  }).catch(() => {})
-
   return order
 }
 
@@ -413,7 +405,7 @@ async function createOrder({
  * Confirma un pedido — cambia estatus a confirmed.
  */
 async function confirmOrder({ tenantId, orderId, userId, ipAddress, userAgent }) {
-  return withTransaction(async (client) => {
+  const result = await withTransaction(async (client) => {
     // Verificar que el pedido tenga al menos una línea antes de confirmar
     const { rows: lineCheck } = await client.query(
       `SELECT COUNT(*)::int AS line_count FROM sales_order_lines WHERE sales_order_id = $1`,
@@ -446,6 +438,11 @@ async function confirmOrder({ tenantId, orderId, userId, ipAddress, userAgent })
 
     return rows[0]
   })
+
+  // Push best-effort post-commit: pedido confirmado → ventas (excl. quien confirmó).
+  pushEvents.salesOrderConfirmed(tenantId, { orderId, actorUserId: userId })
+
+  return result
 }
 
 /**

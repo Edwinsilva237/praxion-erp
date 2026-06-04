@@ -2,7 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
-const pushService = require('../push/pushService')
+const pushEvents = require('../push/pushEvents')
 const { getRateForDate } = require('../exchange-rates/exchangeRateService')
 const documentSeriesService = require('../document-series/documentSeriesService')
 const supplierPriceService = require('./supplierPriceService')
@@ -265,13 +265,8 @@ async function createOrder({
     return order
   })
 
-  // Push best-effort (post-commit): avisa a compras de la nueva OC.
-  pushService.notify(tenantId, {
-    audience: { permission: ['purchases', 'read'] },
-    title: 'Nueva orden de compra',
-    body: `OC ${order.order_number}`,
-    data: { type: 'purchase_order.created', orderId: order.id, route: '/compras/ordenes' },
-  }).catch(() => {})
+  // Push best-effort (post-commit): avisa a compras de la nueva OC (excl. quien la creó).
+  pushEvents.purchaseOrderCreated(tenantId, { orderId: order.id, actorUserId: userId })
 
   return order
 }

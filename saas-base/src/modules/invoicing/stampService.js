@@ -7,6 +7,7 @@ const { getFacturapiForTenant } = require('./facturapiClient')
 const { assertSubscriptionActive, assertCanStampInvoice } = require('../billing/enforcement')
 const { validateAgainstSatCatalogs } = require('./satCatalogValidator')
 const { buildFacturapiTaxes, buildRetentionTaxes } = require('./lineTax')
+const pushEvents = require('../push/pushEvents')
 
 /**
  * Timbra una factura en borrador usando Facturapi.
@@ -310,6 +311,9 @@ async function stampInvoice({ tenantId, invoiceId, userId, ipAddress, userAgent 
     logger.warn('Auto-send de factura falló', { invoiceId, error: err.message })
     stampResult.autoSent = { sent: false, error: err.message }
   }
+
+  // Push best-effort post-commit: factura timbrada → facturación (excl. quien timbró).
+  pushEvents.invoiceStamped(tenantId, { invoiceId, actorUserId: userId })
 
   delete stampResult._autoSend
   return stampResult

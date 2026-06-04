@@ -78,4 +78,27 @@ async function resolveAudience(tenantId, spec) {
   return []
 }
 
-module.exports = { resolveAudience }
+/**
+ * Resuelve la lista FINAL de destinatarios de un push: une una o varias
+ * audiencias y descuenta a `excludeUserIds` (el que ejecutó la acción no debe
+ * recibir el push de su propio acto). Centraliza la lógica para que sea testeable
+ * sin Firebase (pushService.notify hace no-op antes de resolver cuando no hay
+ * credenciales).
+ *
+ * @param {string} tenantId
+ * @param {object} opts  { audience, audiences, excludeUserIds }
+ * @returns {Promise<string[]>} user_ids únicos, sin los excluidos
+ */
+async function resolveRecipients(tenantId, { audience, audiences, excludeUserIds = [] } = {}) {
+  const specs = audiences || (audience ? [audience] : [])
+  const resolved = await Promise.all(specs.map((s) => resolveAudience(tenantId, s)))
+  let userIds = [...new Set(resolved.flat())]
+
+  if (excludeUserIds && excludeUserIds.length) {
+    const excluded = new Set(excludeUserIds.filter(Boolean))
+    userIds = userIds.filter((id) => !excluded.has(id))
+  }
+  return userIds
+}
+
+module.exports = { resolveAudience, resolveRecipients }

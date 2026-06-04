@@ -11,6 +11,7 @@ const { enqueueEmail } = require('../../queues/emailQueue')
 const documentSeriesService = require('../document-series/documentSeriesService')
 const { remisionEmail } = require('../email/templates/sales')
 const { generateRemisionPDF } = require('./remisionPdfService')
+const pushEvents = require('../push/pushEvents')
 const logger = require('../../config/logger')
 
 /**
@@ -92,7 +93,7 @@ async function createDeliveryNote({ tenantId, salesOrderId, salesOrderIds, lines
     : (salesOrderId ? [salesOrderId] : [])
   if (!orderIds.length) throw createError(400, 'Se requiere al menos un pedido (salesOrderId o salesOrderIds).')
 
-  return withTransaction(async (client) => {
+  const note = await withTransaction(async (client) => {
     // Obtener todos los pedidos elegibles con preferencias del cliente.
     // Status 'invoiced' es válido para soportar facturación anticipada:
     // el pedido se factura completo y se entrega en remisiones parciales.
@@ -313,6 +314,11 @@ async function createDeliveryNote({ tenantId, salesOrderId, salesOrderIds, lines
 
     return note
   })
+
+  // Push best-effort post-commit: remisión lista → facturación (excl. quien la hizo).
+  pushEvents.deliveryNoteCreated(tenantId, { noteId: note.id, actorUserId: userId })
+
+  return note
 }
 
 /**
@@ -563,7 +569,7 @@ async function recordDelivery({
   const newStatus = 'delivered'
   const now = new Date().toISOString()
 
-  return withTransaction(async (client) => {
+  const note = await withTransaction(async (client) => {
     const { rows } = await client.query(
       `UPDATE delivery_notes SET
          status             = $1,
@@ -662,6 +668,11 @@ async function recordDelivery({
 
     return note
   })
+
+  // Push best-effort post-commit: entrega completada → facturación + dueño del pedido.
+  pushEvents.deliveryNoteDelivered(tenantId, { noteId, receiverName, actorUserId: userId })
+
+  return note
 }
 
 /**

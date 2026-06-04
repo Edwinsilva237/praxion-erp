@@ -2,6 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
+const pushEvents = require('../push/pushEvents')
 const { recordMovement, recordPackageCaptured, recordProductionValidation, recordScrapWipEntry,
         getWarehouseId, getWarehouseIdForRawMaterial } = require('../inventory/inventoryService')
 const { resolveRecipeForOrder } = require('./recipeResolver')  // SaaS v2 refactor §5d
@@ -191,7 +192,7 @@ async function createOrder({
     }
   }
 
-  return withTransaction(async (client) => {
+  const created = await withTransaction(async (client) => {
     const caVal = customAttributes != null ? JSON.stringify(customAttributes) : null
     const { rows } = await client.query(
       `INSERT INTO production_orders
@@ -238,6 +239,11 @@ async function createOrder({
 
     return { ...order, mpFormula: mpFormula || [] }
   })
+
+  // Push best-effort post-commit: nueva orden de producción → piso (excl. quien la creó).
+  pushEvents.productionOrderCreated(tenantId, { orderId: created.id, actorUserId: userId })
+
+  return created
 }
 
 async function updateOrder({
@@ -2951,7 +2957,8 @@ async function addIncident({ tenantId, shiftId, category, description, durationM
  * Permisos: solo supervisor o admin/super_admin.
  */
 async function closeOrder({ tenantId, orderId, reason, userId, ipAddress, userAgent }) {
-  return withTransaction(async (client) => {
+  let pushMeta = null
+  const closed = await withTransaction(async (client) => {
     // 1. Cargar orden
     const { rows: orderRows } = await client.query(
       `SELECT po.id, po.status, po.order_number, po.quantity_packages AS target,
@@ -3028,8 +3035,14 @@ async function closeOrder({ tenantId, orderId, reason, userId, ipAddress, userAg
       ipAddress, userAgent,
     })
 
+    pushMeta = { produced, target, isPartial }
     return updated[0]
   })
+
+  // Push best-effort post-commit: orden de producción completada → piso.
+  pushEvents.productionOrderCompleted(tenantId, { orderId, ...(pushMeta || {}), actorUserId: userId })
+
+  return closed
 }
 
 /** Reabrir una orden cerrada (solo admin, para casos excepcionales). */
