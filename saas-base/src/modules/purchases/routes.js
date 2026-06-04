@@ -740,6 +740,22 @@ router.get('/cxp', checkPermission('purchases', 'read'), async (req, res, next) 
 })
 
 /**
+ * GET /api/purchases/payments — Historial de PAGOS EMITIDOS (a proveedor).
+ */
+router.get('/payments', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const { partnerId, from, to, method, page, limit } = req.query
+    const result = await cxpService.listPayments({
+      tenantId: req.tenant.id,
+      partnerId, from, to, method,
+      page:  parseInt(page || 1, 10),
+      limit: Math.min(parseInt(limit || 50, 10), 100),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
  * GET /api/purchases/cxp/:id
  */
 router.get('/cxp/:id', checkPermission('purchases', 'read'), async (req, res, next) => {
@@ -878,10 +894,14 @@ router.get('/invoices/:id/attachments/:attachmentId/download',
         tenantId: req.tenant.id, attachmentId: req.params.attachmentId,
       })
       if (!file) return res.status(404).json({ error: 'Archivo no encontrado.' })
+      // proxy:true → el backend transmite los bytes en vez de redirigir a R2 (cuyo
+      // CORS no permite el origen del webview móvil → "Network Error" al abrir la
+      // evidencia desde Pagos emitidos / CXP). Mismo patrón que la evidencia de recepción.
       await storage.serve(res, file.storage_path, {
         filename:    file.filename,
         mimeType:    file.mime_type,
         disposition: 'inline',
+        proxy:       true,
       })
     } catch (err) { next(err) }
   }

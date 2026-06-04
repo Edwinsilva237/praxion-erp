@@ -154,4 +154,55 @@ async function getCXP({ tenantId, apId }) {
   return { ...ap, sourceDoc, payments, attachments, availableAdvances: advances }
 }
 
-module.exports = { listCXP, getCXP }
+/**
+ * Historial de PAGOS EMITIDOS (a proveedor): lista cronológica de supplier_payments,
+ * un registro por pago, con los documentos a los que se aplicó (agregados).
+ */
+async function listPayments({ tenantId, partnerId, from, to, method, page = 1, limit = 50 }) {
+  const offset = (page - 1) * limit
+  const params = [tenantId]
+  const filters = []
+  if (partnerId) { params.push(partnerId); filters.push(`sp.partner_id = $${params.length}`) }
+  if (from)      { params.push(from);      filters.push(`sp.payment_date >= $${params.length}`) }
+  if (to)        { params.push(to);        filters.push(`sp.payment_date <= $${params.length}`) }
+  if (method)    { params.push(method);    filters.push(`sp.method = $${params.length}`) }
+  const where = filters.length ? `AND ${filters.join(' AND ')}` : ''
+  params.push(limit, offset)
+
+  const { rows } = await query(
+    `SELECT sp.id, sp.payment_date, sp.method AS payment_method, sp.reference,
+            sp.amount, sp.amount_mxn, sp.currency, sp.notes, sp.created_at,
+            sp.generic_supplier,
+            bp.id AS partner_id, bp.name AS partner_name, bp.tax_name AS partner_tax_name,
+            ba.bank_name, ba.alias AS bank_alias,
+            u.full_name AS created_by_name,
+            (SELECT string_agg(DISTINCT si.invoice_number, ', ')
+               FROM supplier_payment_applications spa
+               JOIN supplier_invoices si ON si.id = spa.supplier_invoice_id
+              WHERE spa.supplier_payment_id = sp.id) AS applied_docs
+       FROM supplier_payments sp
+       LEFT JOIN business_partners bp ON bp.id = sp.partner_id
+       LEFT JOIN bank_accounts ba     ON ba.id = sp.bank_account_id
+       LEFT JOIN users u              ON u.id  = sp.created_by
+      WHERE sp.tenant_id = $1 ${where}
+      ORDER BY sp.payment_date DESC, sp.created_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  )
+
+  const { rows: countRows } = await query(
+    `SELECT COUNT(*) AS n, COALESCE(SUM(sp.amount_mxn),0) AS total
+       FROM supplier_payments sp
+      WHERE sp.tenant_id = $1 ${where}`,
+    params.slice(0, params.length - 2)
+  )
+
+  return {
+    data: rows,
+    total: parseInt(countRows[0].n, 10),
+    totalAmount: parseFloat(countRows[0].total) || 0,
+    page, limit,
+  }
+}
+
+module.exports = { listCXP, getCXP, listPayments }

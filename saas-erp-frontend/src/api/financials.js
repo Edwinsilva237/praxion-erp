@@ -10,6 +10,8 @@ export const financialsApi = {
     api.get(`${B}/customers/${partnerId}/statement`, { params: p }).then(r => r.data),
 
   // ── Pagos ──────────────────────────────────────────────────────────────
+  // Historial de pagos RECIBIDOS (cobros reales). Params: partnerId, from, to, method, page, limit.
+  listPayments:      (p) => api.get(`${B}/payments`, { params: p }).then(r => r.data),
   registerPayment:   (body) => api.post(`${B}/cxc/payments`, body).then(r => r.data),
   applyAdvance:      (advanceId, body) =>
     api.post(`${B}/cxc/advances/${advanceId}/apply`, body).then(r => r.data),

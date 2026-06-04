@@ -38,6 +38,22 @@ router.get('/cxc', checkPermission('financials', 'read'), async (req, res, next)
 })
 
 /**
+ * GET /api/financials/payments — Historial de PAGOS RECIBIDOS (cobros reales).
+ */
+router.get('/payments', checkPermission('financials', 'read'), async (req, res, next) => {
+  try {
+    const { partnerId, from, to, method, page, limit } = req.query
+    const result = await cxcService.listPayments({
+      tenantId: req.tenant.id,
+      partnerId, from, to, method,
+      page:  parseInt(page || 1, 10),
+      limit: Math.min(parseInt(limit || 50, 10), 100),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
  * GET /api/financials/cxc/:id
  * Detalle de un documento CXC con pagos aplicados y datos del documento origen.
  */

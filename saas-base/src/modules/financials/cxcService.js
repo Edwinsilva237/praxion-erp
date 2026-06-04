@@ -557,7 +557,56 @@ async function stampMissingComplement({
   })
 }
 
+/**
+ * Historial de PAGOS RECIBIDOS (cobros): lista cronológica de ar_payments, no de
+ * cuentas por cobrar. Cada fila es un cobro real con su documento, socio y método.
+ */
+async function listPayments({ tenantId, partnerId, from, to, method, page = 1, limit = 50 }) {
+  const offset = (page - 1) * limit
+  const params = [tenantId]
+  const filters = []
+  if (partnerId) { params.push(partnerId); filters.push(`ar.partner_id = $${params.length}`) }
+  if (from)      { params.push(from);      filters.push(`arp.payment_date >= $${params.length}`) }
+  if (to)        { params.push(to);        filters.push(`arp.payment_date <= $${params.length}`) }
+  if (method)    { params.push(method);    filters.push(`arp.payment_method = $${params.length}`) }
+  const where = filters.length ? `AND ${filters.join(' AND ')}` : ''
+  params.push(limit, offset)
+
+  const { rows } = await query(
+    `SELECT arp.id, arp.amount, arp.payment_method, arp.reference, arp.payment_date,
+            arp.notes, arp.created_at, arp.advance_id,
+            ar.id AS ar_id, ar.document_type, ar.document_number,
+            bp.id AS partner_id, bp.name AS partner_name, bp.tax_name AS partner_tax_name,
+            ba.bank_name, ba.alias AS bank_alias,
+            u.full_name AS created_by_name
+       FROM ar_payments arp
+       JOIN accounts_receivable ar ON ar.id = arp.ar_id
+       JOIN business_partners bp   ON bp.id = ar.partner_id
+       LEFT JOIN bank_accounts ba  ON ba.id = arp.bank_account_id
+       LEFT JOIN users u           ON u.id  = arp.created_by
+      WHERE arp.tenant_id = $1 ${where}
+      ORDER BY arp.payment_date DESC, arp.created_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  )
+
+  const { rows: countRows } = await query(
+    `SELECT COUNT(*) AS n, COALESCE(SUM(arp.amount),0) AS total
+       FROM ar_payments arp
+       JOIN accounts_receivable ar ON ar.id = arp.ar_id
+      WHERE arp.tenant_id = $1 ${where}`,
+    params.slice(0, params.length - 2)
+  )
+
+  return {
+    data: rows,
+    total: parseInt(countRows[0].n, 10),
+    totalAmount: parseFloat(countRows[0].total) || 0,
+    page, limit,
+  }
+}
+
 module.exports = {
-  listCXC, getCXC, getCustomerStatement,
+  listCXC, getCXC, getCustomerStatement, listPayments,
   registerPayment, applyAdvance, stampMissingComplement,
 }

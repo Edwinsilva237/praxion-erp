@@ -1,10 +1,12 @@
 import { useState, useMemo } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createPortal } from 'react-dom'
 import { reportsApi } from '@/api/reports'
 import { partnersApi } from '@/api/partners'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
+import { PagoModal } from '@/components/finanzas/PagoModal'
+import { PagoProveedorModal } from '@/components/finanzas/PagoProveedorModal'
 import clsx from 'clsx'
 
 const fmtMXN  = (n) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(n || 0)
@@ -44,6 +46,8 @@ const DOC_TYPE_LABEL = {
 
 export default function EstadoDeCuenta({ direction }) {
   const isReceivable = direction === 'cuentas-por-cobrar'
+  const qc = useQueryClient()
+  const [payDoc, setPayDoc] = useState(null)  // documento a pagar desde el reporte
   const labels = isReceivable
     ? { title: 'Cuentas por cobrar', partnerCol: 'Cliente', partnerNounPlural: 'clientes', subtitle: 'Estado de cuenta de clientes. Click en una fila para ver el detalle y enviar por correo.' }
     : { title: 'Cuentas por pagar',  partnerCol: 'Proveedor', partnerNounPlural: 'proveedores', subtitle: 'Estado de cuenta de proveedores. Click en una fila para ver el detalle.' }
@@ -210,7 +214,7 @@ export default function EstadoDeCuenta({ direction }) {
             onOpenPartner={setSelectedPartnerId} />
         ) : (
           <DocumentsTable data={data} labels={labels} direction={direction}
-            onOpenPartner={setSelectedPartnerId} />
+            onOpenPartner={setSelectedPartnerId} onPay={setPayDoc} />
         )}
       </div>
 
@@ -223,6 +227,23 @@ export default function EstadoDeCuenta({ direction }) {
           onClose={() => setSelectedPartnerId(null)}
         />
       )}
+
+      {/* Registrar pago directo desde el reporte (abre el documento prellenado) */}
+      {payDoc && (isReceivable ? (
+        <PagoModal
+          prefilledPartnerId={payDoc.partner_id}
+          prefilledArId={payDoc.id}
+          onClose={() => setPayDoc(null)}
+          onSaved={() => { setPayDoc(null); qc.invalidateQueries({ queryKey: ['account-statement'] }) }}
+        />
+      ) : (
+        <PagoProveedorModal
+          initialPartnerId={payDoc.partner_id}
+          initialApId={payDoc.id}
+          onClose={() => setPayDoc(null)}
+          onSaved={() => { setPayDoc(null); qc.invalidateQueries({ queryKey: ['account-statement'] }) }}
+        />
+      ))}
     </div>
   )
 }
@@ -251,7 +272,7 @@ function KpiCard({ label, value, sub, tone = 'neutral' }) {
 }
 
 // ── Tabla de documentos detallada ───────────────────────────────────────────
-function DocumentsTable({ data, labels, direction, onOpenPartner }) {
+function DocumentsTable({ data, labels, direction, onOpenPartner, onPay }) {
   return (
     <table className="table">
       <thead>
@@ -265,6 +286,7 @@ function DocumentsTable({ data, labels, direction, onOpenPartner }) {
           <th className="text-right">Total</th>
           <th className="text-right">Pagado</th>
           <th className="text-right">Pendiente</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -307,6 +329,13 @@ function DocumentsTable({ data, labels, direction, onOpenPartner }) {
               <td className="text-right font-mono tabular-nums">{fmtMXN(d.amount_total)}</td>
               <td className="text-right font-mono tabular-nums text-status-success">{fmtMXN(d.amount_paid)}</td>
               <td className="text-right font-mono tabular-nums font-semibold">{fmtMXN(d.amount_pending)}</td>
+              <td onClick={(e) => e.stopPropagation()} className="text-right">
+                {d.amount_pending > 0 && (
+                  <button onClick={() => onPay(d)} className="btn-secondary btn-sm whitespace-nowrap">
+                    Registrar pago
+                  </button>
+                )}
+              </td>
             </tr>
           )
         })}
@@ -317,6 +346,7 @@ function DocumentsTable({ data, labels, direction, onOpenPartner }) {
           <td className="text-right tabular-nums">{fmtMXN(data.documents.reduce((s, d) => s + d.amount_total, 0))}</td>
           <td className="text-right tabular-nums">{fmtMXN(data.documents.reduce((s, d) => s + d.amount_paid, 0))}</td>
           <td className="text-right tabular-nums">{fmtMXN(data.summary.total_pending_amount)}</td>
+          <td></td>
         </tr>
       </tfoot>
     </table>

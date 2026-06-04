@@ -7,6 +7,9 @@ export const cxpApi = {
   listCXP: (params) => api.get(`${B}/cxp`, { params }).then(r => r.data),
   getCXP:  (id)     => api.get(`${B}/cxp/${id}`).then(r => r.data),
 
+  // Historial de pagos EMITIDOS (a proveedor). Params: partnerId, from, to, method, page, limit.
+  listPayments: (params) => api.get(`${B}/payments`, { params }).then(r => r.data),
+
   // ── Estado de cuenta del proveedor ────────────────────────────────────
   supplierStatement: (partnerId, params) =>
     api.get(`${B}/suppliers/${partnerId}/statement`, { params }).then(r => r.data),
