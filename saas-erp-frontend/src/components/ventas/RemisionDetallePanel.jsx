@@ -10,7 +10,8 @@ import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import { printRemision } from '@/utils/printRemision'
-import { printBlob } from '@/utils/downloadBlob'
+import { printBlob, downloadBlob } from '@/utils/downloadBlob'
+import SignatureCaptureModal from '@/components/ui/SignatureCaptureModal'
 import { Capacitor } from '@capacitor/core'
 import useAuthStore from '@/store/useAuthStore'
 import Can from '@/components/auth/Can'
@@ -125,6 +126,93 @@ function LineasTable({ note }) {
 }
 
 // ── Acciones contextuales por estado ─────────────────────────────────────────
+// Evidencia ADITIVA para remisiones ya entregadas/facturadas: el acuse/firma
+// cuando el cliente recibe la mercancía después de facturar (pide la factura
+// impresa para recibir). Solo agrega y ve; no edita ni borra (decisión del usuario).
+function RemisionEvidencia({ note }) {
+  const qc = useQueryClient()
+  const [showSign, setShowSign] = useState(false)
+  const [busy, setBusy]         = useState(false)
+  const [err, setErr]           = useState(null)
+
+  const { data: files = [] } = useQuery({
+    queryKey: ['delivery-evidence', note.id],
+    queryFn:  () => salesApi.listEvidence(note.id),
+    enabled:  !!note.id,
+  })
+
+  async function upload(file) {
+    if (!file) return
+    setBusy(true); setErr(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      await salesApi.addEvidence(note.id, fd)
+      qc.invalidateQueries({ queryKey: ['delivery-evidence', note.id] })
+    } catch (e) {
+      setErr(e.response?.data?.error || e.message || 'No se pudo subir la evidencia.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function view(att) {
+    setErr(null)
+    try {
+      const blob = await salesApi.downloadEvidence(note.id, att.id)
+      await downloadBlob(blob, att.filename || 'evidencia')
+    } catch (e) {
+      setErr(e.response?.data?.error || 'No se pudo abrir el archivo.')
+    }
+  }
+
+  return (
+    <div className="border-t border-line-subtle pt-4 mt-3 flex flex-col gap-2">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <p className="text-xs font-medium text-ink-secondary">Evidencia adicional de entrega</p>
+        <div className="flex gap-2">
+          <label className={clsx('btn-secondary btn-sm cursor-pointer', busy && 'opacity-50 pointer-events-none')}>
+            Subir foto/PDF
+            <input type="file" accept="image/*,application/pdf" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; upload(f) }} />
+          </label>
+          <button type="button" onClick={() => setShowSign(true)} disabled={busy} className="btn-secondary btn-sm">
+            Firmar en pantalla
+          </button>
+        </div>
+      </div>
+      <p className="text-[11px] text-ink-muted">
+        Adjunta el acuse cuando el cliente recibe la mercancía (p. ej. tras entregar con la factura impresa).
+        Solo se agrega evidencia; no se edita ni se borra la previa.
+      </p>
+      {err && <p className="text-xs text-status-danger">{err}</p>}
+      {busy && <p className="text-xs text-ink-muted">Subiendo…</p>}
+
+      {files.length > 0 ? (
+        <ul className="flex flex-col gap-1">
+          {files.map((f) => (
+            <li key={f.id} className="flex items-center justify-between gap-2 text-xs bg-surface-elevated/40 rounded-lg px-3 py-1.5">
+              <span className="truncate text-ink-secondary">{f.filename}</span>
+              <button type="button" onClick={() => view(f)} className="text-brand-300 hover:underline shrink-0">Ver</button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-[11px] text-ink-muted italic">Sin evidencia adicional.</p>
+      )}
+
+      {showSign && (
+        <SignatureCaptureModal
+          title="Firma de quien recibe"
+          docLabel={note.document_number}
+          onClose={() => setShowSign(false)}
+          onSigned={async (file) => { setShowSign(false); await upload(file) }}
+        />
+      )}
+    </div>
+  )
+}
+
 function AccionesRemision({ note, onSendEmail, onDeliver, onCancel, canceling, onDelete, deleting }) {
   const { status } = note
 
@@ -838,6 +926,9 @@ export function RemisionDetallePanel({ noteId, onClose }) {
                 onDelete={handleDelete}
                 deleting={deleteMutation.isPending}
               />
+              {['delivered', 'invoiced'].includes(note.status) && (
+                <RemisionEvidencia note={note} />
+              )}
             </div>
           )}
         </div>

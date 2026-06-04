@@ -13,6 +13,7 @@ const orderService        = require('./orderService')
 const deliveryNoteService = require('./deliveryNoteService')
 const { generateRemisionPDF } = require('./remisionPdfService')
 const storage             = require('../../utils/storage')
+const attachmentService   = require('../attachments/attachmentService')
 
 const router = express.Router()
 
@@ -313,6 +314,80 @@ router.post('/delivery-notes/:id/deliver',
       res.json({
         ...note,
         message: 'Entrega registrada. CXC generado automáticamente.',
+      })
+    } catch (err) { next(err) }
+  }
+)
+
+// ─── Evidencia ADITIVA de remisión (attachments) ─────────────────────────────
+// Para adjuntar el acuse/firma cuando el cliente recibe la mercancía DESPUÉS de
+// facturar (pide la factura impresa para recibir). Es SOLO aditivo: no toca status,
+// inventario ni CXC, y no edita/borra la evidencia previa (la entrega normal sigue
+// usando /deliver). entityType='delivery_note', category='delivery_evidence'.
+
+async function loadNoteForEvidence(req, res) {
+  const { rows } = await query(
+    `SELECT id, status FROM delivery_notes WHERE id = $1 AND tenant_id = $2`,
+    [req.params.id, req.tenant.id]
+  )
+  if (!rows.length) { res.status(404).json({ error: 'Remisión no encontrada.' }); return null }
+  return rows[0]
+}
+
+/** GET /api/sales/delivery-notes/:id/attachments → lista la evidencia adjunta. */
+router.get('/delivery-notes/:id/attachments',
+  checkPermission('sales', 'read'),
+  async (req, res, next) => {
+    try {
+      const note = await loadNoteForEvidence(req, res)
+      if (!note) return
+      const files = await attachmentService.listAttachments({
+        tenantId: req.tenant.id, entityType: 'delivery_note', entityId: note.id,
+      })
+      res.json(files)
+    } catch (err) { next(err) }
+  }
+)
+
+/** POST /api/sales/delivery-notes/:id/attachments → agrega evidencia (aditivo). */
+router.post('/delivery-notes/:id/attachments',
+  checkAnyPermission([['sales', 'deliver'], ['sales', 'update']]),
+  uploadPhoto.single('file'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'Se requiere un archivo.' })
+      const note = await loadNoteForEvidence(req, res)
+      if (!note) return
+      if (note.status === 'cancelled') {
+        return res.status(409).json({ error: 'La remisión está cancelada.' })
+      }
+      const attachment = await attachmentService.saveAttachment({
+        tenantId: req.tenant.id,
+        entityType: 'delivery_note', entityId: note.id,
+        category: 'delivery_evidence',
+        originalFilename: req.file.originalname,
+        buffer: req.file.buffer, mimeType: req.file.mimetype,
+        description: req.body.description || null,
+        uploadedBy: req.auth.userId,
+        replaceCategory: false,  // ADITIVO: nunca pisa la evidencia previa
+      })
+      res.status(201).json(attachment)
+    } catch (err) { next(err) }
+  }
+)
+
+/** GET /api/sales/delivery-notes/:id/attachments/:attachmentId/download */
+router.get('/delivery-notes/:id/attachments/:attachmentId/download',
+  checkPermission('sales', 'read'),
+  async (req, res, next) => {
+    try {
+      const file = await attachmentService.getAttachmentInfo({
+        tenantId: req.tenant.id, attachmentId: req.params.attachmentId,
+      })
+      if (!file) return res.status(404).json({ error: 'Archivo no encontrado.' })
+      // proxy:true (sin redirect) = abre en el webview móvil sin chocar con el CORS de R2.
+      await storage.serve(res, file.storage_path, {
+        filename: file.filename, mimeType: file.mime_type, disposition: 'inline', proxy: true,
       })
     } catch (err) { next(err) }
   }

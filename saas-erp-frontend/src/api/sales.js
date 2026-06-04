@@ -49,4 +49,14 @@ export const salesApi = {
     api.post(`${B}/delivery-notes/${id}/adjust-prices`, { lines, reason }).then(r => r.data),
   deleteDeliveryNote: (id) =>
     api.delete(`${B}/delivery-notes/${id}`).then(r => r.data),
+
+  // Evidencia ADITIVA de remisión (acuse/firma cuando se entrega tras facturar).
+  listEvidence: (id) =>
+    api.get(`${B}/delivery-notes/${id}/attachments`).then(r => r.data),
+  addEvidence: (id, formData) =>
+    api.post(`${B}/delivery-notes/${id}/attachments`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(r => r.data),
+  downloadEvidence: (id, attId) =>
+    api.get(`${B}/delivery-notes/${id}/attachments/${attId}/download`, { responseType: 'blob' }).then(r => r.data),
 }

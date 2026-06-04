@@ -19,6 +19,9 @@ const MIME_BY_CATEGORY = {
   image:           ['image/jpeg', 'image/png', 'image/webp'],
   technical_sheet: ['application/pdf'],
   evidence:        ['image/jpeg', 'image/png', 'image/webp'],
+  // Evidencia aditiva de remisión (foto del acuse, firma en pantalla PNG, o la
+  // factura impresa firmada / un escaneo en PDF) → imágenes + PDF.
+  delivery_evidence: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
 }
 
 /**
