@@ -19,6 +19,8 @@ const { requireActiveTenant } = require('../../middleware/requireActiveTenant')
 const { checkPermission }     = require('../../middleware/checkPermission')
 const deviceTokens            = require('./deviceTokenService')
 const pushService             = require('./pushService')
+const audienceService         = require('./audienceService')
+const { query }               = require('../../db')
 
 const router = express.Router()
 router.use(tenantResolver)
@@ -27,6 +29,26 @@ router.use(requireActiveTenant)
 
 const tid = (req) => req.tenant.id
 const uid = (req) => req.auth.userId
+
+// Diagnóstico: ¿está Firebase activo? ¿cuántos tokens/audiencia hay en este tenant?
+router.get('/status', async (req, res, next) => {
+  try {
+    const tenantId = tid(req)
+    const { rows } = await query(
+      `SELECT count(*)::int AS n FROM device_tokens WHERE tenant_id = $1`, [tenantId]
+    )
+    const audienceAll = await audienceService.resolveAudience(tenantId, 'all')
+    res.json({
+      firebaseEnabled: pushService.isEnabled(),
+      tenantId,
+      deviceCount: rows[0].n,
+      audienceAllCount: audienceAll.length,
+    })
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
 
 // La app envía su token tras loguearse. Idempotente (UPSERT por token).
 router.post('/register', async (req, res, next) => {
