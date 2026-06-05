@@ -128,9 +128,11 @@ notificaciones push.
 
 ### 5.1 Acceso a la app (App access)
 - Marca: **"Todas o algunas funciones requieren credenciales"**.
-- Agrega una instrucción con un **usuario y contraseña de prueba** (cuenta demo / sandbox) y
-  una nota: *"Inicie sesión con el correo y contraseña proporcionados; el sistema descubre la
-  empresa automáticamente. La app usa una cuenta de demostración con datos de ejemplo."*
+- **Usuario:** `contacto@praxionsystems.mx` · **Contraseña:** [pégala aquí en Play Console — no se
+  versiona en el repo].
+- Nota: *"Inicie sesión con el correo y contraseña proporcionados; el sistema descubre la empresa
+  automáticamente (tenant de demostración GH Insumos · Sandbox, con acceso a todos los módulos).
+  La app usa una cuenta de demostración con datos de ejemplo."*
 
 ### 5.2 Anuncios (Ads)
 - **No, la app no contiene anuncios.**

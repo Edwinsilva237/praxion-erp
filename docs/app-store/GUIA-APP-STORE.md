@@ -126,9 +126,10 @@ Funciones NATIVAS de iOS que usa la app (no es solo contenido web):
 - Generación y compartición de documentos PDF (hoja de compartir de iOS).
 
 CUENTA DE PRUEBA (requerida porque la app es de acceso restringido):
-- Usuario: [CORREO_DEMO]
-- Contraseña: [CONTRASEÑA_DEMO]
-La app descubre la empresa automáticamente con el correo; usa datos de demostración.
+- Usuario: contacto@praxionsystems.mx
+- Contraseña: [PEGAR AQUÍ EN APP STORE CONNECT — no se versiona en el repo]
+La app descubre la empresa automáticamente con el correo (entra al tenant de demostración
+"GH Insumos · Sandbox", rol con acceso de lectura a todos los módulos). Datos de ejemplo.
 
 Contacto del desarrollador: contacto@praxionsystems.mx
 ```
