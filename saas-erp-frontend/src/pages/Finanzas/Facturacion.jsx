@@ -226,7 +226,20 @@ export default function Facturacion() {
                         {i.payment_method || '—'}
                       </span>
                     </td>
-                    <td><Badge status={i.status} /></td>
+                    <td>
+                      <Badge status={i.status} />
+                      {i.email_sent_auto ? (
+                        <span className="mt-1 block w-fit text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-status-success/15 text-status-success"
+                          title={`Enviada automáticamente al timbrar${i.email_sent_at ? ` · ${fmtDateOnly(i.email_sent_at)}` : ''}`}>
+                          ✉ Auto-enviada
+                        </span>
+                      ) : i.email_sent_at ? (
+                        <span className="mt-1 block w-fit text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info"
+                          title={`Enviada por correo · ${fmtDateOnly(i.email_sent_at)}`}>
+                          ✉ Enviada
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="text-right font-mono tabular-nums font-medium">
                       {fmtMXN(i.total, i.currency)}
                     </td>

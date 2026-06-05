@@ -351,6 +351,13 @@ async function maybeAutoSendStampedInvoice({ tenantId, invoiceId, partnerId, fac
   const facturapi = await getFacturapiForTenant(tenantId)
   await facturapi.invoices.sendByEmail(facturapiId, { email: emails })
 
+  // Marca la factura como auto-enviada (para la tag del listado).
+  await query(
+    `UPDATE invoices SET email_sent_at = NOW(), email_sent_auto = true
+      WHERE id = $1 AND tenant_id = $2`,
+    [invoiceId, tenantId]
+  )
+
   await audit({
     tenantId, userId, action: 'invoice.auto_sent_by_email',
     resource: 'invoices', resourceId: invoiceId,
@@ -565,6 +572,15 @@ async function sendByEmail({ invoiceId, tenantId, emails, userId }) {
   if (copyEmail && !finalEmails.includes(copyEmail)) finalEmails.push(copyEmail)
 
   await facturapi.invoices.sendByEmail(facturApiId, { email: finalEmails })
+
+  // Marca la fecha de envío (manual). NO toca email_sent_auto: si ya fue
+  // auto-enviada conserva su tag "Auto-enviada"; si solo es manual queda
+  // email_sent_auto=false → tag "Enviada".
+  await query(
+    `UPDATE invoices SET email_sent_at = NOW() WHERE id = $1 AND tenant_id = $2`,
+    [invoiceId, tenantId]
+  )
+
   return { sent: true, emails: finalEmails }
 }
 

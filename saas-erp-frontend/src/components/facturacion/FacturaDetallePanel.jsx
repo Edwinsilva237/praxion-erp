@@ -62,6 +62,17 @@ function DatosGenerales({ invoice }) {
         </div>
       )}
 
+      {invoice.email_sent_at && (
+        <div className={clsx('rounded-lg px-3 py-2 border',
+          invoice.email_sent_auto ? 'bg-status-success/10 border-status-success/40' : 'bg-status-info/10 border-status-info/40')}>
+          <p className={clsx('text-[10px] uppercase tracking-wide',
+            invoice.email_sent_auto ? 'text-status-success' : 'text-blue-400')}>
+            {invoice.email_sent_auto ? '✉ Enviada automáticamente al timbrar' : '✉ Enviada por correo'}
+          </p>
+          <p className="text-xs text-ink-secondary mt-0.5">{fmtDate(invoice.email_sent_at)}</p>
+        </div>
+      )}
+
       {(invoice.remission_number || invoice.order_number) && (
         <div className="bg-purple-500/10/50 border border-purple-500/40 rounded-lg px-3 py-2 flex items-center gap-2">
           <svg className="w-4 h-4 text-purple-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">

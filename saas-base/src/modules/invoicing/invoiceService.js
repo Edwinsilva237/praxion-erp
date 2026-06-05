@@ -210,6 +210,7 @@ async function listInvoices({ tenantId, status, partnerId, from, to, page = 1, l
             inv.issue_date, inv.stamp_date,
             inv.currency, inv.subtotal, inv.tax_transferred, inv.total, inv.total_mxn,
             inv.payment_method, inv.payment_form,
+            inv.email_sent_at, inv.email_sent_auto,
             bp.name AS partner_name, bp.rfc AS partner_rfc,
             dn.document_number AS remission_number,
             u.full_name AS created_by_name
