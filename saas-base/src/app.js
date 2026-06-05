@@ -89,6 +89,13 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', ts: new Date().toISOString(), sentry: sentryReady() })
 })
 
+// Política de privacidad pública (sin auth) — URL ESTABLE para Google Play y
+// App Store (campo obligatorio "Política de privacidad" / "Privacy Policy URL").
+const { html: privacyHtml } = require('./legal/privacyPage')
+app.get(['/privacidad', '/privacy'], (_req, res) => {
+  res.type('html').send(privacyHtml)
+})
+
 // Descarga pública de la app Android (sin auth) — URL ESTABLE para los correos
 // de invitación/bienvenida. Si ANDROID_APP_URL está configurada (la app ya está
 // en Play Store) redirige ahí, así los correos viejos también llevan a la tienda.
