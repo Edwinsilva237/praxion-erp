@@ -212,7 +212,7 @@ export default function CuentasPorCobrar() {
       </div>
 
       {/* Tabla */}
-      <div className="card overflow-hidden">
+      <div className="card p-0 overflow-x-auto">
         {isLoading ? (
           <div className="flex justify-center py-16"><Spinner /></div>
         ) : error ? (
