@@ -4,6 +4,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# ── Cloudflare Wrangler (caché local de deploys del sitio) ──────────────
+.wrangler/
+
 # ── Variables de entorno (NUNCA subir secretos) ─────────────────────────
 .env
 .env.local

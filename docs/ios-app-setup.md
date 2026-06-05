@@ -387,3 +387,56 @@ segundo plano).
   `git reset --soft HEAD~1` + `git restore --staged` **antes del push** (el archivo sigue en disco,
   fuera de git). Lección: no usar `git add -f`/`git add .` dentro de `ios/`.
 - Sin cambios en pods más allá de `FirebaseMessaging`; el backend ya estaba LIVE, no se tocó.
+
+---
+
+## 🏬 Subir a App Store (handoff para el Claude de la Mac) — 2026-06-05
+
+Pedido del usuario: **publicar en la App Store**. La parte de **contenido/ficha + pasos de App
+Store Connect (navegador)** está en **`docs/app-store/GUIA-APP-STORE.md`**. Aquí va solo lo que
+se ejecuta **en la Mac** (Xcode). Apple Developer de paga **ACTIVO**, Team `Z69ZT5UW4M`.
+
+### Pre-vuelo
+1. `git pull` a origin/main (sincronizar con lo último de Windows — incluye esta guía).
+2. `rm -rf ios/App/build` (gotcha conocido: CocoaPods corre `xcodebuild clean` y truena si hay
+   `build/` previo).
+3. `npm run sync:ios` (vite build + `cap sync ios`; corre `pod install`).
+4. Confirmar `GoogleService-Info.plist` presente en el target App (config local, gitignored).
+
+### ⚠️ Tres ajustes ANTES del Archive (viven en `ios/`, gitignored → no se versionan)
+1. **Push en producción:** en `ios/App/App/App.entitlements`, cambiar
+   `aps-environment` de `development` → **`production`**. Si queda en `development`, el token de
+   TestFlight/App Store sería de sandbox y **el push NO llegaría** en la versión publicada. La
+   llave APNs `.p8` en Firebase ya cubre Sandbox **y** Production, así que basta el cambio del
+   entitlement.
+2. **Export compliance (una vez):** en `ios/App/App/Info.plist` agregar
+   `ITSAppUsesNonExemptEncryption = NO` (solo usa HTTPS estándar = exenta) → App Store Connect
+   deja de preguntar en cada subida.
+3. **Versión/Build:** en Xcode (target App → General) o `agvtool`: Version `1.0`, Build `1`.
+   **Cada subida nueva debe subir el Build** (1 → 2 → 3…); App Store Connect rechaza builds con
+   el mismo número.
+
+### Archive + subida
+1. Xcode → abrir `ios/App/App.xcworkspace`. Target **App**, Team de paga `Z69ZT5UW4M`, firma
+   **automática**. Destino: **Any iOS Device (arm64)** (NO un simulador, o "Archive" sale gris).
+2. **Product → Archive**. Al terminar abre el **Organizer**.
+3. **Distribute App → App Store Connect → Upload** → firma automática → Upload.
+4. En ~5–15 min el build aparece en **App Store Connect → (la app) → TestFlight** (estado
+   "Processing" → listo). Desde TestFlight: agregar a **Internal Testing** para probarlo YA en
+   iPhones reales sin esperar revisión.
+5. Para la App Store pública: el **usuario** completa la ficha en el navegador
+   (`GUIA-APP-STORE.md`) y selecciona ESE build en la versión 1.0 → Submit for Review.
+
+### Capturas para la ficha (las pide Apple, se sacan aquí)
+- Correr en **Simulador iPhone 16 Pro Max** (tamaño 6.9" = 1320×2868):
+  `npm run sync:ios` → abrir en Xcode/Simulator, o `xcrun simctl boot "iPhone 16 Pro Max"`.
+- Capturar: `xcrun simctl io booted screenshot ~/Desktop/praxion-ios-1.png` (repetir por
+  pantalla: Dashboard, Ventas/Pedidos, Inventario/escáner, Producción/Compras).
+- Pasárselas al usuario; desde Windows se reencuadran si App Store Connect las marca de tamaño.
+
+### Al terminar
+- **Commit + push SOLO de docs** (markdown). `ios/` sigue gitignored — los 3 ajustes de arriba
+  NO se versionan (se rehacen si se regenera `ios/`). **NUNCA `git add .`/`-f` dentro de `ios/`**
+  (se cuela el `GoogleService-Info.plist`).
+- Dejar nota aquí (qué build se subió, fecha, cualquier rechazo de Apple + cómo se resolvió) para
+  que Windows lo lea en el siguiente `git pull`.
