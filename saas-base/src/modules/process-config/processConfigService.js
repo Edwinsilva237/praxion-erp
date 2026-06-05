@@ -61,6 +61,8 @@ const ALLOWED_UPDATES = [
   'enable_retentions',
   // Módulos opcionales: gestión de gastos de proveedor (mig 182)
   'expenses_enabled',
+  // Inventario: permitir saldo negativo en salidas por venta (mig 193)
+  'allow_negative_stock',
 ]
 
 // Conjuntos de valores enum válidos. Duplican los CHECK constraints en SQL,
@@ -134,7 +136,7 @@ async function updateConfig({ tenantId, userId, updates, ipAddress, userAgent })
     'uses_lots','uses_expiry','uses_fefo','uses_handover','uses_supervisor',
     'supervisor_validates','pt_goes_to_wip_first','mp_goes_to_wip_first',
     'allow_second_quality_in_order','treat_abnormal_scrap_as_loss',
-    'allow_adhoc_shifts','simplified_overhead',
+    'allow_adhoc_shifts','simplified_overhead','allow_negative_stock',
   ]
   for (const k of BOOLEAN_FIELDS) {
     if (cleaned[k] !== undefined && typeof cleaned[k] !== 'boolean') {

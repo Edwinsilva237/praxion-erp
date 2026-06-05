@@ -198,6 +198,8 @@ export default function Flags() {
       block_revert_if_order_fulfilled: values.block_revert_if_order_fulfilled,
       block_revert_if_period_closed:   values.block_revert_if_period_closed,
       require_revert_dual_approval:    values.require_revert_dual_approval,
+      // Inventario
+      allow_negative_stock:           values.allow_negative_stock,
       // Módulos opcionales
       expenses_enabled:               values.expenses_enabled,
     }
@@ -382,6 +384,16 @@ export default function Flags() {
               />
             </div>
           </div>
+        </div>
+
+        {/* ── Inventario ───────────────────────────────────────────────── */}
+        <div className="card p-4 lg:col-span-2">
+          <h2 className="text-sm font-semibold text-ink-primary mb-3 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-status-warning inline-block" />
+            Inventario
+            <HelpTip text="Cómo se comporta el stock cuando una venta/remisión sale sin existencia capturada. Permitir negativo deja el saldo en rojo como bandera de que falta validar producción o capturar una entrada." />
+          </h2>
+          <FlagRow field="allow_negative_stock" values={values} onChange={handleChange} disabled={disabled} />
         </div>
 
         {/* ── Módulos opcionales ───────────────────────────────────────── */}

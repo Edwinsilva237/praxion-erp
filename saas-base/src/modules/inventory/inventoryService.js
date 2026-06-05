@@ -73,12 +73,21 @@ async function getWarehouseIdForRawMaterial(client, tenantId, rawMaterialId) {
  * Salidas (-):
  *   - Mantiene avg_cost.
  *   - Si validateStock=true y la cantidad excede el saldo → throw.
- *   - Si validateStock=false (default — comportamiento histórico) → clampea a 0.
+ *   - Si allowNegative=true → deja el saldo en negativo (bandera de "falta
+ *     captura/validación"; lo usa la venta cuando el tenant tiene la opción
+ *     allow_negative_stock activa, mig 193).
+ *   - Si allowNegative=false (default — comportamiento histórico) → clampea a 0.
+ *
+ * Endurecimiento del costo (necesario para saldos negativos): el promedio
+ * ponderado solo aplica cuando el saldo base es positivo. Si el saldo es <= 0
+ * (caso negativo) una entrada ADOPTA su propio costo unitario en vez de
+ * ponderar — así se evita la división por cero y los costos sin sentido que
+ * darían `((curQty*curCost)+(delta*unitCost))/(curQty+delta)` con curQty ≤ 0.
  */
 async function updateStock(client, {
   tenantId, warehouseId, itemType, itemId, unit,
   quantityDelta, unitCost = 0, status = 'available',
-  validateStock = false,
+  validateStock = false, allowNegative = false,
 }) {
   const { rows } = await client.query(
     `SELECT id, quantity, avg_cost FROM inventory_stock
@@ -99,10 +108,16 @@ async function updateStock(client, {
       )
     }
 
-    const newQty  = Math.max(0, curQty + quantityDelta)
-    const newCost = (quantityDelta > 0 && unitCost > 0)
-      ? ((curQty * curCost) + (quantityDelta * unitCost)) / (curQty + quantityDelta)
-      : curCost
+    const rawQty = curQty + quantityDelta
+    const newQty = allowNegative ? rawQty : Math.max(0, rawQty)
+
+    let newCost = curCost
+    if (quantityDelta > 0 && unitCost > 0) {
+      const denom = curQty + quantityDelta
+      newCost = (curQty > 0 && denom > 0)
+        ? ((curQty * curCost) + (quantityDelta * unitCost)) / denom
+        : unitCost
+    }
 
     await client.query(
       `UPDATE inventory_stock SET quantity=$1, avg_cost=$2, last_movement_at=NOW(), updated_at=NOW() WHERE id=$3`,
@@ -113,7 +128,7 @@ async function updateStock(client, {
     if (validateStock && quantityDelta < 0) {
       throw createError(400, `No existe stock previo de este artículo en el almacén — no se puede registrar una salida.`)
     }
-    const qty = Math.max(0, quantityDelta)
+    const qty = allowNegative ? quantityDelta : Math.max(0, quantityDelta)
     await client.query(
       `INSERT INTO inventory_stock
          (tenant_id, warehouse_id, item_type, item_id, status, quantity, unit, avg_cost, last_movement_at)
@@ -131,7 +146,7 @@ async function recordMovement(client, {
   statusTo = 'available',
   referenceType = null, referenceId = null,
   notes = null, createdBy = null,
-  validateStock = false,
+  validateStock = false, allowNegative = false,
   rawMaterialLotId = null, productLotId = null,
 }) {
   if (rawMaterialLotId && productLotId) {
@@ -140,7 +155,7 @@ async function recordMovement(client, {
 
   const balanceAfter = await updateStock(client, {
     tenantId, warehouseId, itemType, itemId, unit,
-    quantityDelta: quantity, unitCost, status: statusTo, validateStock,
+    quantityDelta: quantity, unitCost, status: statusTo, validateStock, allowNegative,
   })
 
   const { rows } = await client.query(
@@ -658,7 +673,7 @@ async function getInventorySummary({ tenantId }) {
        ROUND(SUM(s.quantity * s.avg_cost), 2) AS total_value
      FROM inventory_stock s
      JOIN warehouses w ON w.id = s.warehouse_id
-     WHERE s.tenant_id=$1 AND s.quantity > 0 AND w.is_active=true
+     WHERE s.tenant_id=$1 AND s.quantity <> 0 AND w.is_active=true
      GROUP BY w.id, w.name, w.type, s.item_type
      ORDER BY
        CASE w.type WHEN 'raw_material' THEN 1 WHEN 'wip' THEN 2 WHEN 'finished_product' THEN 3 ELSE 4 END,
@@ -668,56 +683,116 @@ async function getInventorySummary({ tenantId }) {
   return rows
 }
 
-async function getStock({ tenantId, warehouseId, itemType, status, search, page = 1, limit = 50 }) {
+/**
+ * Stock actual. Por default lista filas de inventory_stock con saldo distinto
+ * de cero (incluye NEGATIVOS — ver mig 193 / allow_negative_stock).
+ *
+ * includeZero=true: además inyecta una fila sintética (cantidad 0, sin almacén)
+ * por cada artículo ACTIVO del catálogo (productos + MP) que NO tenga existencia
+ * distinta de cero que matchee el filtro de almacén. Sirve para el toggle
+ * "incluir artículos en cero" de la pantalla de Inventario (ver TODO mi catálogo,
+ * tenga o no existencia). El filtro de almacén, tipo y búsqueda se respetan.
+ */
+async function getStock({ tenantId, warehouseId, itemType, status, search, includeZero = false, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
-  const conds  = ['s.tenant_id = $1']
+  const conds  = ['s.tenant_id = $1', 's.quantity <> 0']
   const params = [tenantId]
   let i = 2
 
-  if (warehouseId) { conds.push(`s.warehouse_id = $${i++}`); params.push(warehouseId) }
-  if (itemType)    { conds.push(`s.item_type = $${i++}`);    params.push(itemType) }
-  if (status)      { conds.push(`s.status = $${i++}`);       params.push(status) }
+  let whIdx = null
+  if (warehouseId) { whIdx = i; conds.push(`s.warehouse_id = $${i++}`); params.push(warehouseId) }
+  if (itemType)    { conds.push(`s.item_type = $${i++}`);                params.push(itemType) }
+  if (status)      { conds.push(`s.status = $${i++}`);                   params.push(status) }
 
-  let searchClause = ''
+  let searchIdx = null
   if (search) {
-    searchClause = `AND (rm.name ILIKE $${i} OR p.name ILIKE $${i})`
+    searchIdx = i
+    conds.push(`(rm.name ILIKE $${i} OR p.name ILIKE $${i})`)
     params.push(`%${search}%`)
     i++
   }
 
-  const sql = `
+  const stockSelect = `
     SELECT
-      s.id, s.item_type, s.item_id, s.warehouse_id, s.status,
+      s.id::text AS id, s.item_type::text AS item_type, s.item_id, s.warehouse_id, s.status::text AS status,
       s.quantity, s.unit, s.avg_cost,
       ROUND(s.quantity * s.avg_cost, 2) AS total_value,
       s.last_movement_at,
-      w.name AS warehouse_name, w.type AS warehouse_type,
+      w.name AS warehouse_name, w.type::text AS warehouse_type,
       CASE s.item_type
         WHEN 'raw_material' THEN rm.name
         WHEN 'product'      THEN p.name
         ELSE 'Desconocido'
       END AS item_name,
-      rm.resin_type, rm.material_type, p.sku
+      rm.resin_type::text AS resin_type, rm.material_type::text AS material_type, p.sku
     FROM inventory_stock s
     JOIN warehouses w ON w.id = s.warehouse_id
     LEFT JOIN raw_materials rm ON rm.id = s.item_id AND s.item_type = 'raw_material'
     LEFT JOIN products p       ON p.id  = s.item_id AND s.item_type = 'product'
-    WHERE ${conds.join(' AND ')} ${searchClause} AND s.quantity > 0
+    WHERE ${conds.join(' AND ')}
+  `
+
+  const unionParts = [stockSelect]
+
+  if (includeZero) {
+    // El NOT EXISTS respeta el filtro de almacén (si se pidió) reusando $whIdx.
+    const notExistsWh = whIdx ? `AND s2.warehouse_id = $${whIdx}` : ''
+    // Filtro de búsqueda por nombre (reusa $searchIdx).
+    const rmSearch = searchIdx ? `AND x.name ILIKE $${searchIdx}` : ''
+    const pSearch  = searchIdx ? `AND (x.name ILIKE $${searchIdx} OR COALESCE(x.sku,'') ILIKE $${searchIdx})` : ''
+
+    if (!itemType || itemType === 'raw_material') {
+      unionParts.push(`
+        SELECT
+          'zero:raw_material:' || x.id::text AS id, 'raw_material' AS item_type, x.id AS item_id,
+          NULL::uuid AS warehouse_id, 'available' AS status,
+          0::numeric AS quantity, COALESCE(x.unit, 'kg') AS unit, 0::numeric AS avg_cost,
+          0::numeric AS total_value, NULL::timestamptz AS last_movement_at,
+          NULL::text AS warehouse_name, NULL::text AS warehouse_type,
+          x.name AS item_name, x.resin_type::text AS resin_type, x.material_type::text AS material_type, NULL::text AS sku
+        FROM raw_materials x
+        WHERE x.tenant_id = $1 AND x.is_active = true ${rmSearch}
+          AND NOT EXISTS (
+            SELECT 1 FROM inventory_stock s2
+            WHERE s2.tenant_id = $1 AND s2.item_type = 'raw_material'
+              AND s2.item_id = x.id AND s2.quantity <> 0 ${notExistsWh}
+          )
+      `)
+    }
+    if (!itemType || itemType === 'product') {
+      unionParts.push(`
+        SELECT
+          'zero:product:' || x.id::text AS id, 'product' AS item_type, x.id AS item_id,
+          NULL::uuid AS warehouse_id, 'available' AS status,
+          0::numeric AS quantity, 'pza' AS unit, 0::numeric AS avg_cost,
+          0::numeric AS total_value, NULL::timestamptz AS last_movement_at,
+          NULL::text AS warehouse_name, NULL::text AS warehouse_type,
+          x.name AS item_name, NULL::text AS resin_type, NULL::text AS material_type, x.sku
+        FROM products x
+        WHERE x.tenant_id = $1 AND x.is_active = true ${pSearch}
+          AND NOT EXISTS (
+            SELECT 1 FROM inventory_stock s2
+            WHERE s2.tenant_id = $1 AND s2.item_type = 'product'
+              AND s2.item_id = x.id AND s2.quantity <> 0 ${notExistsWh}
+          )
+      `)
+    }
+  }
+
+  const unionSql = unionParts.join('\n      UNION ALL\n')
+
+  const sql = `
+    SELECT * FROM (
+      ${unionSql}
+    ) q
     ORDER BY
-      CASE w.type WHEN 'raw_material' THEN 1 WHEN 'wip' THEN 2 WHEN 'finished_product' THEN 3 ELSE 4 END,
-      s.item_type, item_name
+      CASE q.warehouse_type WHEN 'raw_material' THEN 1 WHEN 'wip' THEN 2 WHEN 'finished_product' THEN 3 ELSE 5 END,
+      q.item_type, q.item_name
     LIMIT $${i} OFFSET $${i + 1}
   `
   params.push(limit, offset)
 
-  const countSql = `
-    SELECT COUNT(*) AS total
-    FROM inventory_stock s
-    JOIN warehouses w ON w.id = s.warehouse_id
-    LEFT JOIN raw_materials rm ON rm.id = s.item_id AND s.item_type = 'raw_material'
-    LEFT JOIN products p       ON p.id  = s.item_id AND s.item_type = 'product'
-    WHERE ${conds.join(' AND ')} ${searchClause} AND s.quantity > 0
-  `
+  const countSql = `SELECT COUNT(*) AS total FROM (${unionSql}) q`
 
   const [stockRes, countRes] = await Promise.all([
     query(sql, params),
@@ -1078,6 +1153,94 @@ async function getAdjustment({ tenantId, adjustmentId }) {
   return { ...header, lines, reversalLines }
 }
 
+/**
+ * Recalcula el saldo de inventory_stock a partir de la SUMA del kardex
+ * (inventory_movements) por (almacén, tipo, ítem, status).
+ *
+ * La cantidad de cada movimiento se guardó SIEMPRE con su signo real, incluso
+ * cuando el saldo se clampaba a 0 históricamente (solo balance_after/quantity
+ * se clampaban, no inventory_movements.quantity). Por eso la suma del kardex =
+ * posición verdadera, y revela los negativos por sobreventas pasadas.
+ *
+ * apply=false → solo devuelve el diff (vista previa); NO escribe.
+ * apply=true  → actualiza inventory_stock.quantity en las combinaciones que no
+ *   cuadran (|actual − calculado| > 0.0001). NO toca avg_cost (un saldo negativo
+ *   con costo positivo da valor negativo = "se debe inventario", la señal
+ *   deseada). Solo considera combinaciones presentes en el kardex; no borra
+ *   filas de stock sin movimientos.
+ */
+async function recomputeStockFromMovements({ tenantId, apply = false }) {
+  const { rows: diffs } = await query(
+    `WITH computed AS (
+       SELECT m.warehouse_id, m.item_type, m.item_id,
+              COALESCE(m.status_to, 'available') AS status,
+              SUM(m.quantity)::numeric AS computed_qty
+         FROM inventory_movements m
+        WHERE m.tenant_id = $1
+        GROUP BY m.warehouse_id, m.item_type, m.item_id, COALESCE(m.status_to, 'available')
+     )
+     SELECT c.warehouse_id, c.item_type::text AS item_type, c.item_id, c.status::text AS status,
+            c.computed_qty,
+            COALESCE(s.quantity, 0)::numeric AS current_qty,
+            s.id AS stock_id,
+            COALESCE(s.unit, CASE c.item_type WHEN 'raw_material'::inventory_item_type THEN 'kg' ELSE 'pza' END) AS unit,
+            COALESCE(s.avg_cost, 0)::numeric AS avg_cost,
+            w.name AS warehouse_name,
+            CASE c.item_type
+              WHEN 'raw_material'::inventory_item_type THEN rm.name
+              WHEN 'product'::inventory_item_type      THEN p.name
+            END AS item_name,
+            p.sku
+       FROM computed c
+       JOIN warehouses w ON w.id = c.warehouse_id
+       LEFT JOIN inventory_stock s ON s.tenant_id = $1 AND s.warehouse_id = c.warehouse_id
+              AND s.item_type = c.item_type AND s.item_id = c.item_id AND s.status = c.status
+       LEFT JOIN raw_materials rm ON rm.id = c.item_id AND c.item_type = 'raw_material'::inventory_item_type
+       LEFT JOIN products p       ON p.id  = c.item_id AND c.item_type = 'product'::inventory_item_type
+      WHERE ABS(COALESCE(s.quantity, 0) - c.computed_qty) > 0.0001
+      ORDER BY w.name, item_name`,
+    [tenantId]
+  )
+
+  const mapped = diffs.map(d => ({
+    itemType:      d.item_type,
+    itemId:        d.item_id,
+    itemName:      d.item_name,
+    sku:           d.sku,
+    warehouseId:   d.warehouse_id,
+    warehouseName: d.warehouse_name,
+    status:        d.status,
+    currentQty:    parseFloat(d.current_qty),
+    computedQty:   parseFloat(d.computed_qty),
+    delta:         parseFloat((parseFloat(d.computed_qty) - parseFloat(d.current_qty)).toFixed(4)),
+  }))
+
+  if (!apply || diffs.length === 0) {
+    return { applied: false, count: mapped.length, diffs: mapped }
+  }
+
+  await withTransaction(async (client) => {
+    for (const d of diffs) {
+      if (d.stock_id) {
+        await client.query(
+          `UPDATE inventory_stock SET quantity = $1, updated_at = NOW() WHERE id = $2`,
+          [parseFloat(d.computed_qty).toFixed(4), d.stock_id]
+        )
+      } else {
+        await client.query(
+          `INSERT INTO inventory_stock
+             (tenant_id, warehouse_id, item_type, item_id, status, quantity, unit, avg_cost, last_movement_at)
+           VALUES ($1, $2, $3::inventory_item_type, $4, $5, $6, $7, $8, NOW())`,
+          [tenantId, d.warehouse_id, d.item_type, d.item_id, d.status,
+           parseFloat(d.computed_qty).toFixed(4), d.unit, parseFloat(d.avg_cost).toFixed(6)]
+        )
+      }
+    }
+  })
+
+  return { applied: true, count: mapped.length, diffs: mapped }
+}
+
 async function searchItems({ tenantId, q = '', type = null, warehouseId = null, limit = 20 }) {
   const like = `%${q}%`
   const params = [tenantId, like]
@@ -1148,6 +1311,7 @@ module.exports = {
   cancelAdjustment,
   listAdjustments,
   getAdjustment,
+  recomputeStockFromMovements,
 
   searchItems,
 }

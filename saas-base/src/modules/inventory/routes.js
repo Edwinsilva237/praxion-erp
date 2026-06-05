@@ -33,15 +33,32 @@ router.get('/summary', checkPermission('inventory', 'read'), async (req, res, ne
 // ── GET /api/inventory/stock ──────────────────────────────────────────────────
 router.get('/stock', checkPermission('inventory', 'read'), async (req, res, next) => {
   try {
-    const { warehouse_id, item_type, status, search, page, limit } = req.query
+    const { warehouse_id, item_type, status, search, include_zero, page, limit } = req.query
     const data = await inventoryService.getStock({
       tenantId:    req.tenant.id,
       warehouseId: warehouse_id || null,
       itemType:    item_type    || null,
       status:      status       || null,
       search:      search       || null,
+      includeZero: include_zero === 'true' || include_zero === '1',
       page:        parseInt(page)  || 1,
       limit:       parseInt(limit) || 50,
+    })
+    res.json(data)
+  } catch (err) { next(err) }
+})
+
+// ── POST /api/inventory/recompute-stock ───────────────────────────────────────
+// Recalcula los saldos de inventory_stock a partir del kardex (suma de
+// movimientos = posición verdadera, revela negativos por sobreventa). apply=false
+// devuelve solo la vista previa del diff; apply=true lo aplica. Gated a
+// inventory:adjust (acción sensible: reescribe saldos).
+router.post('/recompute-stock', checkPermission('inventory', 'adjust'), async (req, res, next) => {
+  try {
+    const apply = req.body?.apply === true
+    const data = await inventoryService.recomputeStockFromMovements({
+      tenantId: req.tenant.id,
+      apply,
     })
     res.json(data)
   } catch (err) { next(err) }

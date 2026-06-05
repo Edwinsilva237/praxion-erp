@@ -595,10 +595,20 @@ async function recordDelivery({
        JSON.stringify({ receiverName, hasPhoto: !!photoPath })]
     )
 
+    // Bandera por tenant (mig 193): cuando allow_negative_stock está activa, la
+    // salida puede dejar el saldo en NEGATIVO si falta existencia capturada (el
+    // negativo es bandera de "falta validar producción / capturar entrada"). Si
+    // está apagada se mantiene el comportamiento histórico: clampa a 0.
+    const { rows: cfgRows } = await client.query(
+      `SELECT allow_negative_stock FROM tenant_process_config WHERE tenant_id = $1`,
+      [tenantId]
+    )
+    const allowNegative = cfgRows[0]?.allow_negative_stock === true
+
     // Descontar inventario por cada línea — usa quantity_base (unidad atómica
     // del producto, ver migración 074) y warehouse_id de la línea (default por
-    // tipo de producto si no se especificó). validateStock=false permite
-    // dejar negativo si falta entrada en captura.
+    // tipo de producto si no se especificó). validateStock=false NO bloquea la
+    // salida; el saldo baja a negativo solo si allowNegative (arriba) lo permite.
     // Si la línea tiene product_lot_id (uses_lots=true), también descontamos
     // del saldo del lote para mantener trazabilidad.
     const { rows: linesForStock } = await client.query(
@@ -628,6 +638,7 @@ async function recordDelivery({
         notes:         `Salida por remisión ${note.document_number}`,
         createdBy:      userId,
         validateStock: false,
+        allowNegative,
       })
 
       // SaaS v2 §143: descontar del lote específico si está vinculado.

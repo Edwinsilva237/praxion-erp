@@ -31,6 +31,11 @@ export const inventoryApi = {
   cancelAdjustment: (id, body) =>
     api.post(`${BASE}/adjustments/${id}/cancel`, body).then(r => r.data),
 
+  // ── Recalcular saldos desde el kardex ─────────────────────────────────────
+  // apply=false → vista previa del diff; apply=true → aplica.
+  recomputeStock: (apply = false) =>
+    api.post(`${BASE}/recompute-stock`, { apply }).then(r => r.data),
+
   // ── Autocomplete de items ─────────────────────────────────────────────────
   searchItems: (params) =>
     api.get(`${BASE}/items/search`, { params }).then(r => r.data),

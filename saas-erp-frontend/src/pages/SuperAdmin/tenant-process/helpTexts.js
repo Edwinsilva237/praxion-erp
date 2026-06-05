@@ -188,6 +188,16 @@ export const HELP = {
     ],
   },
 
+  // ── Inventario ───────────────────────────────────────────────────────
+  allow_negative_stock: {
+    title: 'Permitir inventario en negativo',
+    body: 'Cuando una venta/remisión sale sin existencia capturada, el stock baja a NEGATIVO (en rojo) en vez de quedarse en 0. El saldo negativo funciona como bandera de que falta validar el turno de producción o capturar la entrada que debió generar ese producto. Si está apagado, la salida clampa a 0 y el faltante queda oculto (comportamiento histórico).',
+    examples: [
+      { label: 'Actívalo si', value: 'Remisionas/facturas antes de validar la producción, o quieres ver de inmediato dónde falta una captura.' },
+      { label: 'Apágalo si',  value: 'Prefieres que el sistema nunca muestre negativos (p.ej. solo vendes lo que ya está capturado en inventario).' },
+    ],
+  },
+
   // ── Atributos de materias primas específicos de plástico ─────────────
   uses_resin_types: {
     title: 'Mostrar "Tipo de resina" en materias primas',
@@ -303,4 +313,5 @@ export const FIELD_LABELS = {
   block_revert_if_period_closed:   'Bloquear si el periodo contable cerró',
   require_revert_dual_approval:    'Requerir doble aprobación',
   expenses_enabled:                'Módulo de Gastos',
+  allow_negative_stock:            'Permitir inventario en negativo',
 }

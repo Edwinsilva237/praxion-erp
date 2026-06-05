@@ -7,6 +7,7 @@ import Badge from '@/components/ui/Badge'
 import AdjustmentModal        from '@/components/inventario/AdjustmentModal'
 import AdjustmentDetallePanel from '@/components/inventario/AdjustmentDetallePanel'
 import ItemDetailPanel        from '@/components/inventario/ItemDetailPanel'
+import RecomputeStockModal    from '@/components/inventario/RecomputeStockModal'
 import ScanButton             from '@/components/scanner/ScanButton'
 import clsx from 'clsx'
 
@@ -182,9 +183,11 @@ export default function Inventario() {
 
   // Filtros stock - niveles
   const [levelFilter, setLevelFilter] = useState('')   // '' | 'below_min' | 'at_reorder' | 'normal' | 'overstock'
+  const [includeZero, setIncludeZero] = useState(false) // incluir artículos del catálogo sin existencia
 
   // UI state
   const [showAdjustModal, setShowAdjustModal] = useState(false)
+  const [showRecompute, setShowRecompute] = useState(false)
   const [selectedAdjustId, setSelectedAdjustId] = useState(null)
   const [selectedStockItem, setSelectedStockItem] = useState(null)  // {itemType, itemId, warehouseId}
   const [createdMsg, setCreatedMsg] = useState(null)
@@ -213,12 +216,13 @@ export default function Inventario() {
   })
 
   const { data: stockData, isLoading: loadingStock } = useQuery({
-    queryKey: ['inv-stock', warehouseFilter, itemTypeFilter, search],
+    queryKey: ['inv-stock', warehouseFilter, itemTypeFilter, search, includeZero],
     queryFn:  () => inventoryApi.getStock({
       warehouse_id: warehouseFilter || undefined,
       item_type:    itemTypeFilter  || undefined,
       search:       search          || undefined,
-      limit: 100,
+      include_zero: includeZero ? 'true' : undefined,
+      limit:        includeZero ? 1000 : 100,
     }),
     enabled: tab === 'stock',
   })
@@ -326,12 +330,21 @@ export default function Inventario() {
           <p className="page-subtitle">Stock actual, kardex y documentos de ajuste</p>
         </div>
         <Can do="inventory:adjust">
-          <button onClick={() => setShowAdjustModal(true)} className="btn-primary">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Nuevo ajuste
-          </button>
+          <div className="flex gap-2">
+            <button onClick={() => setShowRecompute(true)} className="btn-secondary"
+              title="Recalcula los saldos a partir del kardex (suma de movimientos). Revela negativos por sobreventa.">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Recalcular saldos
+            </button>
+            <button onClick={() => setShowAdjustModal(true)} className="btn-primary">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Nuevo ajuste
+            </button>
+          </div>
         </Can>
       </div>
 
@@ -460,6 +473,12 @@ export default function Inventario() {
               <ScanButton onScan={handleScan} title="Escanear código de barras" />
               <button type="submit" className="btn-secondary btn-sm">Buscar</button>
             </form>
+            <label className="flex items-center gap-2 text-xs text-ink-secondary cursor-pointer select-none"
+              title="Muestra TODO el catálogo (productos + MP), incluso los artículos sin existencia (en 0).">
+              <input type="checkbox" className="w-4 h-4 accent-brand-500"
+                checked={includeZero} onChange={e => setIncludeZero(e.target.checked)} />
+              Incluir artículos en cero
+            </label>
           </>
         )}
 
@@ -564,10 +583,14 @@ export default function Inventario() {
                 <button
                   key={row.id}
                   type="button"
-                  onClick={() => setSelectedStockItem({
+                  disabled={!row.warehouse_id}
+                  onClick={() => row.warehouse_id && setSelectedStockItem({
                     itemType: row.item_type, itemId: row.item_id, warehouseId: row.warehouse_id,
                   })}
-                  className="w-full text-left bg-surface-primary border border-line-subtle rounded-xl p-3 hover:bg-surface-elevated/40 transition-colors"
+                  className={clsx(
+                    'w-full text-left bg-surface-primary border border-line-subtle rounded-xl p-3 transition-colors',
+                    row.warehouse_id ? 'hover:bg-surface-elevated/40' : 'opacity-70 cursor-default'
+                  )}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex items-center gap-2">
@@ -577,7 +600,7 @@ export default function Inventario() {
                           {row.item_name}
                           {row.sku && <span className="ml-1 text-xs text-ink-muted">#{row.sku}</span>}
                         </p>
-                        <p className="text-xs text-ink-muted truncate">{row.warehouse_name}</p>
+                        <p className="text-xs text-ink-muted truncate">{row.warehouse_name || 'Sin existencia'}</p>
                       </div>
                     </div>
                     <Badge
@@ -587,7 +610,8 @@ export default function Inventario() {
                   </div>
                   <div className="mt-2 flex items-end justify-between gap-2">
                     <div>
-                      <p className="font-mono text-base font-semibold text-ink-primary">
+                      <p className={clsx('font-mono text-base font-semibold',
+                        parseFloat(row.quantity) < 0 ? 'text-status-danger' : 'text-ink-primary')}>
                         {fmtNum(row.quantity)} <span className="text-ink-muted text-xs">{row.unit}</span>
                       </p>
                       {inTransit > 0 && (
@@ -631,12 +655,13 @@ export default function Inventario() {
                   return (
                   <tr
                     key={row.id}
-                    onClick={() => setSelectedStockItem({
+                    onClick={() => row.warehouse_id && setSelectedStockItem({
                       itemType:    row.item_type,
                       itemId:      row.item_id,
                       warehouseId: row.warehouse_id,
                     })}
-                    className="cursor-pointer hover:bg-surface-elevated/40 transition-colors"
+                    className={clsx('transition-colors',
+                      row.warehouse_id ? 'cursor-pointer hover:bg-surface-elevated/40' : 'opacity-70')}
                   >
                     <td className="w-6 px-1">
                       {lvlInfo && <LevelDot status={lvlInfo.status} />}
@@ -656,7 +681,7 @@ export default function Inventario() {
                         label={row.item_type === 'raw_material' ? 'MP' : 'PT'}
                       />
                     </td>
-                    <td className="text-ink-secondary">{row.warehouse_name}</td>
+                    <td className="text-ink-secondary">{row.warehouse_name || 'Sin existencia'}</td>
                     <td>
                       <Badge
                         variant={
@@ -673,7 +698,8 @@ export default function Inventario() {
                         }
                       />
                     </td>
-                    <td className="text-right font-mono text-sm">
+                    <td className={clsx('text-right font-mono text-sm',
+                      parseFloat(row.quantity) < 0 && 'text-status-danger font-semibold')}>
                       {fmtNum(row.quantity)} <span className="text-ink-muted text-xs">{row.unit}</span>
                     </td>
                     <td className="text-right font-mono text-sm">
@@ -922,6 +948,18 @@ export default function Inventario() {
           warehouses={warehouses}
           onClose={() => setShowAdjustModal(false)}
           onSaved={handleAdjustmentSaved}
+        />
+      )}
+
+      {/* ── Modal: recalcular saldos desde el kardex ─────────────────── */}
+      {showRecompute && (
+        <RecomputeStockModal
+          onClose={() => setShowRecompute(false)}
+          onApplied={(res) => {
+            setCreatedMsg(`Saldos recalculados: ${res.count} ajuste(s) aplicado(s) desde el kardex.`)
+            setTimeout(() => setCreatedMsg(null), 6000)
+            setShowRecompute(false)
+          }}
         />
       )}
 
