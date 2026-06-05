@@ -212,8 +212,17 @@ async function shiftAssigned(tenantId, { userIds, shiftNumber, scheduledDate, sh
 
 // ─────────────────────────── COMPRAS ───────────────────────────
 
-/** Orden de compra CREADA. Avisa a compras. */
-async function purchaseOrderCreated(tenantId, { orderId, actorUserId } = {}) {
+/**
+ * Orden de compra CREADA. Avisa a compras.
+ *
+ * A diferencia de los demás eventos, este NO excluye al actor: en compras suele
+ * ser el MISMO usuario (a menudo desde otro dispositivo con la misma cuenta)
+ * quien crea la OC y quiere el aviso. Como la exclusión y el envío son por
+ * user_id (sendToUsers manda a TODOS los tokens del usuario), excluir al actor
+ * apagaba el push en TODOS sus dispositivos. Notificamos a todos los de compras
+ * incluido quien la creó. (El `actorUserId` que pasa el caller se ignora.)
+ */
+async function purchaseOrderCreated(tenantId, { orderId } = {}) {
   return safe('purchaseOrderCreated', async () => {
     const { rows } = await query(
       `SELECT po.order_number, po.total_mxn, bp.name AS partner
@@ -226,7 +235,6 @@ async function purchaseOrderCreated(tenantId, { orderId, actorUserId } = {}) {
     if (!o) return
     await pushService.notify(tenantId, {
       audience: { permission: ['purchases', 'read'] },
-      excludeUserIds: [actorUserId],
       title: `🛒 Nueva OC ${o.order_number}`,
       body: body(o.partner, money(o.total_mxn)),
       data: { type: 'purchase_order.created', orderId, route: '/compras/ordenes' },
@@ -234,8 +242,14 @@ async function purchaseOrderCreated(tenantId, { orderId, actorUserId } = {}) {
   })
 }
 
-/** Recepción VALIDADA (borrador → confirmada). Avisa a compras + dueño de la OC. */
-async function receiptConfirmed(tenantId, { receiptId, actorUserId } = {}) {
+/**
+ * Recepción VALIDADA (borrador → confirmada). Avisa a compras + dueño de la OC.
+ *
+ * NO excluye al actor (mismo motivo que la OC: el comprador suele validar él
+ * mismo, frecuentemente desde otro dispositivo con la misma cuenta, y quiere el
+ * aviso en todos sus dispositivos). El `actorUserId` del caller se ignora.
+ */
+async function receiptConfirmed(tenantId, { receiptId } = {}) {
   return safe('receiptConfirmed', async () => {
     const { rows } = await query(
       `SELECT sr.receipt_number, bp.name AS partner, po.created_by AS po_owner,
@@ -254,7 +268,6 @@ async function receiptConfirmed(tenantId, { receiptId, actorUserId } = {}) {
         { permission: ['purchases', 'read'] },
         { userIds: [r.po_owner].filter(Boolean) },
       ],
-      excludeUserIds: [actorUserId],
       title: `📥 Recepción ${r.receipt_number} validada`,
       body: body(r.partner, r.line_count ? `${r.line_count} artículos` : null),
       data: { type: 'supplier_receipt.confirmed', receiptId, route: '/compras/recepciones' },
