@@ -92,8 +92,8 @@ function ItemModal({ item, onClose, onSaved }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-bg-primary/80 backdrop-blur-sm">
-      <div className="bg-surface-primary rounded-2xl shadow-xl w-full max-w-lg border border-line-subtle">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-line-subtle">
+      <div className="bg-surface-primary rounded-2xl shadow-xl w-full max-w-lg border border-line-subtle flex flex-col max-h-[92vh]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-line-subtle shrink-0">
           <h3 className="text-sm font-semibold text-ink-primary">
             {isNew ? 'Nuevo gasto indirecto' : `Editar · ${item.name}`}
           </h3>
@@ -104,7 +104,7 @@ function ItemModal({ item, onClose, onSaved }) {
           </button>
         </div>
 
-        <div className="p-5 flex flex-col gap-4">
+        <div className="p-5 flex flex-col gap-4 overflow-y-auto min-h-0">
           {error && <div className="bg-status-danger/10 border border-status-danger/40 rounded-lg px-3 py-2 text-sm text-status-danger">{error}</div>}
 
           <div className="grid grid-cols-2 gap-3">
@@ -190,7 +190,7 @@ function ItemModal({ item, onClose, onSaved }) {
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-line-subtle">
+        <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-line-subtle shrink-0">
           <button onClick={onClose} className="btn-ghost btn-sm">Cancelar</button>
           <button onClick={() => mut.mutate()} disabled={mut.isPending || !form.code || !form.name} className="btn-primary btn-sm">
             {mut.isPending ? <Spinner className="w-3 h-3" /> : null}
