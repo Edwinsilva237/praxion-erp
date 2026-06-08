@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { overheadApi } from '@/api/overhead'
@@ -90,7 +91,7 @@ function ItemModal({ item, onClose, onSaved }) {
 
   const set = (f, v) => setForm(p => ({ ...p, [f]: v }))
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-bg-primary/80 backdrop-blur-sm">
       <div className="bg-surface-primary rounded-2xl shadow-xl w-full max-w-lg border border-line-subtle flex flex-col max-h-[92vh]">
         <div className="flex items-center justify-between px-5 py-4 border-b border-line-subtle shrink-0">
@@ -198,7 +199,8 @@ function ItemModal({ item, onClose, onSaved }) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
