@@ -14,6 +14,7 @@ const supplierInvoiceService  = require('./supplierInvoiceService')
 const cxpService              = require('./cxpService')
 const apAdvanceService        = require('./apAdvanceService')
 const supplierPriceService    = require('./supplierPriceService')
+const supplierReturnService   = require('./supplierReturnService')
 const attachmentService       = require('../attachments/attachmentService')
 const storage                 = require('../../utils/storage')
 const config                  = require('../../config')
@@ -50,6 +51,83 @@ router.use(tenantResolver)
 router.use(authGuard)
 router.use(requireActiveTenant)
 router.use(requireModule('purchases'))
+
+// ─── Devoluciones a proveedor (Fase 1) ───────────────────────────────────────
+const retErr = (res, next) => (err) => {
+  if (err.status) return res.status(err.status).json({ error: err.message })
+  next(err)
+}
+
+// Catálogo de motivos
+router.get('/return-reasons', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    res.json(await supplierReturnService.listReasons({
+      tenantId: req.tenant.id, includeInactive: req.query.includeInactive === 'true',
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
+router.post('/return-reasons', checkPermission('purchases', 'update'), async (req, res, next) => {
+  try {
+    res.status(201).json(await supplierReturnService.createReason({ tenantId: req.tenant.id, ...req.body }))
+  } catch (err) { retErr(res, next)(err) }
+})
+router.patch('/return-reasons/:id', checkPermission('purchases', 'update'), async (req, res, next) => {
+  try {
+    res.json(await supplierReturnService.updateReason({ tenantId: req.tenant.id, reasonId: req.params.id, ...req.body }))
+  } catch (err) { retErr(res, next)(err) }
+})
+
+// Lotes devolvibles (para el selector del front)
+router.get('/returnable-lots', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const { rawMaterialId, warehouseId, partnerId } = req.query
+    res.json(await supplierReturnService.listReturnableLots({
+      tenantId: req.tenant.id, rawMaterialId, warehouseId, partnerId,
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
+
+// Devoluciones
+router.get('/returns', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const { status, partnerId, from, to, page, limit } = req.query
+    res.json(await supplierReturnService.listReturns({
+      tenantId: req.tenant.id, status, partnerId, from, to,
+      page: page ? parseInt(page, 10) : 1, limit: limit ? parseInt(limit, 10) : 50,
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
+router.get('/returns/:id', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const ret = await supplierReturnService.getReturn({ tenantId: req.tenant.id, returnId: req.params.id })
+    if (!ret) return res.status(404).json({ error: 'Devolución no encontrada.' })
+    res.json(ret)
+  } catch (err) { retErr(res, next)(err) }
+})
+router.post('/returns', checkPermission('purchases', 'return'), async (req, res, next) => {
+  try {
+    res.status(201).json(await supplierReturnService.createReturn({
+      tenantId: req.tenant.id, ...req.body,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
+router.post('/returns/:id/confirm', checkPermission('purchases', 'return'), async (req, res, next) => {
+  try {
+    res.json(await supplierReturnService.confirmReturn({
+      tenantId: req.tenant.id, returnId: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
+router.post('/returns/:id/cancel', checkPermission('purchases', 'return'), async (req, res, next) => {
+  try {
+    res.json(await supplierReturnService.cancelReturn({
+      tenantId: req.tenant.id, returnId: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
 
 // ─── Precios por proveedor (precarga rápida de OC) ───────────────────────────
 

@@ -52,4 +52,16 @@ export const purchasesApi = {
   // ── Gastos (módulo de Gastos, Fase 1) ──────────────────────────────────
   listExpenses:  (p) => api.get(`${B}/expenses`, { params: p }).then(r => r.data),
   createExpense: (body) => api.post(`${B}/expenses`, body).then(r => r.data),
+
+  // ── Devoluciones a proveedor (Fase 1) ──────────────────────────────────
+  listReturnReasons: (includeInactive = false) =>
+    api.get(`${B}/return-reasons`, { params: includeInactive ? { includeInactive: 'true' } : {} }).then(r => r.data),
+  createReturnReason: (body) => api.post(`${B}/return-reasons`, body).then(r => r.data),
+  updateReturnReason: (id, body) => api.patch(`${B}/return-reasons/${id}`, body).then(r => r.data),
+  listReturnableLots: (params) => api.get(`${B}/returnable-lots`, { params }).then(r => r.data),
+  listReturns:   (p) => api.get(`${B}/returns`, { params: p }).then(r => r.data),
+  getReturn:     (id) => api.get(`${B}/returns/${id}`).then(r => r.data),
+  createReturn:  (body) => api.post(`${B}/returns`, body).then(r => r.data),
+  confirmReturn: (id) => api.post(`${B}/returns/${id}/confirm`).then(r => r.data),
+  cancelReturn:  (id) => api.post(`${B}/returns/${id}/cancel`).then(r => r.data),
 }

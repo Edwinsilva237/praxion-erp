@@ -28,6 +28,7 @@ const ConteosLista            = lazy(() => import('@/pages/Inventario/ConteosLis
 const ConteoDetalle           = lazy(() => import('@/pages/Inventario/ConteoDetalle'))
 const ComprasOrdenes          = lazy(() => import('@/pages/Compras/ComprasOrdenes'))
 const ComprasRecepciones      = lazy(() => import('@/pages/Compras/ComprasRecepciones'))
+const ComprasDevoluciones     = lazy(() => import('@/pages/Compras/Devoluciones'))
 const ComprasFacturas         = lazy(() => import('@/pages/Compras/ComprasFacturas'))
 const VentasPedidos           = lazy(() => import('@/pages/Ventas/VentasPedidos'))
 const VentasRemisiones        = lazy(() => import('@/pages/Ventas/VentasRemisiones'))
@@ -204,6 +205,7 @@ const router = createBrowserRouter([
       { path: '/remisiones/:id',      element: <VentasRemisiones /> },  // deep-link a una remisión
       { path: '/compras/ordenes',     element: <ComprasOrdenes /> },
       { path: '/compras/recepciones', element: <ComprasRecepciones /> },
+      { path: '/compras/devoluciones', element: <ComprasDevoluciones /> },
       { path: '/compras/facturas',    element: <ComprasFacturas /> },
       { path: '/facturacion',         element: <Facturacion /> },
       { path: '/facturacion/:id',     element: <Facturacion /> },       // deep-link a una factura
