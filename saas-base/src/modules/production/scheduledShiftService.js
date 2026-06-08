@@ -330,19 +330,28 @@ async function listScheduledShifts({ tenantId, operatorId, dateFrom, dateTo, sta
 
   const where = filters.length ? `AND ${filters.join(' AND ')}` : ''
 
+  // Una vez que el turno se ACTIVA (ss.shift_id no nulo), el operador/supervisor real
+  // vive en production_shifts y puede cambiar a media corrida (reemplazo de capturista).
+  // La cuadrícula debe mostrar a quien REALMENTE está en el turno, así que preferimos
+  // el operador de runtime (rop/rsv) y caemos al del plan (op/sv) solo si no hay turno
+  // activado. Esto también corrige turnos reemplazados antes de que el espejo existiera.
   const { rows } = await query(
     `SELECT ss.*,
             po.order_number, po.length_mm, po.quantity_packages,
             p.name  AS product_name, p.sku,
             r.resin_type,
-            op.full_name AS operator_name, op.email AS operator_email,
-            sv.full_name AS supervisor_name
+            COALESCE(rop.full_name, op.full_name) AS operator_name,
+            COALESCE(rop.email,     op.email)     AS operator_email,
+            COALESCE(rsv.full_name, sv.full_name) AS supervisor_name
      FROM scheduled_shifts ss
      LEFT JOIN production_orders po ON po.id = ss.production_order_id
      LEFT JOIN products p           ON p.id  = po.product_id
      LEFT JOIN raw_materials r      ON r.id  = po.raw_material_id
      JOIN users op             ON op.id = ss.operator_id
      JOIN users sv             ON sv.id = ss.supervisor_id
+     LEFT JOIN production_shifts ps ON ps.id = ss.shift_id
+     LEFT JOIN users rop            ON rop.id = ps.operator_id
+     LEFT JOIN users rsv            ON rsv.id = ps.supervisor_id
      WHERE ss.tenant_id = $1 ${where}
      ORDER BY ss.scheduled_date, ss.scheduled_start`,
     params

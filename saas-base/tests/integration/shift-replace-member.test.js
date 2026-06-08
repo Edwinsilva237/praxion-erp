@@ -121,6 +121,18 @@ describe('POST /shifts/:id/replace-member — reemplazar capturista en turno act
     expect(rows[0].supervisor_id).toBe(userB.id)
   })
 
+  test('La cuadrícula muestra el operador de RUNTIME aunque el plan tenga el viejo (caso reemplazo pre-fix)', async () => {
+    // Simula el estado previo al espejo: el plan apunta al saliente, el runtime al nuevo.
+    await withBypass(() => query(
+      `UPDATE scheduled_shifts SET operator_id=$1 WHERE shift_id=$2`, [sess.user.id, shift.id]
+    ))
+    const res = await client.get('/api/production/scheduled-shifts').expect(200)
+    const row = res.body.find(r => r.shift_id === shift.id)
+    expect(row).toBeTruthy()
+    // operator_name debe reflejar al de runtime (userB = 'Capturista Nuevo'), no al del plan.
+    expect(row.operator_name).toBe('Capturista Nuevo')
+  })
+
   test('El nuevo puede capturar y el anterior ya no (userCanActOnShift)', async () => {
     const { userCanActOnShift } = require('../../src/modules/production/shiftAuthService')
     expect(await userCanActOnShift({ shiftId: shift.id, userId: userB.id, capability: 'capture' })).toBe(true)
