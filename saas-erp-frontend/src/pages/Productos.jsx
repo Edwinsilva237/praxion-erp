@@ -406,13 +406,11 @@ function ProductModal({ product: initialProduct, cloneFrom = null, onClose }) {
                 'flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors',
                 field.value
                   ? 'bg-brand-500/10 border-brand-500/40'
-                  : 'bg-surface-primary border-line-subtle hover:bg-surface-elevated/40',
-                isEditing && 'cursor-default'
+                  : 'bg-surface-primary border-line-subtle hover:bg-surface-elevated/40'
               )}>
                 <input type="checkbox"
                   checked={!!field.value}
-                  onChange={e => !isEditing && field.onChange(e.target.checked)}
-                  disabled={isEditing}
+                  onChange={e => field.onChange(e.target.checked)}
                   className="w-4 h-4 accent-brand-600 mt-0.5" />
                 <span className="flex-1">
                   <span className={clsx('block text-sm font-medium',
@@ -424,7 +422,12 @@ function ProductModal({ product: initialProduct, cloneFrom = null, onClose }) {
                       ? 'Aparece en órdenes de producción y necesita receta de MP.'
                       : 'Solo se compra a proveedor para reventa — no genera órdenes de producción.'}
                   </span>
-                  {isEditing && <span className="block text-[10px] text-ink-muted mt-1 italic">No se puede cambiar después de crear.</span>}
+                  {isEditing && (
+                    <span className="block text-[10px] text-status-warning mt-1 italic">
+                      Si lo cambias, ajusta también su receta y especificaciones. (No se puede pasar a
+                      "reventa" un producto que ya tiene órdenes de producción.)
+                    </span>
+                  )}
                 </span>
               </label>
             )} />

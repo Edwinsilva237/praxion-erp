@@ -391,6 +391,28 @@ async function updateProduct({
 
     await assertValidSatUnitCode(client, satUnitCode)
 
+    // Cambiar de FABRICADO → reventa puede orfanar recetas/órdenes/producción.
+    // Se bloquea SOLO si el producto ya tiene órdenes de producción. La dirección
+    // segura (reventa → fabricado, p. ej. un producto que se marcó mal al crear)
+    // siempre se permite.
+    if (isProduced === false) {
+      const { rows: cur } = await client.query(
+        `SELECT is_produced FROM products WHERE id = $1 AND tenant_id = $2`,
+        [productId, tenantId]
+      )
+      if (cur[0]?.is_produced === true) {
+        const { rows: po } = await client.query(
+          `SELECT 1 FROM production_orders WHERE product_id = $1 LIMIT 1`,
+          [productId]
+        )
+        if (po[0]) {
+          throw createError(400,
+            'No se puede cambiar a "de reventa": el producto ya tiene órdenes de producción. ' +
+            'Si necesitas un producto de reventa, crea uno nuevo.')
+        }
+      }
+    }
+
     // Capturar la clave de unidad SAT anterior para propagarla a las
     // presentaciones que estaban en sincronía con ella (típicamente la default
     // que se auto-crea espejando al producto). Solo aplica cuando el caller
