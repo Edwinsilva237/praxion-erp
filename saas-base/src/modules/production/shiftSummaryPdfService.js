@@ -169,6 +169,21 @@ async function generateShiftSummaryPDF({ tenantId, summary }) {
       kv('Costo total del turno', `$${fmt(costs.totalCost, 2)}`, { bold: true, color: '#0C447C' })
       kv('Costo por pieza', `$${fmt(costs.costPerUnit, 4)}`, { bold: !hasMeters, color: '#0C447C' })
       if (hasMeters) kv('Costo por metro lineal', `$${fmt(costs.costPerMeter, 4)}`, { bold: true, color: '#0C447C' })
+
+      // Costo prorrateado por MEDIDA (mig 195) — solo si el turno fabricó varias.
+      // MP por peso, overhead por piezas, empaque por receta. El "costo por pieza"
+      // de arriba es el promedio del turno; aquí cada medida lleva el suyo real.
+      const pcs = (costs.productCosts || []).filter(p => p.units > 0)
+      if (pcs.length > 1) {
+        sep()
+        doc.fillColor(negro).fontSize(8.5).font('Helvetica-Bold')
+           .text('Costo por medida (prorrateado)', M + 6, y + 3, { width: W - 12 })
+        y += 16
+        pcs.forEach(p => {
+          const lbl = `  ${p.productName}${p.sku ? ` · ${p.sku}` : ''} — ${fmt(p.units, 0)} pza, ${fmt(p.totalKg, 1)} kg`
+          kv(lbl, `$${fmt(p.costPerUnit, 4)}/pza`)
+        })
+      }
     }
     y += 8
 

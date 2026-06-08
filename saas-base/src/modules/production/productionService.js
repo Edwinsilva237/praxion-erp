@@ -14,6 +14,7 @@ const { resolveScrapType, legacyScrapTypeFor, legacyDestinationFor,
         DESTINATION_LEGACY_MAP } = require('./scrapTypeResolver')  // §6b
 const { evaluateAbnormal } = require('./abnormalScrapEvaluator')  // §6b
 const { fetchAndComputeScrapProductCost } = require('./scrapCosting')  // costeo de merma por tipo
+const { allocateShiftCostByProduct } = require('./shiftCostAllocation')  // prorrateo costo por medida
 const { resolveQualityGrade } = require('./qualityGradeResolver')  // §6f
 const { userCanActOnShift, listShiftMembers, getHandoverResponsibleUserId } = require('./shiftAuthService')
 
@@ -4158,6 +4159,65 @@ async function validateShift({ tenantId, shiftId, approved, supervisorNotes, use
       [shiftId, shift.mp_real_kg, goodUnits, userId, supervisorNotes||null]
     )
 
+    // ── Prorrateo del costo por PRODUCTO (medida) — modelo mixto ──────────────
+    // Un turno puede fabricar varias medidas. Reparte el costo entre ellas: MP por
+    // peso, overhead por piezas, empaque por receta (ver shiftCostAllocation.js) y
+    // persiste el costo por SKU en shift_product_costs. Lo consume
+    // recordProductionValidation (abajo) para valuar cada entrada PT con el costo
+    // real de su medida. `cost_per_unit` del turno se conserva como promedio
+    // (2da calidad, retrocompat, turnos de un solo producto). No bloquea: si algo
+    // falla, el inventario cae al cost_per_unit del turno como antes.
+    try {
+      const { rows: prodGroups } = await client.query(
+        `WITH grp AS (
+           SELECT po.product_id,
+                  SUM(sp.quantity_units) AS units,
+                  SUM(sp.real_weight_kg) AS kg
+           FROM shift_progress sp
+           JOIN production_orders po ON po.id = sp.production_order_id
+           WHERE sp.shift_id = $1 AND sp.is_second_quality = false
+             AND po.product_id IS NOT NULL
+           GROUP BY po.product_id
+         )
+         SELECT g.product_id, g.units, g.kg,
+                COALESCE((
+                  SELECT SUM(
+                    (CASE WHEN yu.unit_type = 'count' THEN g.units ELSE g.kg END)
+                    / NULLIF(r.yield_quantity, 0) * rc.quantity * COALESCE(rm.cost_per_kg, 0))
+                  FROM recipes r
+                  JOIN tenant_units yu      ON yu.id = r.yield_unit_id
+                  JOIN recipe_components rc ON rc.recipe_id = r.id
+                  JOIN raw_materials rm     ON rm.id = rc.raw_material_id AND rm.item_kind = 'packaging'
+                  WHERE r.product_id = g.product_id AND r.tenant_id = $2 AND r.valid_until IS NULL
+                ), 0) AS packaging_cost
+         FROM grp g`,
+        [shiftId, tenantId]
+      )
+
+      const productCosts = allocateShiftCostByProduct(
+        prodGroups.map(r => ({
+          productId: r.product_id, units: r.units, kg: r.kg, packagingCost: r.packaging_cost,
+        })),
+        { avgCostPerKg, overheadCost, costGrade1 }
+      )
+
+      await client.query(`DELETE FROM shift_product_costs WHERE shift_id = $1`, [shiftId])
+      for (const pc of productCosts) {
+        if (!pc.productId) continue
+        await client.query(
+          `INSERT INTO shift_product_costs
+             (tenant_id, shift_id, product_id, units, total_kg, mp_cost, overhead_cost,
+              packaging_cost, total_cost, cost_per_unit)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [tenantId, shiftId, pc.productId, pc.units, pc.totalKg,
+           pc.mpCost.toFixed(4), pc.overheadCost.toFixed(4), pc.packagingCost.toFixed(4),
+           pc.totalCost.toFixed(4), pc.costPerUnit.toFixed(6)]
+        )
+      }
+    } catch (allocErr) {
+      console.warn('[costeo] prorrateo de costo por medida falló (no bloquea, inventario usa cost_per_unit del turno):', allocErr.message)
+    }
+
     // ── Movimientos de inventario automáticos ────────────────────────────────
     // MP consumida sale del almacén MP; PT producido entra al almacén PT
     try {
@@ -4343,6 +4403,32 @@ async function getShiftSummary({ tenantId, shiftId }) {
   }))
   const overheadTotal = overheadItems.reduce((s, o) => s + o.amount, 0)
 
+  // Costo prorrateado por PRODUCTO (medida) — modelo mixto (mig 195). Permite ver
+  // el costo real por SKU cuando el turno fabricó varias medidas. Una fila por
+  // producto cal-1; vacío para turnos previos a la migración.
+  const { rows: prodCostRows } = await query(
+    `SELECT spc.product_id, p.name AS product_name, p.sku,
+            spc.units, spc.total_kg, spc.mp_cost, spc.overhead_cost,
+            spc.packaging_cost, spc.total_cost, spc.cost_per_unit
+       FROM shift_product_costs spc
+       JOIN products p ON p.id = spc.product_id
+      WHERE spc.shift_id = $1
+      ORDER BY p.name`,
+    [shiftId]
+  )
+  const productCosts = prodCostRows.map(r => ({
+    productId:     r.product_id,
+    productName:   r.product_name,
+    sku:           r.sku,
+    units:         parseFloat(r.units || 0),
+    totalKg:       parseFloat(parseFloat(r.total_kg || 0).toFixed(3)),
+    mpCost:        parseFloat(parseFloat(r.mp_cost || 0).toFixed(4)),
+    overheadCost:  parseFloat(parseFloat(r.overhead_cost || 0).toFixed(4)),
+    packagingCost: parseFloat(parseFloat(r.packaging_cost || 0).toFixed(4)),
+    totalCost:     parseFloat(parseFloat(r.total_cost || 0).toFixed(4)),
+    costPerUnit:   parseFloat(parseFloat(r.cost_per_unit || 0).toFixed(4)),
+  }))
+
   // Empaque (bolsa/etiqueta/caja) desde la receta vigente, escalado por la
   // producción real del turno. 0 si el producto no tiene receta con empaque.
   const packagingCost = await computeShiftPackagingCost(query, { shiftId, tenantId })
@@ -4515,6 +4601,9 @@ async function getShiftSummary({ tenantId, shiftId }) {
       nrvLowerGrades:   parseFloat(nrvLowerGrades.toFixed(4)),
       nrvWarning,
       costGrade1:       parseFloat(costGrade1.toFixed(4)),
+      // Costo prorrateado por medida (mig 195) — modelo mixto. Una fila por SKU
+      // cal-1. El frontend/PDF lo muestran cuando hay más de un producto.
+      productCosts,
     },
     incidents,
     formulaChanges,

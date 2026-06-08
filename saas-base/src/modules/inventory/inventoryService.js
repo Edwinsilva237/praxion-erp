@@ -366,6 +366,10 @@ async function recordProductionValidation(client, { tenantId, shift, userId }) {
   const ref = { referenceType: 'production_shift', referenceId: shift.id }
 
   // Grupos de PT producido en el turno (producto × calidad) con su costo unitario.
+  // cal-1: usa el costo prorrateado POR MEDIDA (shift_product_costs) cuando existe
+  // — así cada SKU entra al inventario con el costo real de su medida (mig 195).
+  // Fallback al cost_per_unit del turno: turnos viejos sin prorrateo, 2da calidad,
+  // o si la asignación por medida falló.
   const { rows: pkgGroups } = await client.query(
     `SELECT
        CASE
@@ -375,10 +379,15 @@ async function recordProductionValidation(client, { tenantId, shift, userId }) {
        END AS product_id,
        sp.is_second_quality,
        SUM(sp.quantity_units) AS total_units,
-       ps.cost_per_unit
+       ps.cost_per_unit          AS shift_cost_per_unit,
+       MAX(spc.cost_per_unit)    AS product_cost_per_unit
      FROM shift_progress sp
      JOIN production_orders po ON po.id = sp.production_order_id
      JOIN production_shifts  ps ON ps.id = sp.shift_id
+     LEFT JOIN shift_product_costs spc
+            ON spc.shift_id = sp.shift_id
+           AND spc.product_id = po.product_id
+           AND sp.is_second_quality = false
      WHERE sp.shift_id = $1
      GROUP BY
        CASE WHEN sp.is_second_quality AND sp.second_quality_product_id IS NOT NULL
@@ -387,11 +396,18 @@ async function recordProductionValidation(client, { tenantId, shift, userId }) {
     [shift.id]
   )
 
+  // Costo unitario efectivo de un grupo: el prorrateado por medida (cal-1) o, si
+  // no hay, el promedio del turno (2da calidad / turnos previos a mig 195).
+  const effectiveCostUnit = (grp) =>
+    (!grp.is_second_quality && grp.product_cost_per_unit != null)
+      ? parseFloat(grp.product_cost_per_unit)
+      : parseFloat(grp.shift_cost_per_unit || 0)
+
   if (ptGoesToWipFirst) {
     for (const grp of pkgGroups) {
       if (!grp.product_id || !grp.total_units) continue
       const units    = parseFloat(grp.total_units)
-      const costUnit = parseFloat(grp.cost_per_unit || 0)
+      const costUnit = effectiveCostUnit(grp)
       const isSecond = grp.is_second_quality
       const label    = isSecond ? 'Calidad 2' : 'Calidad 1'
       const ptStatus = isSecond ? 'blocked' : 'available'
@@ -439,7 +455,7 @@ async function recordProductionValidation(client, { tenantId, shift, userId }) {
     // el promedio resultante puede quedar ligeramente alto sobre el remanente.
     for (const grp of pkgGroups) {
       if (!grp.product_id || !grp.total_units) continue
-      const costUnit = parseFloat(grp.cost_per_unit || 0)
+      const costUnit = effectiveCostUnit(grp)
       if (costUnit <= 0) continue
       const ptStatus = grp.is_second_quality ? 'blocked' : 'available'
 

@@ -485,6 +485,26 @@ export default function ProduccionResumen() {
         {hasMeters && (
           <Row label="Costo por metro lineal" value={`$${fmt(costs.costPerMeter,4)}`} valueColor="#0C447C" bold />
         )}
+
+        {/* Costo prorrateado por medida (mig 195) — solo si el turno fabricó varias.
+            MP por peso, overhead por piezas, empaque por receta. El "costo por pieza"
+            de arriba es el promedio del turno; aquí cada medida lleva el suyo real. */}
+        {(costs.productCosts || []).filter(p => p.units > 0).length > 1 && (
+          <>
+            <Divider />
+            <p style={{ fontSize:12, fontWeight:600, color:'var(--color-text-primary)', margin:'2px 0 6px' }}>
+              Costo por medida (prorrateado)
+            </p>
+            {(costs.productCosts || []).filter(p => p.units > 0).map((p) => (
+              <Row
+                key={p.productId}
+                label={`${p.productName}${p.sku ? ` · ${p.sku}` : ''} — ${fmt(p.units,0)} pza, ${fmt(p.totalKg,1)} kg`}
+                value={`$${fmt(p.costPerUnit,4)}/pza`}
+                valueColor="#0C447C"
+              />
+            ))}
+          </>
+        )}
       </Section>
 
       {/* Incidencias */}

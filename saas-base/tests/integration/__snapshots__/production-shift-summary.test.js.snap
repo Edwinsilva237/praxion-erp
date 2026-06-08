@@ -24,6 +24,7 @@ exports[`Golden master: GET /api/production/shifts/:id/summary Devuelve resumen 
     "overheadItems": [],
     "overheadTotal": 0,
     "packagingCost": 0,
+    "productCosts": [],
     "ptKg": 7.5,
     "reprocessFactor": 20,
     "scrapCapturedKg": 0,
