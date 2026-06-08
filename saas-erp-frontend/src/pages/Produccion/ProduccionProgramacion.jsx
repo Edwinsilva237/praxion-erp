@@ -897,8 +897,8 @@ function ActiveShiftHandoverModal({ shift, users = [], onClose }) {
     enabled:  !!shift.shift_id,
   })
 
-  const currentResponsible = members.find(m => m.is_handover_responsible)
   const activeMembers = members.filter(m => m.left_at === null)
+  const currentResponsible = activeMembers.find(m => m.is_handover_responsible)
   const activeUserIds = new Set(activeMembers.map(m => m.user_id))
   const candidateUsers = (users || []).filter(u => !activeUserIds.has(u.id))
 
@@ -967,11 +967,11 @@ function ActiveShiftHandoverModal({ shift, users = [], onClose }) {
 
           {isLoading ? (
             <div className="flex justify-center py-8"><Spinner /></div>
-          ) : members.length === 0 ? (
+          ) : activeMembers.length === 0 ? (
             <p className="text-sm text-ink-muted text-center py-4">Este turno no tiene miembros activos.</p>
           ) : (
             <div className="space-y-1.5">
-              {members.map(m => {
+              {activeMembers.map(m => {
                 const checked = m.is_handover_responsible
                 return (
                   <label key={m.id}

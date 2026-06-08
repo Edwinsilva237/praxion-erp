@@ -258,13 +258,47 @@ async function replaceShiftMember({ tenantId, shiftId, memberId, newUserId, user
     )
     const incoming = inRows[0]
 
-    // 7) Reapuntar columnas legacy si el saliente las ocupaba (o conservaría acceso).
+    // 7) Reapuntar columnas legacy si el saliente las ocupaba (si no, conservaría
+    //    acceso por el path legacy). Se espeja al scheduled_shift LIGADO porque la
+    //    cuadrícula de Programación muestra operator_name desde scheduled_shifts.operator_id
+    //    (no desde production_shifts) — sin esto la cuadrícula seguiría marcando al saliente.
     if (shift.operator_id === outgoing.user_id) {
       await client.query(`UPDATE production_shifts SET operator_id = $1 WHERE id = $2`, [newUserId, shiftId])
+      await client.query(
+        `UPDATE scheduled_shifts SET operator_id = $1 WHERE shift_id = $2 AND operator_id = $3`,
+        [newUserId, shiftId, outgoing.user_id]
+      )
     }
     if (shift.supervisor_id === outgoing.user_id) {
       await client.query(`UPDATE production_shifts SET supervisor_id = $1 WHERE id = $2`, [newUserId, shiftId])
+      await client.query(
+        `UPDATE scheduled_shifts SET supervisor_id = $1 WHERE shift_id = $2 AND supervisor_id = $3`,
+        [newUserId, shiftId, outgoing.user_id]
+      )
     }
+
+    // 7b) Espejar el miembro en scheduled_shift_members (el "plan" del turno ligado),
+    //     para que cualquier vista que lo lea quede consistente. Best-effort: si el
+    //     entrante ya estuviera ahí, se omite (no rompe el reemplazo de runtime).
+    try {
+      const { rows: ss } = await client.query(
+        `SELECT id FROM scheduled_shifts WHERE shift_id = $1 LIMIT 1`, [shiftId]
+      )
+      if (ss[0]) {
+        const dup = await client.query(
+          `SELECT 1 FROM scheduled_shift_members WHERE scheduled_shift_id = $1 AND user_id = $2 LIMIT 1`,
+          [ss[0].id, newUserId]
+        )
+        if (!dup.rows[0]) {
+          await client.query(
+            `UPDATE scheduled_shift_members
+                SET user_id = $1, is_handover_responsible = $2
+              WHERE scheduled_shift_id = $3 AND user_id = $4 AND role_id = $5`,
+            [newUserId, wasHandover, ss[0].id, outgoing.user_id, outgoing.role_id]
+          )
+        }
+      }
+    } catch (_) { /* el plan ligado es secundario; el runtime ya quedó correcto */ }
 
     await audit({
       tenantId, userId,

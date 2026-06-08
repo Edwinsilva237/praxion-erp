@@ -12,7 +12,7 @@
  */
 
 const { createTenant, loginAs, authedClient, cleanupTestTenants } = require('../helpers/factory')
-const { openShift } = require('../helpers/productionFactory')
+const { openShift, createRawMaterial, createProduct, createOrder } = require('../helpers/productionFactory')
 const { pool, query, withBypass } = require('../../src/db')
 
 afterAll(async () => {
@@ -66,6 +66,18 @@ describe('POST /shifts/:id/replace-member — reemplazar capturista en turno act
        VALUES ($1, $2, $3, true)`,
       [shift.id, sess.user.id, captRoleId]
     ))
+
+    // scheduled_shift ligado (la cuadrícula lee operator_name de aquí). Necesita una orden.
+    const rm = await createRawMaterial(client, { name: uniq('MP') })
+    const product = await createProduct(client, { sku: uniq('SKU') })
+    const order = await createOrder(client, { productId: product.id, rawMaterialId: rm.id, quantityPackages: 5 })
+    await withBypass(() => query(
+      `INSERT INTO scheduled_shifts
+         (tenant_id, production_order_id, shift_number, scheduled_date, scheduled_start,
+          operator_id, supervisor_id, line_id, status, shift_id)
+       VALUES ($1, $2, '1', CURRENT_DATE, '08:00', $3, $3, 1, 'active', $4)`,
+      [tenantId, order.id, sess.user.id, shift.id]
+    ))
   })
 
   async function activeMemberId(userId) {
@@ -99,6 +111,14 @@ describe('POST /shifts/:id/replace-member — reemplazar capturista en turno act
       `SELECT operator_id FROM production_shifts WHERE id=$1`, [shift.id]
     ))
     expect(rows[0].operator_id).toBe(userB.id)
+  })
+
+  test('scheduled_shifts.operator_id (fuente de la cuadrícula) también se reapunta', async () => {
+    const { rows } = await withBypass(() => query(
+      `SELECT operator_id, supervisor_id FROM scheduled_shifts WHERE shift_id=$1`, [shift.id]
+    ))
+    expect(rows[0].operator_id).toBe(userB.id)
+    expect(rows[0].supervisor_id).toBe(userB.id)
   })
 
   test('El nuevo puede capturar y el anterior ya no (userCanActOnShift)', async () => {
