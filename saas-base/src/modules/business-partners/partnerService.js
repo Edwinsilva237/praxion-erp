@@ -180,6 +180,7 @@ async function updatePartner({
   supplierBankName, supplierAccountHolder, supplierAccountNumber,
   supplierClabe, supplierSwift,
   website, supplierRating,
+  contacts,
   userId, ipAddress, userAgent,
 }) {
   const resolvedPersonType = rfc ? (rfc.length === 13 ? 'fisica' : 'moral') : null
@@ -192,7 +193,8 @@ async function updatePartner({
   // a null para que COALESCE en la query lo trate como "no tocar el campo".
   const numericOrNull = (v) => (v === '' || v == null ? null : v)
 
-  const { rows } = await query(
+  return withTransaction(async (client) => {
+  const { rows } = await client.query(
     `UPDATE business_partners SET
        name             = COALESCE($1,  name),
        rfc              = COALESCE($2,  rfc),
@@ -259,6 +261,34 @@ async function updatePartner({
   )
   if (rows.length === 0) return null
 
+  // Sync de contactos: el form de EDICIÓN manda el arreglo COMPLETO (sin ids) como
+  // fuente de verdad. Antes updatePartner no recibía `contacts` → editar contactos
+  // de un cliente no guardaba nada (solo createPartner los insertaba). Reemplazo
+  // total (delete+insert). Solo si `contacts` viene definido: otros flujos (p. ej.
+  // togglear is_active) NO lo mandan y no deben borrar los contactos existentes.
+  // billing_contact_id (FK ON DELETE SET NULL) no se usa en ningún flujo, así que el
+  // borrado no rompe nada.
+  if (Array.isArray(contacts)) {
+    await client.query(
+      `DELETE FROM business_partner_contacts WHERE business_partner_id = $1`,
+      [partnerId]
+    )
+    let primaryUsed = false
+    for (const c of contacts) {
+      if (!c || !c.name) continue   // nombre es obligatorio (schema del form)
+      // Booleano explícito: c.isPrimary suele venir undefined → `undefined && x`
+      // es undefined → NULL → viola el NOT NULL de is_primary.
+      const isPrimary = c.isPrimary === true && !primaryUsed
+      if (isPrimary) primaryUsed = true
+      await client.query(
+        `INSERT INTO business_partner_contacts
+           (business_partner_id, name, position, email, phone, is_primary)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [partnerId, c.name, c.position || null, c.email || null, c.phone || null, isPrimary]
+      )
+    }
+  }
+
   await audit({
     tenantId, userId, action: 'business_partner.updated',
     resource: 'business_partners', resourceId: partnerId,
@@ -266,6 +296,7 @@ async function updatePartner({
   })
 
   return rows[0]
+  })
 }
 
 // ─── Contactos ───────────────────────────────────────────────────────────────
