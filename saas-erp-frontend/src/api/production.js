@@ -86,6 +86,9 @@ export const productionApi = {
   listShiftMembers:     (shiftId) => api.get(`${BASE}/shifts/${shiftId}/members`).then(r => r.data),
   setHandoverResponsible: (shiftId, memberId) =>
     api.post(`${BASE}/shifts/${shiftId}/set-handover-responsible`, { memberId }).then(r => r.data),
+  // Reemplazar un miembro (capturista u otro rol) de un turno YA ACTIVO por otro usuario.
+  replaceShiftMember: (shiftId, { memberId, newUserId }) =>
+    api.post(`${BASE}/shifts/${shiftId}/replace-member`, { memberId, newUserId }).then(r => r.data),
 
   // Reversión de validación (mig 163)
   getRevertContext: (shiftId) => api.get(`${BASE}/shifts/${shiftId}/revert-context`).then(r => r.data),

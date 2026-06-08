@@ -315,6 +315,24 @@ router.post('/shifts/:id/set-handover-responsible', checkPermission('production'
     next(err)
   }
 })
+
+// Reemplazar un miembro (capturista u otro rol) de un turno YA ACTIVO por otro
+// usuario, conservando el rol. El saliente queda con left_at; el entrante hereda
+// el rol y la responsabilidad de handover. Body: { memberId, newUserId }.
+router.post('/shifts/:id/replace-member', checkPermission('production','update'), async (req,res,next) => {
+  try {
+    const { replaceShiftMember } = require('./shiftAuthService')
+    const { memberId, newUserId } = req.body || {}
+    const result = await replaceShiftMember({
+      tenantId: tid(req), shiftId: req.params.id, memberId, newUserId,
+      userId: uid(req), ipAddress: ip(req), userAgent: ua(req),
+    })
+    res.json(result)
+  } catch(err){
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
 router.post('/shifts', checkPermission('production','create'), async (req,res,next) => {
   try {
     const { lineId,shiftNumber,shiftDate,operatorId,supervisorId } = req.body

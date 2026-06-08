@@ -889,7 +889,7 @@ function NuevoTurnoModal({ defaultShift, defaultDate, orders, users, shiftRoles 
 // El supervisor reasigna al responsable si el designado original falta o se va
 // antes del cierre. Cualquier miembro activo del turno puede ser designado —
 // el backend no filtra por can_handover en la designación.
-function ActiveShiftHandoverModal({ shift, onClose }) {
+function ActiveShiftHandoverModal({ shift, users = [], onClose }) {
   const qc = useQueryClient()
   const { data: members = [], isLoading } = useQuery({
     queryKey: ['shift-members', shift.shift_id],
@@ -898,12 +898,30 @@ function ActiveShiftHandoverModal({ shift, onClose }) {
   })
 
   const currentResponsible = members.find(m => m.is_handover_responsible)
+  const activeMembers = members.filter(m => m.left_at === null)
+  const activeUserIds = new Set(activeMembers.map(m => m.user_id))
+  const candidateUsers = (users || []).filter(u => !activeUserIds.has(u.id))
+
+  const [replaceMemberId, setReplaceMemberId] = useState('')
+  const [replaceNewUserId, setReplaceNewUserId] = useState('')
 
   const mutation = useMutation({
     mutationFn: (memberId) => productionApi.setHandoverResponsible(shift.shift_id, memberId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['shift-members', shift.shift_id] })
       qc.invalidateQueries({ queryKey: ['scheduled-shifts'] })
+    },
+  })
+
+  // Reemplazar un miembro (capturista u otro) por otra persona sin cerrar el turno.
+  const replaceMut = useMutation({
+    mutationFn: () => productionApi.replaceShiftMember(shift.shift_id, {
+      memberId: replaceMemberId, newUserId: replaceNewUserId,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['shift-members', shift.shift_id] })
+      qc.invalidateQueries({ queryKey: ['scheduled-shifts'] })
+      setReplaceMemberId(''); setReplaceNewUserId('')
     },
   })
 
@@ -929,9 +947,9 @@ function ActiveShiftHandoverModal({ shift, onClose }) {
       <div className="card w-full max-w-md p-0 flex flex-col max-h-[90vh] overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b border-line-subtle shrink-0">
           <div>
-            <h2 className="text-base font-semibold text-ink-primary">Responsable del handover</h2>
+            <h2 className="text-base font-semibold text-ink-primary">Equipo del turno activo</h2>
             <p className="text-xs text-ink-muted mt-0.5">
-              Turno {shift.shift_number} · {shift.scheduled_date?.slice(0,10)}
+              Turno {shift.shift_number} · {shift.scheduled_date?.slice(0,10)} · responsable de handover y reemplazo de miembros
             </p>
           </div>
           <button onClick={onClose} className="btn-ghost btn-icon text-ink-muted">
@@ -992,6 +1010,46 @@ function ActiveShiftHandoverModal({ shift, onClose }) {
           {mutation.isError && (
             <div className="rounded-lg border border-status-danger/40 bg-status-danger/10 p-3 text-sm text-status-danger">
               {mutation.error?.response?.data?.error || mutation.error?.message || 'No se pudo actualizar.'}
+            </div>
+          )}
+
+          {/* Reemplazar un miembro (capturista u otro) sin cerrar el turno. */}
+          {activeMembers.length > 0 && (
+            <div className="border-t border-line-subtle pt-3 mt-1 flex flex-col gap-2">
+              <p className="text-xs font-semibold text-ink-secondary">Reemplazar un miembro</p>
+              <p className="text-[11px] text-ink-muted">
+                Cambia al capturista (u otro miembro) por otra persona sin cerrar el turno. El saliente deja de
+                capturar; el nuevo continúa con el mismo rol. Lo ya capturado se queda en este turno.
+              </p>
+              <select className="select" value={replaceMemberId}
+                      onChange={e => setReplaceMemberId(e.target.value)}>
+                <option value="">¿A quién reemplazas?</option>
+                {activeMembers.map(m => (
+                  <option key={m.id} value={m.id}>{m.user_name} · {m.role_name}</option>
+                ))}
+              </select>
+              <select className="select" value={replaceNewUserId}
+                      onChange={e => setReplaceNewUserId(e.target.value)} disabled={!replaceMemberId}>
+                <option value="">¿Quién entra?</option>
+                {candidateUsers.map(u => (
+                  <option key={u.id} value={u.id}>{u.full_name}</option>
+                ))}
+              </select>
+              <button
+                onClick={() => replaceMut.mutate()}
+                disabled={!replaceMemberId || !replaceNewUserId || replaceMut.isPending}
+                className="btn-secondary btn-sm self-start"
+              >
+                {replaceMut.isPending ? <Spinner size="sm" /> : 'Reemplazar'}
+              </button>
+              {replaceMut.isError && (
+                <p className="text-xs text-status-danger">
+                  {replaceMut.error?.response?.data?.error || 'No se pudo reemplazar.'}
+                </p>
+              )}
+              {replaceMut.isSuccess && (
+                <p className="text-xs text-status-success">Miembro reemplazado.</p>
+              )}
             </div>
           )}
         </div>
@@ -1456,6 +1514,7 @@ export default function ProduccionProgramacion() {
       {activeHandover && (
         <ActiveShiftHandoverModal
           shift={activeHandover}
+          users={users}
           onClose={() => setActiveHandover(null)}
         />
       )}

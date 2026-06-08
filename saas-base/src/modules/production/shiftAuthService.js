@@ -1,6 +1,7 @@
 'use strict'
 
-const { query } = require('../../db')
+const { query, withTransaction } = require('../../db')
+const { audit } = require('../../utils/audit')
 
 /**
  * SaaS v2 — Autorización por rol del turno (runtime).
@@ -168,9 +169,129 @@ async function listShiftMembers({ shiftId, client } = {}) {
   return rows
 }
 
+/**
+ * Reemplaza un MIEMBRO de un turno de runtime (capturista u otro rol) por otro
+ * usuario, conservando el rol — útil cuando el turno YA inició y el capturista
+ * cambia a media corrida (se fue, se enfermó, se asignó por error).
+ *
+ * Qué hace, atómicamente:
+ *   1. Valida que el turno esté en runtime ('active' | 'pending_handover').
+ *   2. Marca al saliente con left_at = NOW() (deja de poder capturar) y le quita
+ *      la responsabilidad de handover.
+ *   3. Da de alta al entrante con el MISMO rol; hereda la responsabilidad de
+ *      handover si el saliente la tenía.
+ *   4. Si el saliente era el operator_id / supervisor_id legacy de production_shifts,
+ *      reapunta esa columna al entrante. CRÍTICO: userCanActOnShift autoriza por el
+ *      path legacy (operator_id), así que sin esto el saliente CONSERVARÍA el acceso
+ *      a capturar y el entrante solo entraría por el path de miembros.
+ *
+ * Lo ya capturado queda atribuido al TURNO (no se reescribe): el cambio rige de
+ * aquí en adelante.
+ *
+ * @returns {{ outgoing, incoming, members, roleName }}
+ */
+async function replaceShiftMember({ tenantId, shiftId, memberId, newUserId, userId, ipAddress, userAgent } = {}) {
+  if (!memberId)  { const e = new Error('memberId es requerido.');  e.status = 400; throw e }
+  if (!newUserId) { const e = new Error('newUserId es requerido.'); e.status = 400; throw e }
+
+  return withTransaction(async (client) => {
+    // 1) Turno en runtime
+    const { rows: shiftRows } = await client.query(
+      `SELECT id, status, operator_id, supervisor_id, shift_number
+         FROM production_shifts WHERE id = $1 AND tenant_id = $2`,
+      [shiftId, tenantId]
+    )
+    const shift = shiftRows[0]
+    if (!shift) { const e = new Error('Turno no encontrado.'); e.status = 404; throw e }
+    if (!['active', 'pending_handover'].includes(shift.status)) {
+      const e = new Error('Solo se puede reemplazar un miembro mientras el turno está activo o en relevo. Si ya cerró, usa la reversión/programación.')
+      e.status = 400; throw e
+    }
+
+    // 2) Miembro saliente (activo)
+    const { rows: outRows } = await client.query(
+      `SELECT m.id, m.user_id, m.role_id, m.is_handover_responsible,
+              u.full_name AS user_name, r.name AS role_name
+         FROM production_shift_members m
+         JOIN users u              ON u.id = m.user_id
+         JOIN tenant_shift_roles r ON r.id = m.role_id
+        WHERE m.id = $1 AND m.shift_id = $2 AND m.left_at IS NULL`,
+      [memberId, shiftId]
+    )
+    const outgoing = outRows[0]
+    if (!outgoing) { const e = new Error('El miembro indicado no pertenece a este turno o ya salió.'); e.status = 400; throw e }
+    if (newUserId === outgoing.user_id) {
+      const e = new Error('El nuevo usuario es el mismo que el actual.'); e.status = 400; throw e
+    }
+
+    // 3) Entrante válido (mismo tenant, activo)
+    const { rows: userRows } = await client.query(
+      `SELECT id, full_name FROM users WHERE id = $1 AND tenant_id = $2 AND is_active = true`,
+      [newUserId, tenantId]
+    )
+    const incomingUser = userRows[0]
+    if (!incomingUser) { const e = new Error('El nuevo usuario no existe, está inactivo o no pertenece a esta empresa.'); e.status = 400; throw e }
+
+    // 4) Que el entrante no sea ya miembro activo (evita duplicado)
+    const { rows: dup } = await client.query(
+      `SELECT 1 FROM production_shift_members
+        WHERE shift_id = $1 AND user_id = $2 AND left_at IS NULL LIMIT 1`,
+      [shiftId, newUserId]
+    )
+    if (dup[0]) { const e = new Error(`${incomingUser.full_name} ya es miembro activo de este turno.`); e.status = 400; throw e }
+
+    // 5) Saliente → left_at + soltar handover (el índice único filtra left_at IS NULL;
+    //    lo soltamos explícito por limpieza).
+    const wasHandover = outgoing.is_handover_responsible === true
+    await client.query(
+      `UPDATE production_shift_members
+          SET left_at = NOW(), is_handover_responsible = false
+        WHERE id = $1`,
+      [memberId]
+    )
+
+    // 6) Entrante con el mismo rol; hereda handover si el saliente lo tenía.
+    const { rows: inRows } = await client.query(
+      `INSERT INTO production_shift_members (shift_id, user_id, role_id, is_handover_responsible)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [shiftId, newUserId, outgoing.role_id, wasHandover]
+    )
+    const incoming = inRows[0]
+
+    // 7) Reapuntar columnas legacy si el saliente las ocupaba (o conservaría acceso).
+    if (shift.operator_id === outgoing.user_id) {
+      await client.query(`UPDATE production_shifts SET operator_id = $1 WHERE id = $2`, [newUserId, shiftId])
+    }
+    if (shift.supervisor_id === outgoing.user_id) {
+      await client.query(`UPDATE production_shifts SET supervisor_id = $1 WHERE id = $2`, [newUserId, shiftId])
+    }
+
+    await audit({
+      tenantId, userId,
+      action: 'shift.member_replaced', resource: 'production_shifts', resourceId: shiftId,
+      payload: {
+        shiftNumber: shift.shift_number, roleName: outgoing.role_name,
+        outgoingUserId: outgoing.user_id, outgoingUserName: outgoing.user_name,
+        incomingUserId: newUserId, incomingUserName: incomingUser.full_name,
+        inheritedHandover: wasHandover,
+      },
+      ipAddress, userAgent,
+    })
+
+    const members = await listShiftMembers({ shiftId, client })
+    return {
+      outgoing: { memberId: outgoing.id, userId: outgoing.user_id, userName: outgoing.user_name },
+      incoming: { memberId: incoming.id, userId: newUserId, userName: incomingUser.full_name },
+      roleName: outgoing.role_name,
+      members,
+    }
+  })
+}
+
 module.exports = {
   userCanActOnShift,
   listShiftMembers,
   getHandoverResponsibleUserId,
   setHandoverResponsible,
+  replaceShiftMember,
 }
