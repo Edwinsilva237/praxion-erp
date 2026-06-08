@@ -177,8 +177,13 @@ const schema = z.object({
   autoSendRemission: z.boolean().optional(),
   billingNotes:      z.string().optional().or(z.literal('')),
 
-  // Contactos (array dinámico)
-  contacts: z.array(contactSchema).optional(),
+  // Contactos (array dinámico). Preprocess: descarta filas SIN nombre (típico:
+  // una fila vacía que quedó al pulsar "Agregar persona") para que no bloqueen el
+  // submit por el `name` requerido — las filas con nombre sí se validan y guardan.
+  contacts: z.preprocess(
+    (v) => Array.isArray(v) ? v.filter(c => c && String(c.name ?? '').trim() !== '') : v,
+    z.array(contactSchema).optional()
+  ),
 
   // Notas generales
   notes: z.string().optional().or(z.literal('')),
@@ -373,8 +378,17 @@ function PartnerModal({ partner: partnerStub, onClose, onSaved }) {
   // Cuando llega el detalle completo del partner (en edición), repoblar el form.
   // Sin esto, los campos que no vienen en el listado (taxName, cfdi_use, billing_notes, contacts, etc.)
   // quedan vacíos aunque estén guardados en BD.
+  //
+  // BUG (corregido): este efecto hacía reset() en CADA cambio de `partnerDetail`.
+  // Con refetchOnWindowFocus global, la query se re-consulta al volver a la ventana
+  // y devuelve un objeto nuevo → reset() BORRABA lo que el usuario estaba capturando
+  // sin guardar (típico al agregar VARIOS contactos: toma más tiempo → un refetch
+  // los borraba; uno solo alcanzaba a guardarse). Ahora reseteamos UNA sola vez por
+  // socio (cuando cambia el id), no en cada refetch.
+  const resetForPartnerId = useRef(null)
   useEffect(() => {
-    if (partnerDetail) {
+    if (partnerDetail && resetForPartnerId.current !== partnerDetail.id) {
+      resetForPartnerId.current = partnerDetail.id
       reset(partnerToFormValues(partnerDetail))
     }
   }, [partnerDetail, reset])
