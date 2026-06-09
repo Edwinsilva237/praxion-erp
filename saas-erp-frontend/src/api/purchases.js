@@ -64,4 +64,6 @@ export const purchasesApi = {
   createReturn:  (body) => api.post(`${B}/returns`, body).then(r => r.data),
   confirmReturn: (id) => api.post(`${B}/returns/${id}/confirm`).then(r => r.data),
   cancelReturn:  (id) => api.post(`${B}/returns/${id}/cancel`).then(r => r.data),
+  // Fase 2: resolución fiscal del CFDI (nota de crédito / cancelación / sustitución).
+  resolveReturn: (id, body) => api.post(`${B}/returns/${id}/resolve`, body).then(r => r.data),
 }

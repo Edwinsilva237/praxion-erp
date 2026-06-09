@@ -128,6 +128,21 @@ router.post('/returns/:id/cancel', checkPermission('purchases', 'return'), async
     }))
   } catch (err) { retErr(res, next)(err) }
 })
+// Fase 2: resolución fiscal (nota de crédito / cancelación / sustitución del CFDI).
+// Body: { resolution, supplierInvoiceId?, creditNote?, substitute?, notes? }
+router.post('/returns/:id/resolve', checkPermission('purchases', 'return'), async (req, res, next) => {
+  try {
+    res.json(await supplierReturnService.resolveFiscal({
+      tenantId: req.tenant.id, returnId: req.params.id, ...req.body,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    }))
+  } catch (err) {
+    if (err.code === '23505' && err.constraint?.includes('uuid_sat')) {
+      return res.status(409).json({ error: 'Ya existe una factura/nota de crédito con ese UUID SAT.' })
+    }
+    retErr(res, next)(err)
+  }
+})
 
 // ─── Precios por proveedor (precarga rápida de OC) ───────────────────────────
 

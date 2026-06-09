@@ -117,6 +117,7 @@ async function getIvaSnapshot(tenantId, from, to) {
      WHERE sp.tenant_id = $1
        AND si.uuid_sat IS NOT NULL
        AND si.status <> 'cancelled'
+       AND sp.method <> 'credit_note'
        AND sp.payment_date >= $2 AND sp.payment_date < $3
   `, [tenantId, from, to])
 

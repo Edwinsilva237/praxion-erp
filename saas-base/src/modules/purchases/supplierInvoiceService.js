@@ -40,8 +40,9 @@ async function registerInvoice({
   isExpense = false, expenseCategoryId = null,  // módulo de Gastos (Fase 1)
   paymentMethod = null,                         // forma de pago del gasto (mig 183)
   userId, ipAddress, userAgent,
+  client: existingClient,   // permite reusar la txn (p.ej. sustitución de devolución)
 }) {
-  return withTransaction(async (client) => {
+  const exec = async (client) => {
     // Validaciones básicas
     if (!documentNumber) throw createError(400, 'documentNumber es requerido.')
     if (!total || total <= 0) throw createError(400, 'total debe ser mayor a cero.')
@@ -229,7 +230,8 @@ async function registerInvoice({
       ap_id: apId,
       partner_credit_type: partnerCreditType,
     }
-  })
+  }
+  return existingClient ? exec(existingClient) : withTransaction(exec)
 }
 
 /**
@@ -241,6 +243,7 @@ async function listInvoices({ tenantId, type, status, supplierId, from, to, page
   const filters = []
 
   if (type)       { params.push(type);       filters.push(`si.type = $${params.length}`) }
+  else            { filters.push(`si.type <> 'credit_note'`) }   // las NC recibidas no son facturas por pagar
   if (status)     { params.push(status);     filters.push(`si.status = $${params.length}`) }
   if (supplierId) { params.push(supplierId); filters.push(`si.partner_id = $${params.length}`) }
   if (from)       { params.push(from);       filters.push(`si.invoice_date >= $${params.length}`) }
@@ -481,7 +484,7 @@ async function getSupplierStatement({ tenantId, supplierId, from, to }) {
               THEN true ELSE false END AS is_overdue
      FROM accounts_payable ap
      LEFT JOIN supplier_invoices si ON si.id = ap.document_id
-     WHERE ap.tenant_id = $1 AND ap.partner_id = $2 ${where}
+     WHERE ap.tenant_id = $1 AND ap.partner_id = $2 AND ap.status <> 'cancelled' ${where}
      ORDER BY ap.due_date ASC, ap.issue_date ASC`,
     params
   )
@@ -495,7 +498,7 @@ async function getSupplierStatement({ tenantId, supplierId, from, to }) {
        COUNT(*) FILTER (WHERE status = 'partial')  AS invoices_partial,
        COUNT(*) FILTER (WHERE due_date < CURRENT_DATE AND status NOT IN ('paid','cancelled')) AS invoices_overdue
      FROM accounts_payable
-     WHERE tenant_id = $1 AND partner_id = $2`,
+     WHERE tenant_id = $1 AND partner_id = $2 AND status <> 'cancelled'`,
     [tenantId, supplierId]
   )
 

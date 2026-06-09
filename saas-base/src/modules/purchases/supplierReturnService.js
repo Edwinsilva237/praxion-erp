@@ -20,6 +20,8 @@ const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
 const { recordMovement } = require('../inventory/inventoryService')
 const documentSeriesService = require('../document-series/documentSeriesService')
+const apAdvanceService = require('./apAdvanceService')
+const supplierInvoiceService = require('./supplierInvoiceService')
 
 function badReq(msg) { const e = new Error(msg); e.status = 400; return e }
 function notFound(msg) { const e = new Error(msg); e.status = 404; return e }
@@ -150,10 +152,18 @@ async function listReturns({ tenantId, status, partnerId, from, to, page = 1, li
 
 async function getReturn({ tenantId, returnId }) {
   const { rows } = await query(
-    `SELECT r.*, bp.name AS partner_name, rr.name AS reason_name
+    `SELECT r.*, bp.name AS partner_name, rr.name AS reason_name,
+            orig.invoice_number AS source_invoice_number,
+            cn.invoice_number   AS credit_note_number,   cn.uuid_sat AS credit_note_uuid,
+            xn.invoice_number   AS cancelled_invoice_number,
+            sub.invoice_number  AS substitute_invoice_number
        FROM supplier_returns r
        JOIN business_partners bp ON bp.id = r.partner_id
        LEFT JOIN tenant_return_reasons rr ON rr.id = r.reason_id
+       LEFT JOIN supplier_invoices orig ON orig.id = r.supplier_invoice_id
+       LEFT JOIN supplier_invoices cn   ON cn.id   = r.credit_note_invoice_id
+       LEFT JOIN supplier_invoices xn   ON xn.id   = r.cancelled_invoice_id
+       LEFT JOIN supplier_invoices sub  ON sub.id  = r.substitute_invoice_id
       WHERE r.id = $1 AND r.tenant_id = $2`,
     [returnId, tenantId]
   )
@@ -378,8 +388,283 @@ async function cancelReturn({ tenantId, returnId, userId, ipAddress, userAgent }
   })
 }
 
+// ─── Fase 2: Resolución fiscal ───────────────────────────────────────────────
+// Registra cómo el proveedor resuelve el CFDI de una devolución CONFIRMADA y
+// aplica su efecto en CXP / saldo a favor (IVA acreditable se ajusta solo en el
+// reporte al-cobro excluyendo los pagos method='credit_note'). NO toca inventario
+// (ya salió al confirmar la Fase 1).
+//
+//   credit_note  → registra la nota de crédito (CFDI de egreso recibido) y la
+//                  aplica contra la factura original (reduce la CXP); el excedente
+//                  o el total (si ya estaba pagada) genera un saldo a favor.
+//   cancellation → anula la factura original + su CXP; lo ya pagado → saldo a favor.
+//   substitution → anula la original y registra la nueva (con su propia CXP); lo ya
+//                  pagado → saldo a favor (aplicable a la nueva).
+const RESOLUTIONS = ['credit_note', 'cancellation', 'substitution']
+
+async function resolveFiscal({
+  tenantId, returnId, resolution,
+  supplierInvoiceId,   // factura original objetivo (default: la ligada en el return)
+  creditNote,          // { invoiceNumber, uuidSat, serie, folio, rfcEmisor, invoiceDate, subtotal, tax, total }
+  substitute,          // datos de la nueva factura (igual que registerInvoice)
+  notes,
+  userId, ipAddress, userAgent,
+}) {
+  if (!RESOLUTIONS.includes(resolution)) {
+    throw badReq('Resolución inválida (credit_note | cancellation | substitution).')
+  }
+
+  await withTransaction(async (client) => {
+    const { rows: hdr } = await client.query(
+      `SELECT * FROM supplier_returns WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+      [returnId, tenantId]
+    )
+    const ret = hdr[0]
+    if (!ret) throw notFound('Devolución no encontrada.')
+    if (ret.status !== 'confirmed') {
+      throw badReq('La devolución debe estar confirmada para registrar su resolución fiscal.')
+    }
+    if (ret.credit_status === 'resolved') {
+      throw badReq('Esta devolución ya tiene una resolución fiscal registrada.')
+    }
+
+    const targetInvoiceId = supplierInvoiceId || ret.supplier_invoice_id
+    if (!targetInvoiceId) {
+      throw badReq('Indica la factura del proveedor sobre la que aplica la resolución.')
+    }
+
+    // Factura original + su CXP.
+    const { rows: invRows } = await client.query(
+      `SELECT * FROM supplier_invoices WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+      [targetInvoiceId, tenantId]
+    )
+    const original = invRows[0]
+    if (!original) throw badReq('La factura del proveedor no existe.')
+    if (original.partner_id && original.partner_id !== ret.partner_id) {
+      throw badReq('La factura es de otro proveedor.')
+    }
+    const { rows: apRows } = await client.query(
+      `SELECT * FROM accounts_payable
+         WHERE tenant_id = $1 AND document_id = $2
+         ORDER BY created_at LIMIT 1 FOR UPDATE`,
+      [tenantId, targetInvoiceId]
+    )
+    const ap = apRows[0] || null
+
+    let creditNoteInvoiceId = null
+    let cancelledInvoiceId  = null
+    let substituteInvoiceId = null
+    let advance = null
+
+    if (resolution === 'credit_note') {
+      if (!creditNote || !(parseFloat(creditNote.total) > 0)) {
+        throw badReq('Captura los datos de la nota de crédito (total mayor a cero).')
+      }
+      const cn = await registerSupplierCreditNote(client, {
+        tenantId, partnerId: ret.partner_id, creditNote, userId, returnNumber: ret.return_number,
+      })
+      creditNoteInvoiceId = cn.id
+      const cnTotal = parseFloat(cn.total_mxn)
+
+      // Aplicar contra la factura original (no-efectivo) hasta agotar su saldo.
+      let applied = 0
+      if (ap && ap.status !== 'cancelled') {
+        applied = Math.min(cnTotal, parseFloat(ap.amount_pending))
+        if (applied > 0.005) {
+          await applyNonCashCredit(client, {
+            tenantId, ap, invoice: original, amount: applied, userId,
+            label: `Nota de crédito ${cn.invoice_number}`,
+          })
+        }
+      }
+      // Excedente (o el total, si ya estaba pagada) → saldo a favor.
+      const excess = parseFloat((cnTotal - applied).toFixed(2))
+      if (excess > 0.005) {
+        advance = await apAdvanceService.registerAdvance({
+          tenantId, partnerId: ret.partner_id, amount: excess,
+          currency: original.currency || 'MXN', paymentMethod: 'credit_note',
+          reference: cn.invoice_number,
+          notes: `Saldo a favor por nota de crédito ${cn.invoice_number} (devolución ${ret.return_number})`,
+          userId, ipAddress, userAgent, client,
+        })
+      }
+    } else if (resolution === 'cancellation') {
+      if (!ap) throw badReq('La factura original no tiene CXP para cancelar.')
+      cancelledInvoiceId = original.id
+      await voidInvoiceAndAp(client, { tenantId, invoice: original, ap })
+      const paid = parseFloat(ap.amount_paid)
+      if (paid > 0.005) {
+        advance = await apAdvanceService.registerAdvance({
+          tenantId, partnerId: ret.partner_id, amount: paid,
+          currency: ap.currency || 'MXN', paymentMethod: 'credit_note',
+          reference: original.invoice_number,
+          notes: `Saldo a favor por cancelación de ${original.invoice_number} (devolución ${ret.return_number})`,
+          userId, ipAddress, userAgent, client,
+        })
+      }
+    } else if (resolution === 'substitution') {
+      if (!substitute || !(parseFloat(substitute.total) > 0)) {
+        throw badReq('Captura los datos de la factura sustituta (total mayor a cero).')
+      }
+      cancelledInvoiceId = original.id
+      if (ap) {
+        await voidInvoiceAndAp(client, { tenantId, invoice: original, ap })
+      } else {
+        await client.query(
+          `UPDATE supplier_invoices SET status = 'cancelled', balance = 0 WHERE id = $1`,
+          [original.id]
+        )
+      }
+      // Nueva factura (con su propia CXP) dentro de la MISMA transacción.
+      const newInv = await supplierInvoiceService.registerInvoice({
+        tenantId, supplierId: ret.partner_id, documentType: 'invoice',
+        documentNumber: substitute.documentNumber || substitute.invoiceNumber,
+        uuidSat: substitute.uuidSat, serie: substitute.serie, folio: substitute.folio,
+        rfcEmisor: substitute.rfcEmisor, invoiceDate: substitute.invoiceDate,
+        currency: substitute.currency || original.currency || 'MXN',
+        subtotal: substitute.subtotal, tax: substitute.tax, total: substitute.total,
+        notes: `Sustituye a ${original.invoice_number} (devolución ${ret.return_number})`,
+        userId, ipAddress, userAgent, client,
+      })
+      substituteInvoiceId = newInv.id
+      await client.query(
+        `UPDATE supplier_invoices SET replaced_by_invoice_id = $1 WHERE id = $2`,
+        [newInv.id, original.id]
+      )
+      const paid = ap ? parseFloat(ap.amount_paid) : 0
+      if (paid > 0.005) {
+        advance = await apAdvanceService.registerAdvance({
+          tenantId, partnerId: ret.partner_id, amount: paid,
+          currency: ap.currency || 'MXN', paymentMethod: 'credit_note',
+          reference: original.invoice_number,
+          notes: `Traspaso por sustitución de ${original.invoice_number} → ${newInv.invoice_number} (devolución ${ret.return_number})`,
+          userId, ipAddress, userAgent, client,
+        })
+      }
+    }
+
+    await client.query(
+      `UPDATE supplier_returns
+          SET fiscal_resolution      = $1::supplier_return_fiscal_resolution,
+              credit_status          = 'resolved',
+              supplier_invoice_id    = COALESCE(supplier_invoice_id, $2),
+              credit_note_invoice_id = $3,
+              cancelled_invoice_id   = $4,
+              substitute_invoice_id  = $5,
+              notes = CASE WHEN $6::text IS NOT NULL AND $6 <> '' THEN $6 ELSE notes END
+        WHERE id = $7`,
+      [resolution, targetInvoiceId, creditNoteInvoiceId, cancelledInvoiceId,
+       substituteInvoiceId, notes || null, returnId]
+    )
+
+    await audit({
+      tenantId, userId, action: 'supplier_return.fiscal_resolved', resource: 'supplier_returns',
+      resourceId: returnId,
+      payload: {
+        returnNumber: ret.return_number, resolution, targetInvoiceId,
+        creditNoteInvoiceId, cancelledInvoiceId, substituteInvoiceId,
+        advanceId: advance?.id || null,
+      },
+      ipAddress, userAgent,
+    })
+  })
+  // getReturn usa el pool global → FUERA de la transacción (ya commiteada).
+  return getReturn({ tenantId, returnId })
+}
+
+// Registra la nota de crédito recibida como supplier_invoices type='credit_note'
+// (sin CXP propia: no se paga, solo reduce la original o genera saldo a favor).
+async function registerSupplierCreditNote(client, { tenantId, partnerId, creditNote, userId, returnNumber }) {
+  const total = parseFloat(creditNote.total)
+  const tax   = parseFloat(creditNote.tax || 0)
+  const subtotal = (creditNote.subtotal != null && creditNote.subtotal !== '')
+    ? parseFloat(creditNote.subtotal)
+    : parseFloat((total - tax).toFixed(2))
+  const number = creditNote.invoiceNumber || creditNote.documentNumber || `NC-${returnNumber}`
+
+  if (creditNote.uuidSat) {
+    const { rows: dup } = await client.query(
+      `SELECT id FROM supplier_invoices WHERE uuid_sat = $1`, [creditNote.uuidSat]
+    )
+    if (dup.length) throw badReq(`Ya existe una nota de crédito/factura con UUID ${creditNote.uuidSat}.`)
+  }
+
+  const issueDate = creditNote.invoiceDate || new Date().toISOString().split('T')[0]
+  const { rows } = await client.query(
+    `INSERT INTO supplier_invoices
+       (tenant_id, invoice_number, type, status, partner_id,
+        uuid_sat, xml_uuid, rfc_emisor, serie, folio,
+        currency, subtotal, tax, total, total_mxn, balance,
+        invoice_date, received_date, created_by, notes)
+     VALUES ($1,$2,'credit_note','pending',$3,
+             $4::uuid,$4::varchar,$5,$6,$7,
+             'MXN',$8,$9,$10,$10,0,
+             $11::date,$11::date,$12,$13)
+     RETURNING *`,
+    [tenantId, number, partnerId,
+     creditNote.uuidSat || null, creditNote.rfcEmisor || null, creditNote.serie || null, creditNote.folio || null,
+     subtotal, tax, total,
+     issueDate, userId, `Nota de crédito recibida (devolución ${returnNumber})`]
+  )
+  return rows[0]
+}
+
+// Aplica un crédito NO-EFECTIVO (nota de crédito) contra la factura original:
+// supplier_payment method='credit_note' + application; baja CXP y balance.
+// (Espejo de apAdvanceService.applyAdvance, pero el "pago" es la NC, no efectivo.)
+async function applyNonCashCredit(client, { tenantId, ap, invoice, amount, userId, label }) {
+  const amt = parseFloat(amount.toFixed(2))
+  const { rows: payRows } = await client.query(
+    `INSERT INTO supplier_payments
+       (tenant_id, partner_id, payment_date, method, reference,
+        amount, currency, exchange_rate_value, amount_mxn, notes, created_by)
+     VALUES ($1,$2,CURRENT_DATE,'credit_note'::ap_payment_method,$3,
+             $4,$5,1,$4,$6,$7)
+     RETURNING id`,
+    [tenantId, ap.partner_id, label, amt, ap.currency || 'MXN', label, userId]
+  )
+  const paymentId = payRows[0].id
+  await client.query(
+    `INSERT INTO supplier_payment_applications
+       (supplier_payment_id, supplier_invoice_id, amount_applied, created_by)
+     VALUES ($1,$2,$3,$4)`,
+    [paymentId, invoice.id, amt, userId]
+  )
+  const newPaid   = parseFloat((parseFloat(ap.amount_paid) + amt).toFixed(2))
+  const newStatus = newPaid >= parseFloat(ap.amount_total) - 0.005 ? 'paid' : 'partial'
+  await client.query(
+    `UPDATE accounts_payable SET amount_paid = $1, status = $2 WHERE id = $3`,
+    [newPaid, newStatus, ap.id]
+  )
+  await client.query(
+    `UPDATE supplier_invoices
+        SET balance = GREATEST(0, balance - $1),
+            status  = CASE WHEN balance - $1 <= 0.005
+                           THEN 'paid'::supplier_invoice_status
+                           ELSE 'partial'::supplier_invoice_status END
+      WHERE id = $2`,
+    [amt, invoice.id]
+  )
+  return paymentId
+}
+
+// Anula una factura de proveedor y su CXP (cancellation / substitution).
+async function voidInvoiceAndAp(client, { tenantId, invoice, ap }) {
+  await client.query(
+    `UPDATE supplier_invoices SET status = 'cancelled', balance = 0
+      WHERE id = $1 AND tenant_id = $2`,
+    [invoice.id, tenantId]
+  )
+  if (ap) {
+    await client.query(
+      `UPDATE accounts_payable SET status = 'cancelled' WHERE id = $1`, [ap.id]
+    )
+  }
+}
+
 module.exports = {
   listReasons, createReason, updateReason,
   listReturnableLots,
   listReturns, getReturn, createReturn, confirmReturn, cancelReturn,
+  resolveFiscal,
 }

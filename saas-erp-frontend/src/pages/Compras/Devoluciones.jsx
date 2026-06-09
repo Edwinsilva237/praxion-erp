@@ -18,6 +18,12 @@ const CREDIT = {
   resolved:       { label: 'Crédito aplicado',  variant: 'green' },
   not_applicable: { label: 'Sin crédito',       variant: 'gray'  },
 }
+const FISCAL = {
+  none:         'Sin resolver',
+  credit_note:  'Nota de crédito',
+  cancellation: 'Cancelación de CFDI',
+  substitution: 'Sustitución de CFDI',
+}
 const money = (n) => `$${Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 export default function Devoluciones() {
@@ -81,7 +87,12 @@ export default function Devoluciones() {
                   <td className="text-sm text-ink-secondary">{r.reason_name || '—'}</td>
                   <td className="text-right font-mono text-sm">{money(r.total_mxn)}</td>
                   <td><Badge {...(STATUS[r.status] || STATUS.draft)} /></td>
-                  <td><Badge {...(CREDIT[r.credit_status] || CREDIT.pending)} /></td>
+                  <td>
+                    <Badge {...(CREDIT[r.credit_status] || CREDIT.pending)} />
+                    {r.credit_status === 'resolved' && r.fiscal_resolution !== 'none' && (
+                      <div className="text-[11px] text-ink-muted mt-0.5">{FISCAL[r.fiscal_resolution]}</div>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -295,10 +306,18 @@ function ReturnDetailModal({ returnId, onClose, onChanged }) {
               </div>
               <div className="text-right text-sm font-semibold text-ink-primary">Total: {money(ret.total_mxn)}</div>
 
-              <div className="text-xs text-ink-muted bg-surface-elevated/40 rounded-lg px-3 py-2">
-                Crédito fiscal: <b>{(CREDIT[ret.credit_status] || CREDIT.pending).label}</b>. La nota de crédito,
-                cancelación o sustitución del CFDI se registra en la Fase 2 (la emite el proveedor).
-              </div>
+              {/* Resolución fiscal (Fase 2) */}
+              {ret.credit_status === 'resolved' ? (
+                <FiscalResolutionSummary ret={ret} />
+              ) : ret.status === 'confirmed' ? (
+                <FiscalResolutionForm ret={ret} onResolved={() => { setError(null); refresh() }} onError={setError} />
+              ) : (
+                <div className="text-xs text-ink-muted bg-surface-elevated/40 rounded-lg px-3 py-2">
+                  Crédito fiscal: <b>{(CREDIT[ret.credit_status] || CREDIT.pending).label}</b>. Confirma la
+                  devolución para registrar la resolución fiscal del CFDI (nota de crédito, cancelación o
+                  sustitución que emite el proveedor).
+                </div>
+              )}
             </>
           )}
         </div>
@@ -325,5 +344,165 @@ function ReturnDetailModal({ returnId, onClose, onChanged }) {
       </div>
     </div>,
     document.body
+  )
+}
+
+// ── Resumen de resolución fiscal (solo lectura, cuando ya está resuelta) ──────
+function FiscalResolutionSummary({ ret }) {
+  return (
+    <div className="rounded-lg border border-status-success/30 bg-status-success/5 px-3 py-2.5 text-sm flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <span className="text-ink-muted">Resolución fiscal:</span>
+        <b className="text-ink-primary">{FISCAL[ret.fiscal_resolution] || '—'}</b>
+      </div>
+      {ret.fiscal_resolution === 'credit_note' && ret.credit_note_number && (
+        <div className="text-xs text-ink-secondary">
+          Nota de crédito <b>{ret.credit_note_number}</b>
+          {ret.credit_note_uuid ? <> · UUID <span className="font-mono">{ret.credit_note_uuid}</span></> : null}
+          {ret.source_invoice_number ? <> · aplicada a la factura <b>{ret.source_invoice_number}</b></> : null}
+        </div>
+      )}
+      {ret.fiscal_resolution === 'cancellation' && ret.cancelled_invoice_number && (
+        <div className="text-xs text-ink-secondary">Se canceló el CFDI <b>{ret.cancelled_invoice_number}</b>.</div>
+      )}
+      {ret.fiscal_resolution === 'substitution' && (
+        <div className="text-xs text-ink-secondary">
+          El CFDI <b>{ret.cancelled_invoice_number}</b> se sustituyó por <b>{ret.substitute_invoice_number}</b>.
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Formulario de resolución fiscal (devolución confirmada, crédito pendiente) ─
+function FiscalResolutionForm({ ret, onResolved, onError }) {
+  const [resolution, setResolution] = useState('credit_note')
+  const [supplierInvoiceId, setSupplierInvoiceId] = useState(ret.supplier_invoice_id || '')
+  const [cn, setCn] = useState({ invoiceNumber: '', uuidSat: '', folio: '', invoiceDate: '', subtotal: '', tax: '', total: '' })
+  const [sub, setSub] = useState({ invoiceNumber: '', uuidSat: '', invoiceDate: '', subtotal: '', tax: '', total: '' })
+
+  const { data: invoices = [] } = useQuery({
+    queryKey: ['supplier-invoices', ret.partner_id],
+    queryFn: () => purchasesApi.listInvoices({ supplierId: ret.partner_id, limit: 100 }),
+    select: (r) => (r?.data || []).filter(i => i.status !== 'cancelled'),
+    enabled: !!ret.partner_id,
+  })
+
+  const selected = invoices.find(i => i.id === supplierInvoiceId)
+  const cnTotal = parseFloat(cn.total) || 0
+  const pending = selected ? parseFloat(selected.ap_amount_pending || 0) : 0
+  const reduces = Math.min(cnTotal, pending)
+  const toAdvance = Math.max(0, cnTotal - reduces)
+
+  const mut = useMutation({
+    mutationFn: () => {
+      const body = { resolution, supplierInvoiceId }
+      if (resolution === 'credit_note') {
+        body.creditNote = {
+          invoiceNumber: cn.invoiceNumber || null, uuidSat: cn.uuidSat || null, folio: cn.folio || null,
+          invoiceDate: cn.invoiceDate || null,
+          subtotal: cn.subtotal === '' ? null : parseFloat(cn.subtotal),
+          tax: cn.tax === '' ? 0 : parseFloat(cn.tax),
+          total: parseFloat(cn.total),
+        }
+      } else if (resolution === 'substitution') {
+        body.substitute = {
+          invoiceNumber: sub.invoiceNumber, uuidSat: sub.uuidSat || null, invoiceDate: sub.invoiceDate || null,
+          subtotal: sub.subtotal === '' ? null : parseFloat(sub.subtotal),
+          tax: sub.tax === '' ? 0 : parseFloat(sub.tax),
+          total: parseFloat(sub.total),
+        }
+      }
+      return purchasesApi.resolveReturn(ret.id, body)
+    },
+    onSuccess: onResolved,
+    onError: (e) => onError?.(e.response?.data?.error || 'No se pudo registrar la resolución.'),
+  })
+
+  const canResolve = supplierInvoiceId &&
+    (resolution === 'cancellation' ||
+     (resolution === 'credit_note' && cnTotal > 0) ||
+     (resolution === 'substitution' && sub.invoiceNumber && parseFloat(sub.total) > 0))
+
+  const numInput = (val, set, ph) => (
+    <input type="number" min={0} step="0.01" placeholder={ph} className="input" value={val} onChange={e => set(e.target.value)} />
+  )
+
+  return (
+    <div className="rounded-lg border border-line-subtle bg-surface-elevated/40 px-3 py-3 flex flex-col gap-3">
+      <p className="text-sm font-semibold text-ink-primary">Resolución fiscal del CFDI</p>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label className="label">Vía</label>
+          <select className="select" value={resolution} onChange={e => setResolution(e.target.value)}>
+            <option value="credit_note">Nota de crédito (CFDI de egreso)</option>
+            <option value="cancellation">Cancelación del CFDI</option>
+            <option value="substitution">Sustitución del CFDI</option>
+          </select>
+        </div>
+        <div>
+          <label className="label">Factura del proveedor *</label>
+          <select className="select" value={supplierInvoiceId} onChange={e => setSupplierInvoiceId(e.target.value)}>
+            <option value="">Seleccionar factura…</option>
+            {invoices.map(i => (
+              <option key={i.id} value={i.id}>
+                {i.invoice_number} · {money(i.total_mxn)} · saldo {money(i.ap_amount_pending || 0)}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {resolution === 'credit_note' && (
+        <div className="flex flex-col gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <div><label className="label">Folio NC</label><input className="input" placeholder="NC-123" value={cn.invoiceNumber} onChange={e => setCn(p => ({ ...p, invoiceNumber: e.target.value }))} /></div>
+            <div><label className="label">Fecha</label><input type="date" className="input" value={cn.invoiceDate} onChange={e => setCn(p => ({ ...p, invoiceDate: e.target.value }))} /></div>
+            <div className="col-span-2 sm:col-span-1"><label className="label">UUID SAT</label><input className="input" placeholder="(opcional)" value={cn.uuidSat} onChange={e => setCn(p => ({ ...p, uuidSat: e.target.value }))} /></div>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div><label className="label">Subtotal</label>{numInput(cn.subtotal, v => setCn(p => ({ ...p, subtotal: v })), '0.00')}</div>
+            <div><label className="label">IVA</label>{numInput(cn.tax, v => setCn(p => ({ ...p, tax: v })), '0.00')}</div>
+            <div><label className="label">Total *</label>{numInput(cn.total, v => setCn(p => ({ ...p, total: v })), '0.00')}</div>
+          </div>
+          {selected && cnTotal > 0 && (
+            <p className="text-xs text-ink-muted">
+              Reduce la cuenta por pagar en <b>{money(reduces)}</b>
+              {toAdvance > 0.005 ? <> y deja <b>{money(toAdvance)}</b> como saldo a favor del proveedor.</> : '.'}
+            </p>
+          )}
+        </div>
+      )}
+
+      {resolution === 'cancellation' && (
+        <p className="text-xs text-ink-muted">
+          Anula la factura seleccionada y su cuenta por pagar. Si ya la habías pagado, lo pagado queda como
+          saldo a favor del proveedor.
+        </p>
+      )}
+
+      {resolution === 'substitution' && (
+        <div className="flex flex-col gap-2">
+          <p className="text-xs text-ink-muted">Cancela la factura seleccionada y registra la nueva que la sustituye.</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <div><label className="label">Folio nueva *</label><input className="input" placeholder="F-124" value={sub.invoiceNumber} onChange={e => setSub(p => ({ ...p, invoiceNumber: e.target.value }))} /></div>
+            <div><label className="label">Fecha</label><input type="date" className="input" value={sub.invoiceDate} onChange={e => setSub(p => ({ ...p, invoiceDate: e.target.value }))} /></div>
+            <div className="col-span-2 sm:col-span-1"><label className="label">UUID SAT</label><input className="input" placeholder="(opcional)" value={sub.uuidSat} onChange={e => setSub(p => ({ ...p, uuidSat: e.target.value }))} /></div>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div><label className="label">Subtotal</label>{numInput(sub.subtotal, v => setSub(p => ({ ...p, subtotal: v })), '0.00')}</div>
+            <div><label className="label">IVA</label>{numInput(sub.tax, v => setSub(p => ({ ...p, tax: v })), '0.00')}</div>
+            <div><label className="label">Total *</label>{numInput(sub.total, v => setSub(p => ({ ...p, total: v })), '0.00')}</div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex justify-end">
+        <button onClick={() => mut.mutate()} disabled={!canResolve || mut.isPending} className="btn-primary btn-sm">
+          {mut.isPending ? <Spinner className="w-3 h-3" /> : null} Registrar resolución
+        </button>
+      </div>
+    </div>
   )
 }
