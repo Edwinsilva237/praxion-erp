@@ -7,6 +7,7 @@ import api from '@/api/axios'
 import Badge from '@/components/ui/Badge'
 import Can from '@/components/auth/Can'
 import Spinner from '@/components/ui/Spinner'
+import { parseDateOnly } from '@/utils/fmt'
 import clsx from 'clsx'
 
 // ── Constantes ─────────────────────────────────────────────────────────────
@@ -301,7 +302,7 @@ function EditModal({ shift, users, shiftConfig = [], onClose, onSaved }) {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-base font-semibold text-ink-primary">
-              {shiftLabelOf(shiftConfig, shift.shift_number)} · {fmtDay(new Date(shift.scheduled_date))}
+              {shiftLabelOf(shiftConfig, shift.shift_number)} · {fmtDay(parseDateOnly(shift.scheduled_date))}
             </h2>
             <p className="text-xs text-ink-muted mt-0.5">
               {shift.product_name ? `${shift.product_name} · ${shift.order_number}` : 'Sin orden asignada'}
@@ -388,7 +389,7 @@ function EditModal({ shift, users, shiftConfig = [], onClose, onSaved }) {
         <div className="flex gap-2 pt-1">
           <button
             onClick={() => {
-              if (window.confirm(`¿Cancelar el ${shiftLabelOf(shiftConfig, shift.shift_number)} del ${fmtDay(new Date(shift.scheduled_date))}?`)) {
+              if (window.confirm(`¿Cancelar el ${shiftLabelOf(shiftConfig, shift.shift_number)} del ${fmtDay(parseDateOnly(shift.scheduled_date))}?`)) {
                 cancelMutation.mutate()
               }
             }}

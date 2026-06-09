@@ -8,6 +8,7 @@ import api from '@/api/axios'
 import useAuthStore from '@/store/useAuthStore'
 import Spinner from '@/components/ui/Spinner'
 import { downloadBlob, printBlob } from '@/utils/downloadBlob'
+import { parseDateOnly } from '@/utils/fmt'
 import clsx from 'clsx'
 
 const fmt  = (n, d=2) => Number(n||0).toLocaleString('es-MX', { minimumFractionDigits:d, maximumFractionDigits:d })
@@ -231,8 +232,8 @@ export default function ProduccionResumen() {
   // ¿Este turno produjo metros lineales? (no aplica a frituras, pellet, etc.)
   const hasMeters = (production.totalMeters || 0) > 0
 
-  const shiftDate = shift.shiftDate
-    ? new Date(shift.shiftDate).toLocaleDateString('es-MX', { weekday:'long', day:'numeric', month:'long', year:'numeric' })
+  const shiftDate = parseDateOnly(shift.shiftDate)
+    ? parseDateOnly(shift.shiftDate).toLocaleDateString('es-MX', { weekday:'long', day:'numeric', month:'long', year:'numeric' })
     : '—'
 
   return (

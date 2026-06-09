@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { productionApi } from '@/api/production'
 import { processConfigApi } from '@/api/processConfig'
 import Spinner from '@/components/ui/Spinner'
+import { parseDateOnly } from '@/utils/fmt'
 import clsx from 'clsx'
 
 const STATUS_LABEL = {
@@ -99,8 +100,8 @@ export default function ProduccionHistorico() {
             const costM   = s.cost_per_unit && meters > 0
               ? parseFloat(s.cost_per_unit) * (meters / Math.max(1, parseInt(s.pt_units_produced)))
               : null
-            const date    = s.shift_date
-              ? new Date(s.shift_date).toLocaleDateString('es-MX', { weekday:'short', day:'numeric', month:'short', year:'numeric' })
+            const date    = parseDateOnly(s.shift_date)
+              ? parseDateOnly(s.shift_date).toLocaleDateString('es-MX', { weekday:'short', day:'numeric', month:'short', year:'numeric' })
               : '—'
 
             return (

@@ -8,6 +8,7 @@ import { tenantsApi } from '@/api/tenants'
 import useAuthStore from '@/store/useAuthStore'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
+import { parseDateOnly } from '@/utils/fmt'
 import HandoverReceptionScreen from './components/HandoverReceptionScreen'
 import ClosedShiftSummary from './components/ClosedShiftSummary'
 import ForceCloseModal from './components/ForceCloseModal'
@@ -59,9 +60,9 @@ function OrdenCard({ order, position, isContinued, onSelect }) {
   const p = getPriority(order)
   const produced = parseInt(order.packages_produced || order.units_produced || 0)
   const target   = parseInt(order.quantity_packages || order.quantity_units || 0)
-  const fmtDate  = (d) => d ? new Date(d).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' }) : null
+  const fmtDate  = (d) => { const dt = parseDateOnly(d); return dt ? dt.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' }) : null }
   const delivery = fmtDate(order.delivery_date)
-  const isToday  = order.delivery_date && new Date(order.delivery_date).toDateString() === new Date().toDateString()
+  const isToday  = !!parseDateOnly(order.delivery_date) && parseDateOnly(order.delivery_date).toDateString() === new Date().toDateString()
 
   return (
     <div className={clsx(

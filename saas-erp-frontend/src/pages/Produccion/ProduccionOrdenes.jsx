@@ -11,6 +11,7 @@ import { recipesApi } from '@/api/recipes'
 import useAuthStore from '@/store/useAuthStore'
 import Can from '@/components/auth/Can'
 import Spinner from '@/components/ui/Spinner'
+import { parseDateOnly } from '@/utils/fmt'
 import clsx from 'clsx'
 
 const PRIORITY_COLOR = {
@@ -888,7 +889,7 @@ function OrderDetailModal({ order, onClose, onEdit, onCancel, onCloseOrder, onRe
               <div><p className="text-ink-muted text-xs mb-1">Largo</p><p className="font-medium">{`${(order.length_mm/1000).toFixed(2)}m`}</p></div>
             )}
             <div><p className="text-ink-muted text-xs mb-1">Cantidad</p><p className="font-medium">{order.quantity_packages} paq · {parseInt(order.quantity_units||0).toLocaleString()} pzas</p></div>
-            <div><p className="text-ink-muted text-xs mb-1">Entrega</p><p className="font-medium">{order.delivery_date ? new Date(order.delivery_date).toLocaleDateString('es-MX',{day:'numeric',month:'short'}) : '—'}</p></div>
+            <div><p className="text-ink-muted text-xs mb-1">Entrega</p><p className="font-medium">{order.delivery_date ? parseDateOnly(order.delivery_date).toLocaleDateString('es-MX',{day:'numeric',month:'short'}) : '—'}</p></div>
             <div><p className="text-ink-muted text-xs mb-1">Estado</p><p className="font-medium">{STATUS_LABEL[order.status]}</p></div>
             <div><p className="text-ink-muted text-xs mb-1">Avance</p><p className="font-medium text-brand-300">{parseFloat(order.progress_pct||0).toFixed(0)}%</p></div>
           </div>
@@ -1235,7 +1236,7 @@ export default function ProduccionOrdenes() {
                 <div className="flex items-center gap-3 flex-wrap">
                   {order.delivery_date && (
                     <span className="text-xs text-ink-muted">
-                      Entrega: {new Date(order.delivery_date).toLocaleDateString('es-MX',{day:'numeric',month:'short'})}
+                      Entrega: {parseDateOnly(order.delivery_date).toLocaleDateString('es-MX',{day:'numeric',month:'short'})}
                     </span>
                   )}
                   {order.blended_cost_per_kg && (
