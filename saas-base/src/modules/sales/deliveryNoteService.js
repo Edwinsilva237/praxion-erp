@@ -514,7 +514,31 @@ async function getDeliveryNote({ tenantId, noteId }) {
     }
   }
 
-  return { ...note, lines, contacts, priceAdjustments }
+  // Documentos de la OC del cliente, jalados de los pedidos ligados a esta
+  // remisión (header sales_order_id + los pedidos de las líneas, para cubrir las
+  // consolidadas). Es el momento en que el cliente la exige para recibir, así que
+  // quien entrega la imprime desde aquí sin ir a buscar el pedido (categoría
+  // customer_po, entity_type='sales_order').
+  const orderIdSet = new Set()
+  if (note.sales_order_id) orderIdSet.add(note.sales_order_id)
+  for (const l of lines) { if (l.sales_order_id) orderIdSet.add(l.sales_order_id) }
+  let customerPoAttachments = []
+  if (orderIdSet.size > 0) {
+    const { rows: poRows } = await query(
+      `SELECT a.id, a.entity_id AS order_id, so.order_number,
+              a.filename, a.mime_type, a.file_size_bytes, a.description, a.created_at
+         FROM attachments a
+         JOIN sales_orders so ON so.id = a.entity_id
+        WHERE a.tenant_id = $1 AND a.entity_type = 'sales_order'
+          AND a.category = 'customer_po'
+          AND a.entity_id = ANY($2::uuid[])
+        ORDER BY a.created_at DESC`,
+      [tenantId, [...orderIdSet]]
+    )
+    customerPoAttachments = poRows
+  }
+
+  return { ...note, lines, contacts, priceAdjustments, customerPoAttachments }
 }
 
 /**

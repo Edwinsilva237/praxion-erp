@@ -7,6 +7,7 @@ import { usersApi } from '@/api/users'
 import { PedidoLineaModal } from '@/components/ventas/PedidoLineaModal'
 import { RemisionFormModal } from '@/components/ventas/RemisionFormModal'
 import { RemisionDetallePanel } from '@/components/ventas/RemisionDetallePanel'
+import CustomerPoAttachments from '@/components/ventas/CustomerPoAttachments'
 import { ProductImageThumb } from '@/components/productos/ProductImageThumb'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
@@ -699,6 +700,10 @@ export function PedidoDetallePanel({ orderId, onClose }) {
                   <p className="text-sm text-status-info">{order.notes}</p>
                 </div>
               )}
+
+              {/* Orden de compra del cliente (documento adjunto, aditivo). El cliente
+                  a veces la exige impresa para recibir; también se ve en la remisión. */}
+              <CustomerPoAttachments orderId={order.id} readOnly={order.status === 'cancelled'} />
 
               {/* Repartidor / Recoge en bodega — solo para pedidos activos.
                   Editable cuando draft/confirmed/in_delivery. */}

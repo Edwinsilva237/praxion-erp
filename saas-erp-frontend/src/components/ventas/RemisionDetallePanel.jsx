@@ -11,6 +11,7 @@ import Spinner from '@/components/ui/Spinner'
 import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import { printRemision } from '@/utils/printRemision'
 import { printBlob, downloadBlob } from '@/utils/downloadBlob'
+import { viewOrPrintPo } from '@/components/ventas/CustomerPoAttachments'
 import SignatureCaptureModal from '@/components/ui/SignatureCaptureModal'
 import { Capacitor } from '@capacitor/core'
 import useAuthStore from '@/store/useAuthStore'
@@ -209,6 +210,48 @@ function RemisionEvidencia({ note }) {
           onSigned={async (file) => { setShowSign(false); await upload(file) }}
         />
       )}
+    </div>
+  )
+}
+
+// OC del cliente (solo lectura) jalada de los pedidos ligados a la remisión —
+// para imprimirla justo cuando el cliente la exige para recibir la mercancía.
+function RemisionCustomerPO({ note }) {
+  const [err, setErr] = useState(null)
+  const files = note.customerPoAttachments || []
+  if (!files.length) return null
+
+  async function view(att) {
+    setErr(null)
+    try {
+      const blob = await salesApi.downloadOrderPo(att.order_id, att.id)
+      await viewOrPrintPo(blob, att)
+    } catch (e) {
+      setErr(e.response?.data?.error || 'No se pudo abrir el documento.')
+    }
+  }
+
+  return (
+    <div className="border border-line-subtle rounded-xl p-3 flex flex-col gap-2">
+      <div>
+        <p className="text-xs font-bold text-brand-300 uppercase tracking-wider">Orden de compra del cliente</p>
+        <p className="text-[11px] text-ink-muted">Documento del pedido — imprímelo si el cliente lo exige para recibir.</p>
+      </div>
+      {err && <p className="text-xs text-status-danger">{err}</p>}
+      <ul className="flex flex-col gap-1">
+        {files.map(f => (
+          <li key={f.id} className="flex items-center justify-between gap-2 text-xs bg-surface-elevated/40 rounded-lg px-3 py-1.5">
+            <span className="truncate text-ink-secondary min-w-0 flex items-center gap-1.5">
+              <svg className="w-3.5 h-3.5 shrink-0 text-ink-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+              </svg>
+              <span className="truncate">{f.filename}</span>
+              {f.order_number && <span className="text-ink-muted shrink-0">· {f.order_number}</span>}
+            </span>
+            <button type="button" onClick={() => view(f)} className="text-brand-300 hover:underline shrink-0">Ver / Imprimir</button>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -787,6 +830,9 @@ export function RemisionDetallePanel({ noteId, onClose }) {
                   </div>
                 </div>
               )}
+
+              {/* OC del cliente (de los pedidos ligados) — para imprimir al entregar */}
+              <RemisionCustomerPO note={note} />
 
               {/* Toggle "No requiere factura" — solo si NO tiene factura todavía */}
               {!note.invoice_id && note.status !== 'cancelled' && (

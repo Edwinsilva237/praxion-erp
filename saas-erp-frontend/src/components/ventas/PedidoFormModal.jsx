@@ -91,6 +91,7 @@ function PedidoForm({ onClose, onCreated }) {
   const [lines, setLines]               = useState([EMPTY_LINE()])
   const [error, setError]               = useState(null)
   const [customTC, setCustomTC]         = useState('')
+  const [poFiles, setPoFiles]           = useState([])   // documento(s) de la OC del cliente
 
   // Cargar TC USD si aplica
   const { data: tcData } = useQuery({
@@ -263,7 +264,21 @@ function PedidoForm({ onClose, onCreated }) {
         })),
       })
     },
-    onSuccess: (order) => {
+    onSuccess: async (order) => {
+      // Subir el/los documento(s) de la OC del cliente al pedido recién creado.
+      // El pedido ya existe; si falla la subida no se pierde (se puede adjuntar
+      // luego desde el detalle), solo avisamos.
+      if (poFiles.length && order?.id) {
+        try {
+          for (const f of poFiles) {
+            const fd = new FormData()
+            fd.append('file', f)
+            await salesApi.addOrderPo(order.id, fd)
+          }
+        } catch {
+          alert('El pedido se creó, pero no se pudo adjuntar el documento de OC. Puedes adjuntarlo desde el detalle del pedido.')
+        }
+      }
       qc.invalidateQueries({ queryKey: ['sales-orders'] })
       onCreated?.(order)
       onClose()
@@ -392,6 +407,34 @@ function PedidoForm({ onClose, onCreated }) {
             </label>
             <p className="text-[11px] text-ink-muted mt-1.5">Marca si el cliente no requiere entrega física previa</p>
           </div>
+        </div>
+
+        {/* Documento de la OC del cliente (opcional) — para imprimirla al entregar */}
+        <div>
+          <label className="label">Documento de la OC del cliente (opcional)</label>
+          <label className="btn-secondary btn-sm cursor-pointer inline-flex">
+            Adjuntar PDF o foto
+            <input type="file" accept="image/*,application/pdf" multiple className="hidden"
+              onChange={(e) => {
+                const fs = Array.from(e.target.files || [])
+                e.target.value = ''
+                if (fs.length) setPoFiles(prev => [...prev, ...fs])
+              }} />
+          </label>
+          <p className="text-[11px] text-ink-muted mt-1">
+            Se podrá descargar/imprimir desde el pedido y la remisión. También puedes adjuntarla después.
+          </p>
+          {poFiles.length > 0 && (
+            <ul className="flex flex-col gap-1 mt-2">
+              {poFiles.map((f, i) => (
+                <li key={i} className="flex items-center justify-between gap-2 text-xs bg-surface-elevated/40 rounded-lg px-3 py-1.5">
+                  <span className="truncate text-ink-secondary">{f.name}</span>
+                  <button type="button" onClick={() => setPoFiles(prev => prev.filter((_, j) => j !== i))}
+                    className="text-status-danger hover:underline shrink-0">Quitar</button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         <div>

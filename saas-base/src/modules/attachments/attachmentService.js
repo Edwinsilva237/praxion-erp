@@ -22,6 +22,9 @@ const MIME_BY_CATEGORY = {
   // Evidencia aditiva de remisión (foto del acuse, firma en pantalla PNG, o la
   // factura impresa firmada / un escaneo en PDF) → imágenes + PDF.
   delivery_evidence: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+  // Documento de la orden de compra del cliente adjuntado al pedido (sales_order):
+  // el PDF o la foto de la OC que manda el cliente, para imprimirla al entregar.
+  customer_po: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
 }
 
 /**

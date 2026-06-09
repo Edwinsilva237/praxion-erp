@@ -59,4 +59,16 @@ export const salesApi = {
     }).then(r => r.data),
   downloadEvidence: (id, attId) =>
     api.get(`${B}/delivery-notes/${id}/attachments/${attId}/download`, { responseType: 'blob' }).then(r => r.data),
+
+  // OC del cliente adjunta al pedido (documento que el cliente exige para recibir).
+  listOrderPo: (orderId) =>
+    api.get(`${B}/orders/${orderId}/attachments`).then(r => r.data),
+  addOrderPo: (orderId, formData) =>
+    api.post(`${B}/orders/${orderId}/attachments`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(r => r.data),
+  downloadOrderPo: (orderId, attId) =>
+    api.get(`${B}/orders/${orderId}/attachments/${attId}/download`, { responseType: 'blob' }).then(r => r.data),
+  deleteOrderPo: (orderId, attId) =>
+    api.delete(`${B}/orders/${orderId}/attachments/${attId}`).then(r => r.data),
 }

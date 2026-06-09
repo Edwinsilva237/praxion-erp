@@ -158,7 +158,20 @@ async function getOrder({ tenantId, orderId }) {
     [orderId, tenantId]
   )
 
-  return { ...order, lines, deliveryNotes }
+  // Documentos de la OC del cliente adjuntos al pedido (PDF/foto). El cliente
+  // a veces los exige impresos para recibir la mercancía (categoría customer_po).
+  const { rows: customerPoAttachments } = await query(
+    `SELECT a.id, a.filename, a.mime_type, a.file_size_bytes, a.description,
+            a.created_at, u.full_name AS uploaded_by_name
+       FROM attachments a
+       LEFT JOIN users u ON u.id = a.uploaded_by
+      WHERE a.tenant_id = $2 AND a.entity_type = 'sales_order'
+        AND a.entity_id = $1 AND a.category = 'customer_po'
+      ORDER BY a.created_at DESC`,
+    [orderId, tenantId]
+  )
+
+  return { ...order, lines, deliveryNotes, customerPoAttachments }
 }
 
 /**
