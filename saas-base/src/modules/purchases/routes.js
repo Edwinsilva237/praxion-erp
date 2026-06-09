@@ -398,7 +398,19 @@ router.post('/parse-document',
         req.file.mimetype,
         req.file.originalname,
       )
-      res.json(result)
+      // Buscar proveedor por RFC del emisor (igual que /invoices/parse-xml) para
+      // que el flujo de Nueva factura preseleccione al proveedor — sirve tanto
+      // para XML (CFDI) como para PDF (factura escaneada/extraída).
+      let matchedPartner = null
+      if (result?.emisor?.rfc) {
+        const { rows } = await require('../../db').query(
+          `SELECT id, name, rfc FROM business_partners
+           WHERE tenant_id=$1 AND rfc=$2 AND is_active=true LIMIT 1`,
+          [req.tenant.id, result.emisor.rfc]
+        )
+        if (rows[0]) matchedPartner = rows[0]
+      }
+      res.json({ ...result, matchedPartner })
     } catch (err) { next(err) }
   }
 )

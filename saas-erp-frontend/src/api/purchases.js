@@ -48,13 +48,23 @@ export const purchasesApi = {
   listInvoices:  (p) => api.get(`${B}/invoices`, { params: p }).then(r => r.data),
   getInvoice:    (id) => api.get(`${B}/invoices/${id}`).then(r => r.data),
   createInvoice: (body) => api.post(`${B}/invoices`, body).then(r => r.data),
-  // Parsea un CFDI XML de proveedor → datos extraídos + proveedor encontrado.
-  // El backend espera el campo de archivo 'xml'. Vía axios (NO fetch nativo) para
-  // que use el baseURL correcto + headers de auth/tenant en prod (web y app).
-  parseInvoiceXml: (formData) =>
-    api.post(`${B}/invoices/parse-xml`, formData, {
+  // Parsea un documento de proveedor (XML CFDI o PDF) → datos extraídos +
+  // proveedor encontrado por RFC. Campo de archivo 'file'. Vía axios (NO fetch
+  // nativo) para que use el baseURL correcto + headers de auth/tenant en prod.
+  parseDocument: (formData) =>
+    api.post(`${B}/parse-document`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     }).then(r => r.data),
+
+  // Adjuntos (respaldo XML/PDF) de una factura de proveedor.
+  listInvoiceAttachments: (id) =>
+    api.get(`${B}/invoices/${id}/attachments`).then(r => r.data),
+  addInvoiceAttachment: (id, formData) =>
+    api.post(`${B}/invoices/${id}/attachments`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(r => r.data),
+  downloadInvoiceAttachment: (id, attId) =>
+    api.get(`${B}/invoices/${id}/attachments/${attId}/download`, { responseType: 'blob' }).then(r => r.data),
 
   // ── Gastos (módulo de Gastos, Fase 1) ──────────────────────────────────
   listExpenses:  (p) => api.get(`${B}/expenses`, { params: p }).then(r => r.data),

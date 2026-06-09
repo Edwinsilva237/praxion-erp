@@ -4,6 +4,7 @@ import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/rea
 import { purchasesApi } from '@/api/purchases'
 import { partnersApi } from '@/api/partners'
 import { PagoProveedorModal } from '@/components/finanzas/PagoProveedorModal'
+import { FacturaProveedorDetallePanel } from '@/components/compras/FacturaProveedorDetallePanel'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
@@ -138,8 +139,8 @@ function StepChooseMethod({ onPick, onClose }) {
           </svg>
         </div>
         <div className="flex-1">
-          <p className="text-sm font-semibold text-ink-primary">Cargar XML (CFDI)</p>
-          <p className="text-xs text-ink-muted mt-0.5">Auto-llenado de emisor, UUID, importes y líneas desde el CFDI 4.0</p>
+          <p className="text-sm font-semibold text-ink-primary">Cargar XML (CFDI) o PDF</p>
+          <p className="text-xs text-ink-muted mt-0.5">Auto-llenado desde el CFDI 4.0 (XML) o extracción de datos de una factura en PDF</p>
         </div>
         <svg className="w-4 h-4 text-ink-muted group-hover:text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/>
@@ -335,21 +336,22 @@ function StepUploadXML({ onParsed, onBack, onClose }) {
 
   async function parseFile(file) {
     if (!file) return
-    if (!file.name.toLowerCase().endsWith('.xml')) {
-      setError('Solo se aceptan archivos XML (CFDI).'); return
+    const lower = file.name.toLowerCase()
+    if (!lower.endsWith('.xml') && !lower.endsWith('.pdf')) {
+      setError('Solo se aceptan archivos XML (CFDI) o PDF (factura).'); return
     }
     setLoading(true); setError(null)
     try {
-      // Vía axios (purchasesApi) — NO fetch nativo con URL relativa: en prod la web
-      // y el backend están en orígenes distintos, así que `/api/...` relativo pegaba
-      // al propio frontend y devolvía HTML/vacío → "Unexpected end of JSON input".
-      // axios usa el baseURL correcto + inyecta auth/tenant + maneja el refresh 401.
+      // Vía axios (purchasesApi) — NO fetch nativo con URL relativa (rompía en prod).
+      // /parse-document acepta XML (CFDI) y PDF (factura escaneada → extracción por
+      // IA, igual que el CSF). Devuelve los datos + el proveedor por RFC.
       const form = new FormData()
-      form.append('xml', file)
-      const data = await purchasesApi.parseInvoiceXml(form)
-      onParsed(data)
+      form.append('file', file)
+      const data = await purchasesApi.parseDocument(form)
+      // Pasamos también el archivo original para guardarlo como respaldo al crear.
+      onParsed(data, file)
     } catch (e) {
-      setError(e.response?.data?.error || e.message || 'Error al procesar el XML')
+      setError(e.response?.data?.error || e.message || 'Error al procesar el documento')
     } finally { setLoading(false) }
   }
 
@@ -371,20 +373,20 @@ function StepUploadXML({ onParsed, onBack, onClose }) {
         )}
         onClick={() => document.getElementById('xml-input').click()}
       >
-        <input id="xml-input" type="file" accept=".xml" className="hidden"
+        <input id="xml-input" type="file" accept=".xml,.pdf" className="hidden"
           onChange={e => parseFile(e.target.files[0])} />
         {loading ? (
           <div className="flex flex-col items-center gap-2">
             <Spinner />
-            <p className="text-sm text-ink-muted">Procesando XML...</p>
+            <p className="text-sm text-ink-muted">Procesando documento...</p>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-2">
             <svg className="w-10 h-10 text-ink-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
-            <p className="text-sm font-medium text-ink-secondary">Arrastra el XML aquí o haz clic para seleccionar</p>
-            <p className="text-xs text-ink-muted">CFDI 4.0 (.xml)</p>
+            <p className="text-sm font-medium text-ink-secondary">Arrastra el XML o PDF aquí o haz clic para seleccionar</p>
+            <p className="text-xs text-ink-muted">CFDI 4.0 (.xml) o factura en PDF (.pdf) — del PDF extraemos los datos automáticamente</p>
           </div>
         )}
       </div>
@@ -398,7 +400,7 @@ function StepUploadXML({ onParsed, onBack, onClose }) {
 }
 
 // ── Paso 2: Conciliación ──────────────────────────────────────────────────────
-function StepReconcile({ parsed, onClose, onSaved }) {
+function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
   const qc = useQueryClient()
   const [partner, setPartner]         = useState(parsed.matchedPartner
     ? { id: parsed.matchedPartner.id, label: parsed.matchedPartner.name, sub: parsed.matchedPartner.rfc }
@@ -524,7 +526,16 @@ function StepReconcile({ parsed, onClose, onSaved }) {
       xmlContent:    null, // no guardamos el XML completo por ahora
       notes:         notes || null,
     }),
-    onSuccess: (invoice) => {
+    onSuccess: async (invoice) => {
+      // Guardar el XML/PDF original como respaldo adjunto de la factura. Best-effort:
+      // si falla, la factura ya quedó creada (se puede adjuntar luego desde el detalle).
+      if (originalFile && invoice?.id) {
+        try {
+          const fd = new FormData()
+          fd.append('file', originalFile)
+          await purchasesApi.addInvoiceAttachment(invoice.id, fd)
+        } catch { /* el respaldo es opcional; no bloquea el alta */ }
+      }
       qc.invalidateQueries({ queryKey: ['purchase-invoices'] })
       qc.invalidateQueries({ queryKey: ['purchase-receipts'] })
       qc.invalidateQueries({ queryKey: ['receipts-pending'] })
@@ -863,10 +874,11 @@ function NuevaFacturaModal({ onClose, onSaved }) {
   const [step, setStep]     = useState(0)
   const [method, setMethod] = useState(null)   // 'xml' | 'manual'
   const [parsed, setParsed] = useState(null)
+  const [originalFile, setOriginalFile] = useState(null)  // XML/PDF de respaldo
 
   const titleByStep = {
     0: 'Nueva factura de proveedor',
-    1: method === 'xml' ? 'Cargar XML del proveedor' : 'Captura manual',
+    1: method === 'xml' ? 'Cargar XML o PDF del proveedor' : 'Captura manual',
     2: 'Conciliar con recepciones',
   }
 
@@ -906,14 +918,14 @@ function NuevaFacturaModal({ onClose, onSaved }) {
         )}
         {step === 1 && method === 'xml' && (
           <StepUploadXML
-            onParsed={(data) => { setParsed(data); setStep(2) }}
+            onParsed={(data, file) => { setParsed(data); setOriginalFile(file || null); setStep(2) }}
             onBack={() => setStep(0)}
             onClose={onClose}
           />
         )}
         {step === 1 && method === 'manual' && (
           <StepManualEntry
-            onCaptured={(data) => { setParsed(data); setStep(2) }}
+            onCaptured={(data) => { setParsed(data); setOriginalFile(null); setStep(2) }}
             onBack={() => setStep(0)}
             onClose={onClose}
           />
@@ -921,6 +933,7 @@ function NuevaFacturaModal({ onClose, onSaved }) {
         {step === 2 && parsed && (
           <StepReconcile
             parsed={parsed}
+            originalFile={originalFile}
             onClose={onClose}
             onSaved={onSaved}
           />
@@ -990,6 +1003,7 @@ const TYPE_OPTS = [
 
 export default function ComprasFacturas() {
   const [showNew, setShowNew]           = useState(false)
+  const [detailId, setDetailId]         = useState(null)  // ver detalle del comprobante
   const [success, setSuccess]           = useState(null)  // { ap_id, partner_id, total, is_cash }
   const [showPagoModal, setShowPagoModal] = useState(false)
   const [pagoPrefill, setPagoPrefill]     = useState(null) // { apId, partnerId }
@@ -1233,7 +1247,8 @@ export default function ComprasFacturas() {
                   const isRemission = inv.type === 'remission'
                   return (
                   <tr key={inv.id}
-                    className={clsx('cursor-default', inv.is_overdue && 'bg-status-danger/10/30')}>
+                    onClick={() => setDetailId(inv.id)}
+                    className={clsx('cursor-pointer hover:bg-surface-elevated/40', inv.is_overdue && 'bg-status-danger/10/30')}>
                     <td>
                       <span className={clsx(
                         'text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full',
@@ -1292,7 +1307,8 @@ export default function ComprasFacturas() {
                 const isRemission = inv.type === 'remission'
                 const paid = parseFloat(inv.balance || 0) <= 0.01
                 return (
-                  <div key={inv.id} className={clsx('p-3 flex flex-col gap-2', inv.is_overdue && 'bg-status-danger/10/30')}>
+                  <div key={inv.id} onClick={() => setDetailId(inv.id)}
+                    className={clsx('p-3 flex flex-col gap-2 cursor-pointer active:bg-surface-elevated/40', inv.is_overdue && 'bg-status-danger/10/30')}>
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
@@ -1349,6 +1365,13 @@ export default function ComprasFacturas() {
           </>
         )}
       </div>
+
+      {detailId && (
+        <FacturaProveedorDetallePanel
+          invoiceId={detailId}
+          onClose={() => setDetailId(null)}
+        />
+      )}
 
       {showNew && (
         <NuevaFacturaModal

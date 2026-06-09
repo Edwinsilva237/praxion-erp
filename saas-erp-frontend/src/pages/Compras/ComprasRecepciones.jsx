@@ -1293,13 +1293,20 @@ export default function ComprasRecepciones() {
                     <td className="text-sm text-ink-muted">{r.confirmed_by_name || <span className="text-ink-muted">—</span>}</td>
                     <td><Badge status={r.status} /></td>
                     <td>
-                      {r.status !== 'confirmed'
-                        ? <span className="text-ink-muted text-xs">—</span>
-                        : r.invoiced_at
-                          ? <span className="badge-teal text-[10px]" title={r.invoice_number ? `Factura ${r.invoice_number}` : 'Facturada'}>
-                              Facturada{r.invoice_number ? ` · ${r.invoice_number}` : ''}
-                            </span>
-                          : <span className="badge-amber text-[10px]">Sin factura</span>}
+                      {r.status !== 'confirmed' ? (
+                        <span className="text-ink-muted text-xs">—</span>
+                      ) : r.invoiced_at ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-status-success/15 text-status-success"
+                          title={r.invoice_number ? `Factura ${r.invoice_number}` : 'Facturada'}>
+                          <span className="w-1.5 h-1.5 rounded-full bg-status-success shrink-0" />
+                          Facturada{r.invoice_number ? ` · ${r.invoice_number}` : ''}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-status-warning/15 text-status-warning">
+                          <span className="w-1.5 h-1.5 rounded-full bg-status-warning shrink-0" />
+                          Sin factura
+                        </span>
+                      )}
                     </td>
                     <td className="text-sm text-ink-muted">{fmtDateOnly(r.received_date)}</td>
                     <td className="text-right font-mono text-sm font-medium">{fmtMXN(r.total_mxn)}</td>
