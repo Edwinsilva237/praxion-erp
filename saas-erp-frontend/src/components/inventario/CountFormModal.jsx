@@ -177,7 +177,7 @@ export default function CountFormModal({ onClose }) {
                   <div className="space-y-2">
                     {[
                       { value: 'suggested',    label: '💡 Sugerencia inteligente',          desc: 'Items priorizados por riesgo (ABC + diferencias + tiempo + valor). Recomendado.', highlight: true },
-                      { value: 'all',          label: 'Todo el almacén',                     desc: 'Incluye items con stock=0 que tengan niveles configurados.' },
+                      { value: 'all',          label: 'Todo el almacén',                     desc: 'TODOS los artículos activos del catálogo, tengan o no existencia (incluye los que están en cero).' },
                       { value: 'with_stock',   label: 'Solo items con stock > 0',            desc: 'Más rápido. No detecta items "perdidos".' },
                       { value: 'below_min',    label: 'Solo items bajo mínimo / reorden',    desc: 'Foco en lo crítico.' },
                     ].map(opt => (

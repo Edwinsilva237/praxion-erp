@@ -77,6 +77,7 @@ async function createCount({
 
   return withTransaction(async (client) => {
     // Validar almacén si aplica
+    let warehouseType = null
     if (warehouseId) {
       const { rows: whRows } = await client.query(
         `SELECT id, name, type FROM warehouses
@@ -84,6 +85,7 @@ async function createCount({
         [warehouseId, tenantId]
       )
       if (!whRows[0]) throw createError(404, 'Almacén no encontrado o inactivo.')
+      warehouseType = whRows[0].type
     }
 
     // Validar que no haya otro cierre de mes activo este mes
@@ -120,7 +122,10 @@ async function createCount({
 
     // ── Tomar snapshot ────────────────────────────────────────────────────
     // Estrategia según scope:
-    //   - month_close / all (por almacén) => todos los items con stock O con niveles configurados
+    //   - all (cíclico, por almacén) => TODO el catálogo activo del tipo del almacén
+    //       (incluye los que están en cero, sin stock ni nivel configurado).
+    //   - month_close => todos los items con stock O con niveles configurados, en
+    //       todos los almacenes (no expande catálogo: no hay almacén único a asignar).
     //   - with_stock => solo items con quantity > 0
     //   - below_min => solo items en estado below_min o at_reorder
     //   - selected => solo los items pasados explícitamente
@@ -183,6 +188,64 @@ async function createCount({
         )`
       }
 
+      // scope='all' en un conteo CÍCLICO (almacén único) = TODO el catálogo activo
+      // del tipo del almacén, tenga o no existencia. Inyecta una fila en cero por cada
+      // artículo activo que NO esté ya en `combined` (sin stock disponible ni nivel
+      // configurado en este almacén). Espejo de getStock(includeZero) de la mig 193,
+      // adaptado a que la línea de conteo SÍ requiere warehouse_id (NOT NULL).
+      // month_close NO entra aquí (warehouseId = null → no se puede asignar almacén).
+      let catalogUnion = ''
+      if (scope === 'all' && warehouseId) {
+        const isRawWarehouse = warehouseType === 'raw_material' || warehouseType === 'regrind'
+        if (isRawWarehouse) {
+          catalogUnion = `
+            UNION ALL
+            SELECT
+              'raw_material'::inventory_item_type AS item_type,
+              rm.id AS item_id,
+              $2::uuid AS warehouse_id,
+              0::numeric AS system_qty,
+              0::numeric AS system_avg_cost,
+              'kg'::text AS unit
+            FROM raw_materials rm
+            WHERE rm.tenant_id = $1 AND rm.is_active = true
+              AND NOT EXISTS (
+                SELECT 1 FROM inventory_stock s2
+                WHERE s2.tenant_id = $1 AND s2.item_type = 'raw_material'
+                  AND s2.item_id = rm.id AND s2.warehouse_id = $2::uuid
+                  AND s2.status = 'available'
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM inventory_levels il2
+                WHERE il2.tenant_id = $1 AND il2.item_type = 'raw_material'
+                  AND il2.item_id = rm.id AND il2.warehouse_id = $2::uuid
+              )`
+        } else {
+          catalogUnion = `
+            UNION ALL
+            SELECT
+              'product'::inventory_item_type AS item_type,
+              p.id AS item_id,
+              $2::uuid AS warehouse_id,
+              0::numeric AS system_qty,
+              0::numeric AS system_avg_cost,
+              'pza'::text AS unit
+            FROM products p
+            WHERE p.tenant_id = $1 AND p.is_active = true
+              AND NOT EXISTS (
+                SELECT 1 FROM inventory_stock s2
+                WHERE s2.tenant_id = $1 AND s2.item_type = 'product'
+                  AND s2.item_id = p.id AND s2.warehouse_id = $2::uuid
+                  AND s2.status = 'available'
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM inventory_levels il2
+                WHERE il2.tenant_id = $1 AND il2.item_type = 'product'
+                  AND il2.item_id = p.id AND il2.warehouse_id = $2::uuid
+              )`
+        }
+      }
+
       const sql = `
         WITH combined AS (
           SELECT
@@ -210,6 +273,7 @@ async function createCount({
         )
         SELECT * FROM combined
         WHERE item_type IS NOT NULL
+        ${catalogUnion}
         ORDER BY item_type, item_id`
 
       const result = await client.query(sql, params)

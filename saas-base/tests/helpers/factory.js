@@ -179,6 +179,15 @@ async function cleanupTestTenants() {
        WHERE pol.purchase_order_id = po.id AND po.tenant_id = t.id AND t.slug LIKE $1
     `, [slugPattern])
 
+    // Conteos físicos: inventory_count_lines.warehouse_id es RESTRICT a warehouses.
+    // Borrar los conteos (CASCADE a sus líneas) antes del CASCADE del tenant, que
+    // si llega a borrar warehouses primero viola la FK de las líneas.
+    await query(`
+      DELETE FROM inventory_counts WHERE tenant_id IN (
+        SELECT id FROM tenants WHERE slug LIKE $1
+      )
+    `, [slugPattern])
+
     // Finalmente el tenant — CASCADE limpia el resto
     await query(`DELETE FROM tenants WHERE slug LIKE $1`, [slugPattern])
   })
