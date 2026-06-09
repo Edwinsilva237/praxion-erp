@@ -340,19 +340,16 @@ function StepUploadXML({ onParsed, onBack, onClose }) {
     }
     setLoading(true); setError(null)
     try {
+      // Vía axios (purchasesApi) — NO fetch nativo con URL relativa: en prod la web
+      // y el backend están en orígenes distintos, así que `/api/...` relativo pegaba
+      // al propio frontend y devolvía HTML/vacío → "Unexpected end of JSON input".
+      // axios usa el baseURL correcto + inyecta auth/tenant + maneja el refresh 401.
       const form = new FormData()
       form.append('xml', file)
-      const res = await fetch('/api/purchases/invoices/parse-xml', {
-        method: 'POST',
-        headers: { 'X-Tenant-Slug': localStorage.getItem('erp_tenant_slug') || 'demo',
-                   'Authorization': `Bearer ${localStorage.getItem('erp_access_token')}` },
-        body: form,
-      })
-      if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Error al procesar XML') }
-      const data = await res.json()
+      const data = await purchasesApi.parseInvoiceXml(form)
       onParsed(data)
     } catch (e) {
-      setError(e.message || 'Error al procesar el XML')
+      setError(e.response?.data?.error || e.message || 'Error al procesar el XML')
     } finally { setLoading(false) }
   }
 
