@@ -411,10 +411,10 @@ router.post('/parse-document',
  */
 router.get('/receipts', checkPermission('purchases', 'read'), async (req, res, next) => {
   try {
-    const { status, partnerId, purchaseOrderId, from, to, page, limit } = req.query
+    const { status, partnerId, purchaseOrderId, from, to, invoiceStatus, page, limit } = req.query
     const result = await supplierReceiptService.listReceipts({
       tenantId: req.tenant.id,
-      status, partnerId, purchaseOrderId, from, to,
+      status, partnerId, purchaseOrderId, from, to, invoiceStatus,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })

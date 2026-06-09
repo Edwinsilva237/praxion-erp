@@ -31,7 +31,7 @@ async function nextReceiptNumber(client, tenantId, opts = {}) {
 
 async function listReceipts({
   tenantId, status, partnerId, purchaseOrderId,
-  search, warehouseId, hasEvidence, from, to, page = 1, limit = 50,
+  search, warehouseId, hasEvidence, invoiceStatus, from, to, page = 1, limit = 50,
 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
@@ -45,6 +45,10 @@ async function listReceipts({
   if (to)              { params.push(to);              filters.push(`sr.received_date <= $${params.length}`) }
   if (hasEvidence === 'yes')  filters.push(`sr.evidence_path IS NOT NULL`)
   if (hasEvidence === 'no')   filters.push(`sr.evidence_path IS NULL`)
+  // Estado de facturación: `invoiced_at` es la verdad del sistema (lo setea el
+  // registro de la factura; el endpoint pending-invoice usa el mismo criterio).
+  if (invoiceStatus === 'pending')  filters.push(`sr.invoiced_at IS NULL`)
+  if (invoiceStatus === 'invoiced') filters.push(`sr.invoiced_at IS NOT NULL`)
   if (search) {
     params.push(`%${search}%`)
     const sN = params.length
@@ -58,7 +62,15 @@ async function listReceipts({
     `SELECT sr.id, sr.receipt_number, sr.status, sr.received_date,
             sr.generic_supplier, sr.notes,
             sr.document_type, sr.document_number,
-            sr.confirmed_at,
+            sr.confirmed_at, sr.invoiced_at,
+            -- Folio de la factura de proveedor ligada (la más reciente NO cancelada).
+            -- La liga N:N vive en invoice_receipt_links; el folio es invoice_number.
+            (SELECT si.invoice_number
+               FROM invoice_receipt_links irl
+               JOIN supplier_invoices si
+                 ON si.id = irl.supplier_invoice_id AND si.status <> 'cancelled'
+              WHERE irl.supplier_receipt_id = sr.id
+              ORDER BY si.created_at DESC LIMIT 1) AS invoice_number,
             CASE WHEN sr.evidence_path IS NOT NULL THEN sr.evidence_filename ELSE NULL END AS evidence_filename,
             po.order_number  AS purchase_order_number,
             bp.name          AS partner_name,

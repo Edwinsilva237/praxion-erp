@@ -1094,9 +1094,10 @@ export default function ComprasRecepciones() {
   const [fromDate, setFrom]         = useState('')
   const [toDate, setTo]             = useState('')
   const [evidenceFilter, setEvidence] = useState('')
+  const [invoiceFilter, setInvoiceFilter] = useState('')
   const [page, setPage]             = useState(1)
 
-  const hasFilters = search || statusFilter || warehouseFilter || fromDate || toDate || evidenceFilter
+  const hasFilters = search || statusFilter || warehouseFilter || fromDate || toDate || evidenceFilter || invoiceFilter
 
   useEffect(() => {
     if (preselectedOcId && showNew) {
@@ -1111,14 +1112,15 @@ export default function ComprasRecepciones() {
   })
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['purchase-receipts', search, statusFilter, warehouseFilter, evidenceFilter, fromDate, toDate, page],
+    queryKey: ['purchase-receipts', search, statusFilter, warehouseFilter, evidenceFilter, invoiceFilter, fromDate, toDate, page],
     queryFn: () => purchasesApi.listReceipts({
-      search:      search || undefined,
-      status:      statusFilter || undefined,
-      warehouseId: warehouseFilter || undefined,
-      hasEvidence: evidenceFilter || undefined,
-      from:        fromDate || undefined,
-      to:          toDate || undefined,
+      search:        search || undefined,
+      status:        statusFilter || undefined,
+      warehouseId:   warehouseFilter || undefined,
+      hasEvidence:   evidenceFilter || undefined,
+      invoiceStatus: invoiceFilter || undefined,
+      from:          fromDate || undefined,
+      to:            toDate || undefined,
       page, limit: 20,
     }),
     keepPreviousData: true,
@@ -1129,7 +1131,7 @@ export default function ComprasRecepciones() {
   const total    = data?.total || 0
 
   function resetFilters() {
-    setSearch(''); setStatus(''); setWH(''); setFrom(''); setTo(''); setEvidence(''); setPage(1)
+    setSearch(''); setStatus(''); setWH(''); setFrom(''); setTo(''); setEvidence(''); setInvoiceFilter(''); setPage(1)
   }
 
   return (
@@ -1195,6 +1197,13 @@ export default function ComprasRecepciones() {
             <option value="no">Sin evidencia</option>
           </select>
 
+          <select className="select w-44" value={invoiceFilter}
+            onChange={e => { setInvoiceFilter(e.target.value); setPage(1) }}>
+            <option value="">Facturadas y sin factura</option>
+            <option value="pending">🟡 Sin factura</option>
+            <option value="invoiced">🟢 Facturadas</option>
+          </select>
+
           <input type="date" className="input w-36" value={fromDate}
             onChange={e => { setFrom(e.target.value); setPage(1) }} title="Desde" />
           <input type="date" className="input w-36" value={toDate}
@@ -1243,6 +1252,7 @@ export default function ComprasRecepciones() {
                   <th>Recibió</th>
                   <th>Confirmó</th>
                   <th>Estado</th>
+                  <th>Factura</th>
                   <th>Fecha</th>
                   <th className="text-right">Total</th>
                   <th></th>
@@ -1277,6 +1287,15 @@ export default function ComprasRecepciones() {
                     <td className="text-sm text-ink-secondary">{r.created_by_name || '—'}</td>
                     <td className="text-sm text-ink-muted">{r.confirmed_by_name || <span className="text-ink-muted">—</span>}</td>
                     <td><Badge status={r.status} /></td>
+                    <td>
+                      {r.status !== 'confirmed'
+                        ? <span className="text-ink-muted text-xs">—</span>
+                        : r.invoiced_at
+                          ? <span className="badge-teal text-[10px]" title={r.invoice_number ? `Factura ${r.invoice_number}` : 'Facturada'}>
+                              Facturada{r.invoice_number ? ` · ${r.invoice_number}` : ''}
+                            </span>
+                          : <span className="badge-amber text-[10px]">Sin factura</span>}
+                    </td>
                     <td className="text-sm text-ink-muted">{fmtDateOnly(r.received_date)}</td>
                     <td className="text-right font-mono text-sm font-medium">{fmtMXN(r.total_mxn)}</td>
                     <td onClick={e => e.stopPropagation()}>
