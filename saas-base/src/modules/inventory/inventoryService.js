@@ -398,10 +398,13 @@ async function recordProductionValidation(client, { tenantId, shift, userId }) {
 
   // Costo unitario efectivo de un grupo: el prorrateado por medida (cal-1) o, si
   // no hay, el promedio del turno (2da calidad / turnos previos a mig 195).
-  const effectiveCostUnit = (grp) =>
-    (!grp.is_second_quality && grp.product_cost_per_unit != null)
-      ? parseFloat(grp.product_cost_per_unit)
-      : parseFloat(grp.shift_cost_per_unit || 0)
+  // Defensa: un por-medida en 0 (o nulo) cae al promedio del turno — así un
+  // prorrateo que salió $0 nunca valúa el PT en $0 si el turno sí tiene costo.
+  const effectiveCostUnit = (grp) => {
+    const perMeasure = parseFloat(grp.product_cost_per_unit || 0)
+    if (!grp.is_second_quality && perMeasure > 0) return perMeasure
+    return parseFloat(grp.shift_cost_per_unit || 0)
+  }
 
   if (ptGoesToWipFirst) {
     for (const grp of pkgGroups) {

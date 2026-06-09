@@ -4113,7 +4113,13 @@ async function validateShift({ tenantId, shiftId, approved, supervisorNotes, use
     )
     const totalScrapKg = parseFloat(scrapRows[0].total_scrap_kg)
 
-    // Costo/kg: cargas reales > fórmula de orden > 0
+    // Costo/kg: cargas reales > fórmula de orden (blended) > promedio de la fórmula
+    // de MP de la orden (order_mp_formula) > 0.
+    // ⚠️ DEBE coincidir EXACTO con la cadena de getShiftSummary (mismo COALESCE de
+    // 3 fallbacks). Si no, el turno se valida con avgCostPerKg distinto al que el
+    // resumen recalcula → shift_product_costs (y el inventario PT) quedan en $0
+    // mientras el resumen muestra un promedio no-cero. (Bug reportado 2026-06-09:
+    // turnos SIN carga de MP y SIN blended_cost_per_kg pero CON order_mp_formula).
     const { rows: avgCostRows } = await client.query(
       `SELECT COALESCE(
          (SELECT SUM(sml.kg * r.cost_per_kg) / NULLIF(SUM(sml.kg),0)
@@ -4123,6 +4129,12 @@ async function validateShift({ tenantId, shiftId, approved, supervisorNotes, use
           FROM shift_progress sp JOIN production_orders po ON po.id=sp.production_order_id
           WHERE sp.shift_id=$1 AND po.blended_cost_per_kg IS NOT NULL
           ORDER BY sp.microlot_number DESC LIMIT 1),
+         (SELECT AVG(r.cost_per_kg)
+          FROM shift_progress sp
+          JOIN production_orders po ON po.id = sp.production_order_id
+          JOIN order_mp_formula ompf ON ompf.production_order_id = po.id AND ompf.valid_until IS NULL
+          JOIN raw_materials r ON r.id = ompf.raw_material_id
+          WHERE sp.shift_id = $1),
          0
        ) AS avg_cost_per_kg`,
       [shiftId]
