@@ -317,6 +317,9 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
       qc.invalidateQueries({ queryKey: ['purchase-receipts'] })
       qc.invalidateQueries({ queryKey: ['purchase-orders'] })
       qc.invalidateQueries({ queryKey: ['receipt-detail', receiptId] })
+      // Al confirmar, la recepción pasa a ser facturable → refrescar el selector
+      // de "pendientes de facturar" del modal de Comprobantes recibidos.
+      qc.invalidateQueries({ queryKey: ['receipts-pending'] })
       // Confirmar recepción reduce el inventario en tránsito y aumenta stock.
       qc.invalidateQueries({ queryKey: ['inv-stock'] })
       qc.invalidateQueries({ queryKey: ['inv-levels'] })
@@ -332,6 +335,8 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['purchase-receipts'] })
       qc.invalidateQueries({ queryKey: ['receipt-detail', receiptId] })
+      // Cancelar saca la recepción del selector de "pendientes de facturar".
+      qc.invalidateQueries({ queryKey: ['receipts-pending'] })
       // Cancelar un borrador borra sus lotes (que ya contaban como stock).
       qc.invalidateQueries({ queryKey: ['inv-stock'] })
       qc.invalidateQueries({ queryKey: ['inv-levels'] })

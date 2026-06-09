@@ -464,11 +464,17 @@ function StepReconcile({ parsed, onClose, onSaved }) {
     })
   }, [allReceiptLines.length, allReceiptLines.map(l => l._key).join('|')])
 
-  // Recepciones pendientes del proveedor
+  // Recepciones pendientes del proveedor. SIEMPRE fresco al abrir: el staleTime
+  // global (1 min) hacía que al confirmar recepciones y abrir el modal enseguida
+  // se mostrara la lista cacheada vieja (faltaban las recién confirmadas) hasta
+  // que venciera el min o cambiara el foco. staleTime:0 + refetchOnMount:'always'
+  // garantiza que cada vez que se abre el selector se consulte la lista actual.
   const { data: pendingReceiptsRaw, isLoading: loadingRec } = useQuery({
     queryKey: ['receipts-pending', partner?.id],
     queryFn: () => purchasesApi.listPendingInvoiceReceipts(partner?.id),
     enabled: true,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const pendingReceipts = Array.isArray(pendingReceiptsRaw) ? pendingReceiptsRaw : []
 
@@ -521,6 +527,7 @@ function StepReconcile({ parsed, onClose, onSaved }) {
     onSuccess: (invoice) => {
       qc.invalidateQueries({ queryKey: ['purchase-invoices'] })
       qc.invalidateQueries({ queryKey: ['purchase-receipts'] })
+      qc.invalidateQueries({ queryKey: ['receipts-pending'] })
       onSaved(invoice)
       onClose()
     },
