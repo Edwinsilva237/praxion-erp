@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { productionApi } from '@/api/production'
 import Spinner from '@/components/ui/Spinner'
@@ -50,7 +51,7 @@ export default function ForceCloseModal({ shiftId, operatorName, onClose, onSucc
     mutation.mutate({ reason: finalReason })
   }
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
       <div className="bg-surface-primary rounded-2xl max-w-lg w-full p-5 space-y-4 max-h-[90vh] overflow-y-auto">
         {/* Header */}
@@ -74,8 +75,9 @@ export default function ForceCloseModal({ shiftId, operatorName, onClose, onSucc
         <div className="bg-status-danger/10 border border-status-danger/40 rounded-xl p-3 text-sm text-status-danger space-y-1">
           <p className="font-semibold">Esta acción no se puede deshacer.</p>
           <ul className="text-xs list-disc pl-4 space-y-0.5">
-            <li>El turno saliente se cerrará inmediatamente.</li>
-            <li>El turno entrante se activará de forma automática.</li>
+            <li>El turno se cerrará inmediatamente.</li>
+            <li>Si hay un relevo esperando, se activará automáticamente.</li>
+            <li>Si no hay relevo, el turno se finalizará (se registran inventario y costos) y la línea quedará libre para el siguiente.</li>
             <li>Quedará registrado quién y por qué se forzó el cierre.</li>
           </ul>
         </div>
@@ -134,8 +136,7 @@ export default function ForceCloseModal({ shiftId, operatorName, onClose, onSucc
             className="mt-0.5"
           />
           <span>
-            Confirmo que entiendo las consecuencias y que el operador saliente
-            no pudo o no quiso cerrar su turno normalmente.
+            Confirmo que entiendo las consecuencias de forzar el cierre de este turno.
           </span>
         </label>
 
@@ -164,6 +165,7 @@ export default function ForceCloseModal({ shiftId, operatorName, onClose, onSucc
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

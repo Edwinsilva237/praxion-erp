@@ -691,8 +691,13 @@ router.patch('/shifts/:id/active-order', checkPermission('production','create'),
   } catch (err) { next(err) }
 })
 
-// ─── Forzar cierre de turno (solo supervisor, después de 5 min de espera) ─────
-router.post('/shifts/:id/force-close', checkPermission('production','update'), async (req,res,next) => {
+// ─── Forzar cierre / finalización de turno ────────────────────────────────────
+// Supervisor (production:update) O admin (production:force_close, mig 200) — NO se
+// exige ser el supervisor del turno. Para relevo activo hay espera de 5 min; para
+// un turno atorado en pending_handover (sin relevo) se finaliza de inmediato.
+router.post('/shifts/:id/force-close',
+  checkAnyPermission([['production','update'], ['production','force_close']]),
+  async (req,res,next) => {
   try {
     const { reason } = req.body
     const result = await svc.forceCloseShift({
@@ -700,7 +705,15 @@ router.post('/shifts/:id/force-close', checkPermission('production','update'), a
       reason: reason || null,
       userId: uid(req), ipAddress: ip(req), userAgent: ua(req),
     })
-    res.json({ ...result, message: `Turno cerrado. ${result.operator_name} fue reemplazado.` })
+    let message
+    if (result.activated_shift_id) {
+      message = `Turno cerrado. ${result.operator_name} fue reemplazado por el relevo.`
+    } else if (result.finalized) {
+      message = `Turno de ${result.operator_name} cerrado y finalizado. La línea quedó libre.`
+    } else {
+      message = `Turno de ${result.operator_name} cerrado. Quedó pendiente de validación.`
+    }
+    res.json({ ...result, message })
   } catch(err) { next(err) }
 })
 

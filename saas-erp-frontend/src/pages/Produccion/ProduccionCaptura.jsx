@@ -238,8 +238,11 @@ function PantallaSeleccion({
   onSelectShift, onShiftClosed,
   allowSelfStart, allowQuickOrder, selfStartMutation, selfQuickStartMutation, products,
   startNewRequested, onStartNew,
+  canForceClose = false, currentUserId,
 }) {
   const scheduledShifts = myTodayShifts.filter(s => s.status === 'scheduled')
+  // Admin: turno ajeno que se quiere forzar a cerrar/finalizar (mig 200).
+  const [forceCloseTarget, setForceCloseTarget] = useState(null)
 
   return (
     <div className="page-enter max-w-lg mx-auto flex flex-col gap-4">
@@ -313,20 +316,40 @@ function PantallaSeleccion({
           ))}
 
           {/* Turnos activos (de otros que puede tomar) */}
-          {activeShifts.map((s) => (
-            <button key={s.id} onClick={() => onSelectShift(s.id, null)}
-              className="w-full text-left card hover:border-brand-500/40 transition-colors">
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-semibold text-ink-primary">{s.product_name}</span>
-                <Badge variant="amber" label={`Turno ${s.shift_number}`} />
+          {activeShifts.map((s) => {
+            // pending_handover + closed_at = turno cerrado esperando validación.
+            // Aparece como "activo" pero NO se puede capturar ahí (causa de la
+            // confusión "el operador anterior sigue activo"). Lo distinguimos.
+            const isClosedPending = s.status === 'pending_handover' && s.closed_at
+            const isOwn = s.operator_id === currentUserId
+            return (
+              <div key={s.id} className="card hover:border-brand-500/40 transition-colors">
+                <button onClick={() => onSelectShift(s.id, null)} className="w-full text-left">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-semibold text-ink-primary">{s.product_name}</span>
+                    <Badge variant={isClosedPending ? 'gray' : 'amber'}
+                      label={isClosedPending ? `Turno ${s.shift_number} · cerrado` : `Turno ${s.shift_number}`} />
+                  </div>
+                  <div className="text-sm text-ink-muted space-y-0.5">
+                    <p>Largo: {s.length_mm ? `${(s.length_mm / 1000).toFixed(2)}m` : '—'} · Resina: {s.resin_type}</p>
+                    <p>Operador: {s.operator_name}</p>
+                    <p className="font-medium text-brand-300">{s.pt_units_produced} piezas capturadas</p>
+                    {isClosedPending && (
+                      <p className="text-status-warning">⏳ Cerrado, pendiente de validar — aquí no se puede capturar.</p>
+                    )}
+                  </div>
+                </button>
+                {canForceClose && !isOwn && (
+                  <button
+                    onClick={() => setForceCloseTarget({ id: s.id, operatorName: s.operator_name })}
+                    className="mt-2 text-xs font-semibold text-status-danger hover:underline"
+                  >
+                    ⚠ Forzar cierre / finalizar turno (admin)
+                  </button>
+                )}
               </div>
-              <div className="text-sm text-ink-muted space-y-0.5">
-                <p>Largo: {s.length_mm ? `${(s.length_mm / 1000).toFixed(2)}m` : '—'} · Resina: {s.resin_type}</p>
-                <p>Operador: {s.operator_name}</p>
-                <p className="font-medium text-brand-300">{s.pt_units_produced} piezas capturadas</p>
-              </div>
-            </button>
-          ))}
+            )
+          })}
 
           {/* Cola de producción (siempre visible, informativa) */}
           {queueOrders.length > 0 && (
@@ -365,6 +388,16 @@ function PantallaSeleccion({
           )}
         </>
       )}
+
+      {/* Admin: forzar cierre/finalización de un turno ajeno atorado (mig 200) */}
+      {forceCloseTarget && (
+        <ForceCloseModal
+          shiftId={forceCloseTarget.id}
+          operatorName={forceCloseTarget.operatorName}
+          onClose={() => setForceCloseTarget(null)}
+          onSuccess={() => setForceCloseTarget(null)}
+        />
+      )}
     </div>
   )
 }
@@ -374,6 +407,9 @@ export default function ProduccionCaptura() {
   const queryClient = useQueryClient()
   const weightRef   = useRef(null)
   const currentUser = useAuthStore((s) => s.user)
+  const can         = useAuthStore((s) => s.can)
+  // Admin/supervisor con permiso para forzar el cierre de turnos ajenos (mig 200).
+  const hasForceClosePerm = can('production', 'force_close') || can('production', 'update')
 
   // Estado principal
   const [selectedShift, setSelectedShift]   = useState(null)
@@ -556,18 +592,20 @@ export default function ProduccionCaptura() {
   // Estado del modal de cierre forzado (solo supervisor)
   const [showForceClose, setShowForceClose] = useState(false)
 
-  // ¿El usuario actual es supervisor de este turno?
+  // ¿El usuario actual puede forzar el cierre de ESTE turno de relevo? Lo puede
+  // hacer el supervisor del turno O cualquiera con permiso de force_close (admin).
   const isSupervisorOfShift = !!myActiveShift &&
     myActiveShift.supervisor_id === currentUser?.id &&
     myActiveShift.operator_id !== currentUser?.id
+  const canForceCloseRelay = isSupervisorOfShift || hasForceClosePerm
 
   // ¿Han pasado al menos 5 min desde que el entrante confirmó presencia?
   // El backend valida lo mismo, pero lo replicamos en frontend para UX.
   const minSinceHandoverRequest = myActiveShift?.handover_requested_at
     ? Math.floor((Date.now() - new Date(myActiveShift.handover_requested_at).getTime()) / 60000)
     : 0
-  const canForceClose = isSupervisorOfShift && nextOperatorWaiting && minSinceHandoverRequest >= 5
-  const forceCloseInMin = isSupervisorOfShift && nextOperatorWaiting && minSinceHandoverRequest < 5
+  const canForceClose = canForceCloseRelay && nextOperatorWaiting && minSinceHandoverRequest >= 5
+  const forceCloseInMin = canForceCloseRelay && nextOperatorWaiting && minSinceHandoverRequest < 5
     ? Math.max(1, 5 - minSinceHandoverRequest)
     : 0
 
@@ -884,6 +922,8 @@ export default function ProduccionCaptura() {
         products={allProducts}
         startNewRequested={startNewRequested}
         onStartNew={() => { setShiftClosed(false); setStartNewRequested(true) }}
+        canForceClose={hasForceClosePerm}
+        currentUserId={currentUser?.id}
       />
     )
   }
@@ -1069,8 +1109,8 @@ export default function ProduccionCaptura() {
               El operador del siguiente turno confirmó su presencia y está esperando.
               Cierra tu turno cuando termines el paquete actual.
             </p>
-            {/* Botón de cierre forzado: solo supervisor, después de 5 min */}
-            {isSupervisorOfShift && (
+            {/* Botón de cierre forzado: supervisor o admin (force_close), tras 5 min */}
+            {canForceCloseRelay && (
               <div className="mt-2">
                 {canForceClose ? (
                   <button

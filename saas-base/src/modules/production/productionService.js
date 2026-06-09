@@ -3804,22 +3804,45 @@ async function closeShiftWithOverhead({ tenantId, shiftId, userId, ipAddress, us
   return closedShift
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Forzar el cierre / finalización de un turno atorado.
+//
+// Permiso: production:update (supervisor) O production:force_close (admin) — la
+// verificación de rol se hace en el middleware del endpoint, NO se exige ser el
+// supervisor del turno (mig 200, pedido 2026-06-09).
+//
+// Acepta turnos en `active` Y `pending_handover`:
+//   - active           → lo cierra (force_closed) como antes.
+//   - pending_handover → turno ya cerrado pero atorado en el tablero (cerró bien
+//                        pero nadie lo validó). Solo registra quién forzó.
+//
+// Después del cierre, si NADIE toma el relevo (no hay un entrante esperando), el
+// turno se FINALIZA validándolo (validateShift approved=true): registra
+// inventario + costos → status 'reviewed' → sale del tablero y libera la línea.
+// Si hay relevo esperando, se activa al entrante y el saliente queda en cola de
+// validación (comportamiento de relevo original, intacto).
+//
+// La finalización corre FUERA de la transacción de cierre (igual que el overhead
+// en closeShiftWithOverhead): validateShift abre su propia transacción y nunca
+// debe anidarse. Si la validación falla (turno con datos incompletos), el cierre
+// NO se revierte — el turno queda en pending_handover para validarse a mano.
+// ──────────────────────────────────────────────────────────────────────────
 async function forceCloseShift({ tenantId, shiftId, reason, userId, ipAddress, userAgent }) {
-  // Solo supervisores — la verificación de rol se hace en el middleware del endpoint
-  return withTransaction(async (client) => {
+  const phase1 = await withTransaction(async (client) => {
     const { rows: shiftRows } = await client.query(
       `SELECT ps.*, u.full_name AS operator_name
        FROM production_shifts ps
        JOIN users u ON u.id = ps.operator_id
-       WHERE ps.id = $1 AND ps.tenant_id = $2 AND ps.status = 'active'`,
+       WHERE ps.id = $1 AND ps.tenant_id = $2 AND ps.status IN ('active','pending_handover')`,
       [shiftId, tenantId]
     )
-    if (!shiftRows[0]) throw createError(404, 'Turno no encontrado o no está activo.')
+    if (!shiftRows[0]) throw createError(404, 'Turno no encontrado o ya no está en curso.')
 
     const shift = shiftRows[0]
 
-    // Verificar que han pasado al menos 5 minutos desde handover_requested_at
-    if (shift.handover_requested_at) {
+    // Espera de 5 min SOLO cuando hay un relevo esperando (handover_requested_at):
+    // protege el relevo cortés. Para un turno atorado sin relevo no aplica.
+    if (shift.status === 'active' && shift.handover_requested_at) {
       const minsPassed = (Date.now() - new Date(shift.handover_requested_at).getTime()) / 60000
       if (minsPassed < 5) {
         const remaining = Math.ceil(5 - minsPassed)
@@ -3827,19 +3850,34 @@ async function forceCloseShift({ tenantId, shiftId, reason, userId, ipAddress, u
       }
     }
 
-    // Cerrar el turno como forzado
-    const { rows: closed } = await client.query(
-      `UPDATE production_shifts
-       SET status = 'pending_handover',
-           closed_at = NOW(),
-           force_closed_by = $1,
-           force_close_reason = $2,
-           force_closed_at = NOW()
-       WHERE id = $3 RETURNING *`,
-      [userId, reason || null, shiftId]
-    )
+    let closedRow
+    if (shift.status === 'active') {
+      const { rows } = await client.query(
+        `UPDATE production_shifts
+         SET status = 'pending_handover',
+             closed_at = NOW(),
+             force_closed_by = $1,
+             force_close_reason = $2,
+             force_closed_at = NOW()
+         WHERE id = $3 RETURNING *`,
+        [userId, reason || null, shiftId]
+      )
+      closedRow = rows[0]
+    } else {
+      // Ya estaba pending_handover (cerrado pero atorado): NO tocar closed_at;
+      // solo dejar constancia de quién forzó (sin pisar un force-close previo).
+      const { rows } = await client.query(
+        `UPDATE production_shifts
+         SET force_closed_by    = $1,
+             force_close_reason = COALESCE(force_close_reason, $2),
+             force_closed_at    = COALESCE(force_closed_at, NOW())
+         WHERE id = $3 RETURNING *`,
+        [userId, reason || null, shiftId]
+      )
+      closedRow = rows[0]
+    }
 
-// Activar el turno entrante asociado al saliente que se está force-cerrando.
+    // Activar el turno entrante asociado al saliente que se está force-cerrando.
     // El entrante es exactamente el shift apuntado por handover_waiting_shift_id
     // del saliente (no es "cualquier shift en pending_handover").
     //
@@ -3868,16 +3906,39 @@ async function forceCloseShift({ tenantId, shiftId, reason, userId, ipAddress, u
       action: 'shift.force_closed',
       resource: 'production_shifts',
       resourceId: shiftId,
-      payload: { reason, operatorName: shift.operator_name, activatedShift: activatedShift?.id },
+      payload: { reason, operatorName: shift.operator_name, prevStatus: shift.status, activatedShift: activatedShift?.id },
       ipAddress, userAgent,
     })
 
-    return {
-      closed: closed[0],
-      activated_shift_id: activatedShift?.id || null,
-      operator_name: shift.operator_name,
-    }
+    return { shift, closedRow, activatedShift }
   })
+
+  // Si NADIE tomó el relevo, finalizar el turno para que salga del tablero y
+  // libere la línea. validateShift corre su propia transacción → fuera de la de
+  // arriba. Best-effort: si falla (datos incompletos), el turno queda cerrado
+  // (pending_handover) para validarse a mano; no revertimos el cierre.
+  let finalized = false
+  if (!phase1.activatedShift) {
+    try {
+      await validateShift({
+        tenantId,
+        shiftId,
+        approved: true,
+        supervisorNotes: `Finalizado por cierre forzado (admin).${reason ? ' Motivo: ' + reason : ''}`,
+        userId, ipAddress, userAgent,
+      })
+      finalized = true
+    } catch (err) {
+      console.warn(`[forceClose] finalización (validateShift) falló; turno ${shiftId} queda pending_handover:`, err.message)
+    }
+  }
+
+  return {
+    closed: phase1.closedRow,
+    activated_shift_id: phase1.activatedShift?.id || null,
+    finalized,
+    operator_name: phase1.shift.operator_name,
+  }
 }
 
 
@@ -4147,6 +4208,17 @@ async function validateShift({ tenantId, shiftId, approved, supervisorNotes, use
       `UPDATE production_shifts SET status='reviewed', cost_per_unit=$1
        WHERE id=$2 RETURNING *`,
       [costPerUnit.toFixed(6), shiftId]
+    )
+
+    // Sincronizar el turno PROGRAMADO ligado. Al confirmar presencia el
+    // scheduled_shift pasa a 'active'; nunca tenía transición terminal, así que
+    // tras validar el turno real seguía mostrándose "activo" en Programación para
+    // siempre (bug reportado 2026-06-09). Al validar lo marcamos 'completed'.
+    // (Los registros viejos atorados los repara la mig 201.)
+    await client.query(
+      `UPDATE scheduled_shifts SET status = 'completed'
+        WHERE shift_id = $1 AND tenant_id = $2 AND status = 'active'`,
+      [shiftId, tenantId]
     )
 
     await client.query(
