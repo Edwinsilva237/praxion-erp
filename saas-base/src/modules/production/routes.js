@@ -10,6 +10,7 @@ const svc                 = require('./productionService')
 const svcSched            = require('./scheduledShiftService')
 const svcShiftCfg         = require('./shiftConfigService')
 const { redactOrder, redactOrderList } = require('./recipeRedactor')
+const costRecompute = require('./costRecomputeService')
 const { getUserPermissions } = require('../roles/permissionService')
 const { generateShiftSummaryPDF } = require('./shiftSummaryPdfService')
 
@@ -300,6 +301,39 @@ router.post('/shifts/:id/revert-validation', checkPermission('production','rever
     next(err)
   }
 })
+
+// ─── Herramienta admin: recálculo de costo de turnos validados en $0 ──────────
+// Fase 1 PREVIEW (solo lectura): lista turnos 'reviewed' del rango + si son
+// revertibles (ventana de 72h saltada; demás frenos visibles).
+router.get('/admin/zero-cost-recompute/preview',
+  checkPermission('production','revert_validation'),
+  async (req,res,next) => {
+    try {
+      res.json(await costRecompute.previewZeroCostShifts({
+        tenantId: tid(req), from: req.query.from, to: req.query.to,
+      }))
+    } catch(err){
+      if (err.status) return res.status(err.status).json({ error: err.message })
+      next(err)
+    }
+  })
+
+// Fase 2 EJECUTAR: revert→re-cerrar→re-validar sobre una lista EXPLÍCITA de IDs.
+router.post('/admin/zero-cost-recompute/execute',
+  checkPermission('production','revert_validation'),
+  async (req,res,next) => {
+    try {
+      const { shiftIds, reason, secondaryApproverId } = req.body || {}
+      res.json(await costRecompute.executeZeroCostRecompute({
+        tenantId: tid(req), shiftIds, reason,
+        secondaryApproverId: secondaryApproverId || null,
+        userId: uid(req), ipAddress: ip(req), userAgent: ua(req),
+      }))
+    } catch(err){
+      if (err.status) return res.status(err.status).json({ error: err.message })
+      next(err)
+    }
+  })
 
 // Reasignar al responsable del handover durante el turno (relevo de última hora,
 // ausencia del designado original, etc.). Body: { memberId } del production_shift_members.

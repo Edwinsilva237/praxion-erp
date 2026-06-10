@@ -3719,7 +3719,7 @@ async function getClosedShiftSummary({ tenantId, shiftId, userId }) {
   }
 }
 
-async function closeShift({ tenantId, shiftId, userId, ipAddress, userAgent }) {
+async function closeShift({ tenantId, shiftId, userId, ipAddress, userAgent, skipAuth = false }) {
   // Verificar que el usuario es el operador asignado o el supervisor
   const { rows: check } = await query(
     `SELECT id, operator_id, supervisor_id FROM production_shifts
@@ -3727,16 +3727,20 @@ async function closeShift({ tenantId, shiftId, userId, ipAddress, userAgent }) {
     [shiftId, tenantId]
   )
   if (!check[0]) throw createError(400, 'El turno no está activo.')
-  // Si el turno tiene un responsable de handover designado, solo ese puede
-  // cerrar (firmar la entrega). Sin designado → fallback a cualquier miembro
-  // con can_validate (comportamiento previo).
-  const designatedHandover = await getHandoverResponsibleUserId({ shiftId })
-  if (designatedHandover) {
-    if (designatedHandover !== userId) {
-      throw createError(403, 'Este turno tiene un responsable designado de la entrega. Solo esa persona puede cerrarlo.')
+  // skipAuth lo usa SOLO la herramienta admin de recálculo de costo (re-cierre
+  // tras revertir): el turno ya fue cerrado/validado antes por quien correspondía.
+  if (!skipAuth) {
+    // Si el turno tiene un responsable de handover designado, solo ese puede
+    // cerrar (firmar la entrega). Sin designado → fallback a cualquier miembro
+    // con can_validate (comportamiento previo).
+    const designatedHandover = await getHandoverResponsibleUserId({ shiftId })
+    if (designatedHandover) {
+      if (designatedHandover !== userId) {
+        throw createError(403, 'Este turno tiene un responsable designado de la entrega. Solo esa persona puede cerrarlo.')
+      }
+    } else if (!(await userCanActOnShift({ shiftId, userId, capability: 'validate' }))) {
+      throw createError(403, 'Solo los miembros del turno con permiso de validación pueden cerrarlo.')
     }
-  } else if (!(await userCanActOnShift({ shiftId, userId, capability: 'validate' }))) {
-    throw createError(403, 'Solo los miembros del turno con permiso de validación pueden cerrarlo.')
   }
 
   return withTransaction(async (client) => {
@@ -3784,8 +3788,8 @@ async function closeShift({ tenantId, shiftId, userId, ipAddress, userAgent }) {
 // ─────────────────────────────────────────────────────────────────────────────
 const _closeShiftCore = closeShift
 
-async function closeShiftWithOverhead({ tenantId, shiftId, userId, ipAddress, userAgent }) {
-  const closedShift = await _closeShiftCore({ tenantId, shiftId, userId, ipAddress, userAgent })
+async function closeShiftWithOverhead({ tenantId, shiftId, userId, ipAddress, userAgent, skipAuth = false }) {
+  const closedShift = await _closeShiftCore({ tenantId, shiftId, userId, ipAddress, userAgent, skipAuth })
 
   // SaaS v2: apply overhead from tenant_overhead_periods
   try {
@@ -4890,7 +4894,7 @@ async function setShiftActiveOrder({ tenantId, shiftId, orderId, userId }) {
  *     },
  *   }
  */
-async function getRevertContext({ tenantId, shiftId }) {
+async function getRevertContext({ tenantId, shiftId, bypassWindow = false }) {
   const { rows: shiftRows } = await query(
     `SELECT ps.*, po.status AS order_status, po.order_number
      FROM production_shifts ps
@@ -4941,10 +4945,20 @@ async function getRevertContext({ tenantId, shiftId }) {
       const hoursSince = (Date.now() - new Date(reviewedAt).getTime()) / 3600000
       windowHoursRemaining = config.revert_validation_window_hours - hoursSince
       if (windowHoursRemaining <= 0) {
-        blockers.push({
-          code: 'WINDOW_EXPIRED',
-          message: `Han pasado más de ${config.revert_validation_window_hours} horas desde la validación.`,
-        })
+        // bypassWindow lo usa SOLO la herramienta admin de recálculo de costo
+        // (super_admin): degrada la ventana de blocker a warning. Los demás
+        // frenos (PT vendido, orden cerrada, período cerrado) NO se tocan.
+        if (bypassWindow) {
+          warnings.push({
+            code: 'WINDOW_EXPIRED_BYPASSED',
+            message: `Pasaron >${config.revert_validation_window_hours}h desde validar; ventana saltada por recálculo admin.`,
+          })
+        } else {
+          blockers.push({
+            code: 'WINDOW_EXPIRED',
+            message: `Han pasado más de ${config.revert_validation_window_hours} horas desde la validación.`,
+          })
+        }
       }
     }
   }
@@ -5077,13 +5091,13 @@ async function getRevertContext({ tenantId, shiftId }) {
  */
 async function revertValidation({
   tenantId, shiftId, reason, secondaryApproverId,
-  userId, ipAddress, userAgent,
+  userId, ipAddress, userAgent, bypassWindow = false,
 }) {
   if (!reason || String(reason).trim().length < 20) {
     throw createError(400, 'La razón de la reversión debe tener al menos 20 caracteres.')
   }
 
-  const ctx = await getRevertContext({ tenantId, shiftId })
+  const ctx = await getRevertContext({ tenantId, shiftId, bypassWindow })
   if (!ctx.allowed) {
     const err = new Error(ctx.blockers.map(b => b.message).join(' '))
     err.status = 422
