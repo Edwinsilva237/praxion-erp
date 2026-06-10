@@ -459,23 +459,28 @@ router.get('/receipts/pending-invoice', checkPermission('purchases', 'read'), as
                  WHERE irl.supplier_receipt_id = sr.id
                    AND si.status <> 'cancelled' AND si.type = 'remission'
               ) AS has_remission,
+              -- Saldo POR FACTURAR = subtotal de las líneas aún sin factura real activa
+              -- (NULL, cancelada, o cubierta por remisión = reemplazable). Con facturación
+              -- parcial esto es menor al total de la recepción.
               COALESCE((
                 SELECT SUM(srl.subtotal) FROM supplier_receipt_lines srl
+                  LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
                  WHERE srl.supplier_receipt_id = sr.id
+                   AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled' OR ci.type = 'remission')
               ), 0)::numeric AS total_mxn
        FROM supplier_receipts sr
        LEFT JOIN business_partners bp ON bp.id = sr.partner_id
        WHERE sr.tenant_id = $1
          AND sr.status = 'confirmed'
-         -- "Pendiente de facturar" = SIN factura REAL activa. Una recepción con solo
-         -- una remisión-CXP (Fase 2) SÍ aparece, para poder registrar el CFDI real
-         -- → la sustitución automática anula la remisión. Una con factura real activa
-         -- NO aparece (no se factura dos veces la misma recepción).
-         AND NOT EXISTS (
-           SELECT 1 FROM invoice_receipt_links irl
-             JOIN supplier_invoices si ON si.id = irl.supplier_invoice_id
-            WHERE irl.supplier_receipt_id = sr.id
-              AND si.status <> 'cancelled' AND si.type = 'invoice'
+         -- "Pendiente de facturar" (nivel LÍNEA): aparece si tiene AL MENOS UNA línea
+         -- sin factura REAL activa (NULL / cancelada / cubierta por remisión). Así una
+         -- recepción parcialmente facturada SIGUE apareciendo por sus líneas pendientes,
+         -- y una con remisión-CXP también (para registrar el CFDI y sustituir).
+         AND EXISTS (
+           SELECT 1 FROM supplier_receipt_lines srl
+             LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+            WHERE srl.supplier_receipt_id = sr.id
+              AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled' OR ci.type = 'remission')
          )
          ${partnerFilter}
        ORDER BY sr.received_date DESC
@@ -787,8 +792,9 @@ router.post('/invoices/parse-xml',
  *   documentType: 'invoice' | 'remission',
  *   documentNumber, uuidSat?, serie?, folio?, rfcEmisor?,
  *   invoiceDate, currency?, subtotal, tax, total,
- *   receiptIds?: string[],   // múltiples recepciones
- *   supplierReceiptId?,      // compatibilidad hacia atrás
+ *   receiptIds?: string[],     // múltiples recepciones (factura toda la recepción)
+ *   receiptLineIds?: string[], // facturación PARCIAL: solo estas líneas (mig 202)
+ *   supplierReceiptId?,        // compatibilidad hacia atrás
  *   purchaseOrderId?,
  *   xmlContent?,
  *   creditDays?, notes?

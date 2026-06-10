@@ -140,13 +140,24 @@ async function getReceipt({ tenantId, receiptId }) {
             w.name         AS warehouse_name,
             rl.lot_number       AS lot_number,
             rl.manufacturer_lot AS manufacturer_lot,
-            rl.expiry_date      AS lot_expiry_date
+            rl.expiry_date      AS lot_expiry_date,
+            -- Estado de facturación de la línea (mig 202). Una línea está realmente
+            -- facturada solo si su factura ligada es REAL (type='invoice') y activa.
+            -- Si está NULL, cancelada, o es una remisión-CXP, la línea sigue
+            -- PENDIENTE (re-facturable) → invoice_pending = true.
+            ci.status         AS invoiced_status,
+            ci.type           AS invoiced_type,
+            ci.invoice_number AS invoiced_number,
+            (srl.invoiced_by_invoice_id IS NULL
+              OR ci.status = 'cancelled'
+              OR ci.type = 'remission') AS invoice_pending
      FROM supplier_receipt_lines srl
      LEFT JOIN purchase_order_lines pol ON pol.id  = srl.purchase_order_line_id
      LEFT JOIN raw_materials        rm  ON rm.id   = srl.item_id AND srl.item_type = 'raw_material'
      LEFT JOIN products             pt  ON pt.id   = srl.item_id AND srl.item_type = 'product'
      LEFT JOIN warehouses           w   ON w.id    = srl.warehouse_id
      LEFT JOIN raw_material_lots    rl  ON rl.supplier_receipt_line_id = srl.id
+     LEFT JOIN supplier_invoices    ci  ON ci.id   = srl.invoiced_by_invoice_id
      WHERE srl.supplier_receipt_id = $1
      ORDER BY srl.line_number`,
     [receiptId]

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import { purchasesApi } from '@/api/purchases'
@@ -433,15 +433,30 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
       r.lines.forEach(l => all.push({
         ...l,
         _key: `${r.id}::${l.id}`,
+        _receiptId: r.id,
         _receiptNumber: r.receipt_number,
+        // Línea facturable: aún sin factura REAL activa (mig 202). Las líneas ya
+        // cubiertas por una factura real se muestran como informativas, no se
+        // pueden volver a facturar.
+        _pending: l.invoice_pending !== false,
       }))
     })
     return all
   }, [receiptDetailQueries.map(q => q.data?.id).join('|')])
 
+  // Solo las líneas PENDIENTES (sin factura real) entran a la factura. Los checks
+  // de la tabla SELECCIONAN qué líneas cubre esta factura — facturación parcial por
+  // línea completa (mig 202). Por defecto se marcan TODAS las pendientes (= toda la
+  // recepción, el caso común); el usuario desmarca las que no van en esta factura.
+  const pendingLines = useMemo(
+    () => allReceiptLines.filter(l => l._pending),
+    [allReceiptLines]
+  )
+  const pendingKeysSig = pendingLines.map(l => l._key).join('|')
+
   const loadingReceiptDetails = receiptDetailQueries.some(q => q.isLoading)
-  const allValidated = allReceiptLines.length > 0
-    && allReceiptLines.every(l => validatedLines.has(l._key))
+  const allPendingSelected = pendingLines.length > 0
+    && pendingLines.every(l => validatedLines.has(l._key))
 
   function toggleLine(key) {
     setValidatedLines(prev => {
@@ -452,19 +467,36 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
   }
   function toggleAllLines() {
     setValidatedLines(prev => {
-      if (allValidated) return new Set()
-      return new Set(allReceiptLines.map(l => l._key))
+      if (allPendingSelected) return new Set()
+      return new Set(pendingLines.map(l => l._key))
     })
   }
 
-  // Si el usuario quita una recepción, sus checks ya no aplican.
+  // Siembra por defecto: cuando las líneas de una recepción recién seleccionada
+  // terminan de cargar, marcamos TODAS sus líneas pendientes. Un ref recuerda qué
+  // recepciones ya sembramos para no re-marcar lo que el usuario desmarcó a mano.
+  const seededRef = useRef(new Set())
+  const loadedReceiptIds = receiptDetailQueries.filter(q => q.data?.id).map(q => q.data.id)
+  const loadedSig = loadedReceiptIds.join('|')
   useEffect(() => {
+    // Al deseleccionar una recepción, olvidamos su siembra para re-sembrar si vuelve.
+    for (const rid of [...seededRef.current]) {
+      if (!selectedReceipts.includes(rid)) seededRef.current.delete(rid)
+    }
     setValidatedLines(prev => {
-      const valid = new Set(allReceiptLines.map(l => l._key))
-      const next = new Set([...prev].filter(k => valid.has(k)))
-      return next.size === prev.size ? prev : next
+      const next = new Set(prev)
+      const pendingKeys = new Set(pendingLines.map(l => l._key))
+      // Poda: quita checks de líneas que ya no están / ya no son facturables.
+      for (const k of [...next]) if (!pendingKeys.has(k)) next.delete(k)
+      // Siembra: recepciones recién cargadas marcan sus líneas pendientes.
+      for (const rid of loadedReceiptIds) {
+        if (seededRef.current.has(rid)) continue
+        seededRef.current.add(rid)
+        pendingLines.filter(l => l._receiptId === rid).forEach(l => next.add(l._key))
+      }
+      return next.size === prev.size && [...next].every(k => prev.has(k)) ? prev : next
     })
-  }, [allReceiptLines.length, allReceiptLines.map(l => l._key).join('|')])
+  }, [loadedSig, pendingKeysSig, selectedReceipts.join('|')])
 
   // Recepciones pendientes del proveedor. SIEMPRE fresco al abrir: el staleTime
   // global (1 min) hacía que al confirmar recepciones y abrir el modal enseguida
@@ -489,15 +521,22 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
     setSelRec(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
 
-  const totalReceipts = pendingReceipts
-    .filter(r => selectedReceipts.includes(r.id))
-    .reduce((s, r) => s + parseFloat(r.total_mxn || 0), 0)
+  // Líneas que ESTA factura va a cubrir (las marcadas). Facturación parcial: el
+  // valor a conciliar es el de las líneas elegidas, no el de toda la recepción.
+  const selectedLines = useMemo(
+    () => allReceiptLines.filter(l => l._pending && validatedLines.has(l._key)),
+    [allReceiptLines, validatedLines]
+  )
+  const totalReceipts = selectedLines.reduce((s, l) => s + parseFloat(l.subtotal || 0), 0)
+  const selectedLineIds = selectedLines.map(l => l.id)
+  // ¿Es factura parcial? (hay líneas pendientes que NO entran en esta factura)
+  const isPartial = pendingLines.length > 0 && selectedLines.length < pendingLines.length
 
   // Conciliar SIN IVA contra SIN IVA: subtotal de la factura vs subtotal de las
-  // recepciones (las recepciones son el valor de la mercancía, sin IVA).
+  // líneas seleccionadas (su valor de mercancía, sin IVA).
   const invoiceSubtotal = parseFloat(parsed.subtotal) || (parseFloat(parsed.total || 0) - parseFloat(parsed.tax || 0))
   const diff = parseFloat((invoiceSubtotal - totalReceipts).toFixed(2))
-  const reconStatus = selectedReceipts.length === 0 ? 'pending'
+  const reconStatus = selectedLines.length === 0 ? 'pending'
                     : Math.abs(diff) < 0.01 ? 'reconciled' : 'with_diff'
 
   const folio = parsed.documentNumber
@@ -523,6 +562,10 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
       tax:           parsed.tax,
       total:         parsed.total,
       receiptIds:    selectedReceipts,
+      // Facturación PARCIAL por línea (mig 202): si NO se marcaron todas las
+      // líneas pendientes, mandamos los IDs exactos. Si se marcaron todas,
+      // omitimos receiptLineIds → el backend factura la recepción completa.
+      receiptLineIds: isPartial ? selectedLineIds : undefined,
       xmlContent:    null, // no guardamos el XML completo por ahora
       notes:         notes || null,
     }),
@@ -715,7 +758,7 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
       </div>
 
       {/* Resultado de conciliación */}
-      {selectedReceipts.length > 0 && (
+      {selectedLines.length > 0 && (
         <div className={clsx(
           'rounded-xl p-4 flex flex-col gap-2',
           reconStatus === 'reconciled' ? 'bg-status-success/10 border border-status-success/40' : 'bg-status-warning/10 border border-status-warning/40'
@@ -727,7 +770,9 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
           <div className="grid grid-cols-2 gap-1 text-sm">
             <span className="text-ink-secondary">Subtotal factura (sin IVA)</span>
             <span className="text-right font-mono font-semibold">{fmtMXN(invoiceSubtotal)}</span>
-            <span className="text-ink-secondary">Recepciones (sin IVA)</span>
+            <span className="text-ink-secondary">
+              {isPartial ? `Líneas seleccionadas (${selectedLines.length}/${pendingLines.length})` : 'Recepciones'} (sin IVA)
+            </span>
             <span className="text-right font-mono">{fmtMXN(totalReceipts)}</span>
             {reconStatus !== 'reconciled' && (
               <>
@@ -738,35 +783,40 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
               </>
             )}
           </div>
+          {isPartial && (
+            <p className="text-xs text-status-info">
+              ◑ Facturación parcial: las líneas no marcadas quedan pendientes y se pueden facturar después con otra factura.
+            </p>
+          )}
           {reconStatus !== 'reconciled' && (
-            <p className="text-xs text-status-warning">La factura se guardará con estado "Con diferencia". Puedes agregar más recepciones después.</p>
+            <p className="text-xs text-status-warning">La factura se guardará con estado "Con diferencia". Puedes agregar más recepciones o líneas después.</p>
           )}
         </div>
       )}
 
-      {/* Validación producto por producto */}
+      {/* Líneas a facturar (selección por línea = facturación parcial) */}
       {selectedReceipts.length > 0 && (
         <div className="border border-line-subtle rounded-xl">
           <div className="px-4 py-3 border-b border-line-subtle flex items-center justify-between gap-2">
             <div>
-              <p className="text-sm font-semibold text-ink-secondary">Validar productos recibidos</p>
+              <p className="text-sm font-semibold text-ink-secondary">Líneas a facturar</p>
               <p className="text-[11px] text-ink-muted mt-0.5">
-                Marca cada concepto que coincida con la factura. Debes validar el 100% para continuar.
+                Marca los productos que cubre esta factura. Desmarca los que se facturarán por separado.
               </p>
             </div>
             <div className="flex items-center gap-3 shrink-0">
               <span className={clsx(
                 'text-xs font-semibold tabular-nums',
-                allValidated ? 'text-status-success'
-                  : validatedLines.size > 0 ? 'text-status-warning'
+                allPendingSelected ? 'text-status-success'
+                  : selectedLines.length > 0 ? 'text-status-warning'
                   : 'text-ink-muted'
               )}>
-                {validatedLines.size} / {allReceiptLines.length}
+                {selectedLines.length} / {pendingLines.length}
               </span>
-              {allReceiptLines.length > 0 && (
+              {pendingLines.length > 0 && (
                 <button type="button" onClick={toggleAllLines}
                   className="btn-ghost btn-sm text-xs">
-                  {allValidated ? 'Desmarcar' : 'Marcar todas'}
+                  {allPendingSelected ? 'Desmarcar' : 'Marcar todas'}
                 </button>
               )}
             </div>
@@ -793,15 +843,22 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
                 </thead>
                 <tbody>
                   {allReceiptLines.map(l => {
-                    const checked = validatedLines.has(l._key)
+                    const pending = l._pending
+                    const checked = pending && validatedLines.has(l._key)
                     return (
                       <tr key={l._key}
-                        onClick={() => toggleLine(l._key)}
-                        className={clsx('cursor-pointer',
-                          checked ? 'bg-status-success/10/60' : 'hover:bg-surface-elevated/40')}>
+                        onClick={() => pending && toggleLine(l._key)}
+                        className={clsx(
+                          pending ? 'cursor-pointer' : 'opacity-55',
+                          checked ? 'bg-status-success/10/60'
+                            : pending ? 'hover:bg-surface-elevated/40' : '')}>
                         <td>
-                          <input type="checkbox" className="w-4 h-4 accent-green-600"
-                            checked={checked} readOnly />
+                          {pending ? (
+                            <input type="checkbox" className="w-4 h-4 accent-green-600"
+                              checked={checked} readOnly />
+                          ) : (
+                            <span className="text-status-success text-xs" title="Ya facturada">✓</span>
+                          )}
                         </td>
                         <td className="font-mono text-[10px] text-ink-muted">
                           {l._receiptNumber}
@@ -810,6 +867,11 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
                           {l.item_name || l.description}
                           {l.item_name && l.description && l.description !== l.item_name && (
                             <span className="block text-[10px] text-ink-muted">{l.description}</span>
+                          )}
+                          {!pending && (
+                            <span className="block text-[10px] text-status-success">
+                              Ya facturada{l.invoiced_number ? ` · ${l.invoiced_number}` : ''}
+                            </span>
                           )}
                         </td>
                         <td className="text-right font-mono">
@@ -842,19 +904,21 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
           disabled={
             mutation.isPending
             || !partner
-            || (selectedReceipts.length > 0 && !allValidated)
+            || (selectedReceipts.length > 0 && selectedLines.length === 0)
           }
           className="btn-primary flex-1"
           title={
-            selectedReceipts.length > 0 && !allValidated
-              ? 'Valida el 100% de los productos recibidos para continuar'
+            selectedReceipts.length > 0 && selectedLines.length === 0
+              ? 'Marca al menos una línea para facturar'
               : ''
           }
         >
           {mutation.isPending ? <Spinner size="sm" />
-            : selectedReceipts.length > 0 && !allValidated
-              ? `Faltan ${allReceiptLines.length - validatedLines.size} productos por validar`
-              : 'Guardar factura'}
+            : selectedReceipts.length > 0 && selectedLines.length === 0
+              ? 'Marca al menos una línea'
+              : isPartial
+                ? `Guardar factura (${selectedLines.length} líneas)`
+                : 'Guardar factura'}
         </button>
       </div>
 

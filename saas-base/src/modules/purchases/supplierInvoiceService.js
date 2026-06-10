@@ -34,6 +34,7 @@ async function registerInvoice({
   invoiceDate, currency = 'MXN',
   subtotal, tax, total,
   supplierReceiptId, receiptIds = [],  // acepta uno o varios
+  receiptLineIds = [],                 // facturación parcial por LÍNEA (mig 202)
   purchaseOrderId,
   creditDays = 0, notes,
   xmlContent = null,
@@ -65,6 +66,51 @@ async function registerInvoice({
       ...(receiptIds || []),
       ...(supplierReceiptId ? [supplierReceiptId] : []),
     ])].filter(Boolean)
+
+    // ── Facturación parcial por LÍNEA (mig 202) ──────────────────────────────
+    // Resolver qué líneas de recepción cubre esta factura:
+    //  - receiptLineIds explícitas → esas (no cubiertas ya por factura REAL activa).
+    //  - solo receiptIds → todas las líneas de esas recepciones NO cubiertas por
+    //    factura REAL activa (una remisión-CXP no bloquea: se reabre en la sustitución).
+    let linesToInvoice = []  // [{ id, receiptId, subtotal }] (subtotal en moneda del doc/recepción)
+    if (Array.isArray(receiptLineIds) && receiptLineIds.length > 0) {
+      const ph = receiptLineIds.map((_, i) => `$${i + 2}`).join(',')
+      const { rows } = await client.query(
+        `SELECT srl.id, srl.supplier_receipt_id, srl.subtotal,
+                ci.type AS cover_type, ci.status AS cover_status
+           FROM supplier_receipt_lines srl
+           JOIN supplier_receipts sr ON sr.id = srl.supplier_receipt_id AND sr.tenant_id = $1
+           LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+          WHERE srl.id IN (${ph})`,
+        [tenantId, ...receiptLineIds]
+      )
+      if (rows.length !== receiptLineIds.length) {
+        throw createError(400, 'Alguna línea seleccionada no existe o no pertenece a este tenant.')
+      }
+      for (const l of rows) {
+        if (l.cover_type === 'invoice' && l.cover_status !== 'cancelled') {
+          throw createError(409, 'Alguna línea seleccionada ya está cubierta por otra factura activa.')
+        }
+      }
+      linesToInvoice = rows.map(l => ({ id: l.id, receiptId: l.supplier_receipt_id, subtotal: parseFloat(l.subtotal || 0) }))
+    } else if (allReceiptIds.length > 0) {
+      const ph = allReceiptIds.map((_, i) => `$${i + 2}`).join(',')
+      const { rows } = await client.query(
+        `SELECT srl.id, srl.supplier_receipt_id, srl.subtotal
+           FROM supplier_receipt_lines srl
+           JOIN supplier_receipts sr ON sr.id = srl.supplier_receipt_id AND sr.tenant_id = $1
+           LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+          WHERE srl.supplier_receipt_id IN (${ph})
+            AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled' OR ci.type = 'remission')`,
+        [tenantId, ...allReceiptIds]
+      )
+      linesToInvoice = rows.map(l => ({ id: l.id, receiptId: l.supplier_receipt_id, subtotal: parseFloat(l.subtotal || 0) }))
+    }
+    // Recepciones efectivamente afectadas + cobertura (subtotal de las líneas) + monto por recepción.
+    const affectedReceiptIds = [...new Set(linesToInvoice.map(l => l.receiptId))]
+    const coverageSubtotal = parseFloat(linesToInvoice.reduce((s, l) => s + l.subtotal, 0).toFixed(2))
+    const amountByReceipt = {}
+    for (const l of linesToInvoice) amountByReceipt[l.receiptId] = (amountByReceipt[l.receiptId] || 0) + l.subtotal
 
     // Resolver tipo de cambio si es USD
     let exchangeRateId = null
@@ -107,24 +153,11 @@ async function registerInvoice({
       dueDate = due.toISOString().split('T')[0]
     }
 
-    // Calcular conciliación — suma de totales de recepciones ligadas
-    let totalReceipts = 0
-    if (allReceiptIds.length > 0) {
-      const placeholders = allReceiptIds.map((_, i) => `$${i + 2}`).join(',')
-      // El total de una recepción se calcula desde sus líneas
-      // (subtotal generated = quantity_received * unit_price).
-      const { rows: rcpts } = await client.query(
-        `SELECT COALESCE(SUM(srl.subtotal), 0) AS total
-           FROM supplier_receipt_lines srl
-           JOIN supplier_receipts sr ON sr.id = srl.supplier_receipt_id
-          WHERE sr.tenant_id = $1 AND sr.id IN (${placeholders})`,
-        [tenantId, ...allReceiptIds]
-      )
-      totalReceipts = parseFloat(rcpts[0].total || 0)
-    }
-    // Comparar SIN IVA contra SIN IVA: subtotal de la factura vs subtotal de las recepciones.
+    // Conciliación SIN IVA: subtotal de la factura vs subtotal de las LÍNEAS cubiertas
+    // (facturación parcial → solo las líneas de este documento, no la recepción completa).
+    const totalReceipts = coverageSubtotal
     const reconDiff   = parseFloat((subtotalMxn - totalReceipts).toFixed(2))
-    const reconStatus = allReceiptIds.length === 0 ? 'pending'
+    const reconStatus = affectedReceiptIds.length === 0 ? 'pending'
                       : Math.abs(reconDiff) < 0.01  ? 'reconciled'
                       : 'with_diff'
 
@@ -166,19 +199,22 @@ async function registerInvoice({
     )
     const invoice = invRows[0]
 
-    // Crear links N:N con recepciones
-    for (const rcptId of allReceiptIds) {
+    // Links N:N con recepciones (amount_applied = subtotal de las líneas cubiertas)
+    // + marcar las LÍNEAS cubiertas (mig 202). `invoiced_at` de la recepción se
+    // recomputa más abajo (solo si TODAS sus líneas quedan cubiertas).
+    for (const rcptId of affectedReceiptIds) {
       await client.query(
         `INSERT INTO invoice_receipt_links
            (tenant_id, supplier_invoice_id, supplier_receipt_id, amount_applied)
          VALUES ($1,$2,$3,$4)
          ON CONFLICT (supplier_invoice_id, supplier_receipt_id) DO NOTHING`,
-        [tenantId, invoice.id, rcptId, totalMxn / Math.max(allReceiptIds.length, 1)]
+        [tenantId, invoice.id, rcptId, (amountByReceipt[rcptId] || 0).toFixed(2)]
       )
-      // Marcar recepción como facturada
+    }
+    if (linesToInvoice.length > 0) {
       await client.query(
-        `UPDATE supplier_receipts SET invoiced_at = NOW() WHERE id = $1 AND tenant_id = $2`,
-        [rcptId, tenantId]
+        `UPDATE supplier_receipt_lines SET invoiced_by_invoice_id = $1 WHERE id = ANY($2::uuid[])`,
+        [invoice.id, linesToInvoice.map(l => l.id)]
       )
     }
 
@@ -223,8 +259,8 @@ async function registerInvoice({
     // remisión ya tiene pagos aplicados, NO se anula sola (orfandaría el pago):
     // se aborta pidiendo reversar el pago primero.
     let replacedRemissionIds = []
-    if (documentType !== 'remission' && allReceiptIds.length > 0) {
-      const ph = allReceiptIds.map((_, i) => `$${i + 3}`).join(',')
+    if (documentType !== 'remission' && affectedReceiptIds.length > 0) {
+      const ph = affectedReceiptIds.map((_, i) => `$${i + 3}`).join(',')
       const { rows: rems } = await client.query(
         `SELECT DISTINCT si.id, si.invoice_number
            FROM supplier_invoices si
@@ -232,7 +268,7 @@ async function registerInvoice({
           WHERE si.tenant_id = $1 AND si.type = 'remission' AND si.status <> 'cancelled'
             AND si.id <> $2
             AND irl.supplier_receipt_id IN (${ph})`,
-        [tenantId, invoice.id, ...allReceiptIds]
+        [tenantId, invoice.id, ...affectedReceiptIds]
       )
       for (const rem of rems) {
         const { rows: apr } = await client.query(
@@ -255,8 +291,31 @@ async function registerInvoice({
             WHERE tenant_id = $1 AND document_type = 'remission' AND document_id = $2`,
           [tenantId, rem.id]
         )
+        // Reabrir las líneas que cubría la remisión y NO tomó esta factura (ya
+        // re-marcadas arriba con invoice.id) → quedan pendientes de facturar.
+        await client.query(
+          `UPDATE supplier_receipt_lines SET invoiced_by_invoice_id = NULL WHERE invoiced_by_invoice_id = $1`,
+          [rem.id]
+        )
         replacedRemissionIds.push(rem.id)
       }
+    }
+
+    // Recomputar invoiced_at: una recepción está "totalmente facturada" SOLO si
+    // todas sus líneas están cubiertas por un documento activo. Si queda alguna
+    // pendiente (factura parcial / línea reabierta) → NULL (reaparece en el selector).
+    for (const rcptId of affectedReceiptIds) {
+      await client.query(
+        `UPDATE supplier_receipts sr
+            SET invoiced_at = CASE WHEN NOT EXISTS (
+                  SELECT 1 FROM supplier_receipt_lines srl
+                   LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+                  WHERE srl.supplier_receipt_id = sr.id
+                    AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled')
+                ) THEN COALESCE(sr.invoiced_at, NOW()) ELSE NULL END
+          WHERE sr.id = $1 AND sr.tenant_id = $2`,
+        [rcptId, tenantId]
+      )
     }
 
     await audit({
