@@ -8,6 +8,8 @@ import { salesApi } from '@/api/sales'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
 import { ProductImageThumb } from '@/components/productos/ProductImageThumb'
+import { BundlePickerModal } from '@/components/ventas/BundlePickerModal'
+import { BundleGroupCard } from '@/components/ventas/BundleGroupCard'
 import { fmtMXN } from '@/utils/fmt'
 import clsx from 'clsx'
 
@@ -41,6 +43,7 @@ export function CotizacionFormModal({ onClose, onCreated }) {
   const [notes, setNotes]             = useState('')
   const [lines, setLines]             = useState([EMPTY_LINE()])
   const [error, setError]             = useState(null)
+  const [showBundlePicker, setShowBundlePicker] = useState(false)
 
   const searchPartners = useCallback(async (q) => {
     const res = await partnersApi.list({ search: q, role: 'customer', limit: 20 })
@@ -158,6 +161,60 @@ export function CotizacionFormModal({ onClose, onCreated }) {
     setLines(prev => prev.length === 1 ? prev : prev.filter((_, i) => i !== idx))
   }
 
+  // ── Paquetes: el grupo entra/sale como bloque, con precios prorrateados ──
+  async function handleAddBundle(bundle, qty) {
+    try {
+      const ex = await productsApi.explodeBundle(bundle.id)
+      const groupId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : `bg-${Date.now()}-${Math.floor(Math.random() * 1e9)}`
+      const newLines = ex.lines.map(l => ({
+        product:        { id: l.productId, label: l.productName, sub: l.sku },
+        quantity:       String(l.quantity * qty),
+        per_bundle_qty: l.quantity,
+        unit:           l.unit,
+        unit_price:     String(l.unitPrice),
+        discount_pct:   '',
+        notes:          '',
+        price_source:   'bundle',
+        pack_options:   [],
+        pack_option_id: l.packOptionId || null,
+        pack_factor:    l.packFactor || 1,
+        base_unit:      l.baseUnit || '',
+        base_price_ref: null,
+        bundle_id:           ex.bundle.id,
+        bundle_group_id:     groupId,
+        bundle_name:         ex.bundle.name,
+        bundle_quantity:     String(qty),
+        bundle_price:        ex.bundle.bundlePrice,
+        bundle_currency:     ex.bundle.currency,
+        bundle_discount_pct: ex.impliedDiscountPct,
+      }))
+      setLines(prev => {
+        const keep = prev.filter(l => l.bundle_group_id || l.product || l.quantity || l.unit_price)
+        return [...keep, ...newLines]
+      })
+      setShowBundlePicker(false)
+    } catch (e) {
+      setError(e.response?.data?.error || e.message || 'No se pudo agregar el paquete')
+      setShowBundlePicker(false)
+    }
+  }
+
+  function setBundleQty(groupId, qtyStr) {
+    const q = parseFloat(qtyStr)
+    setLines(prev => prev.map(l => l.bundle_group_id === groupId
+      ? { ...l, bundle_quantity: qtyStr, quantity: q > 0 ? String(l.per_bundle_qty * q) : '' }
+      : l))
+  }
+
+  function removeBundleGroup(groupId) {
+    setLines(prev => {
+      const next = prev.filter(l => l.bundle_group_id !== groupId)
+      return next.length ? next : [EMPTY_LINE()]
+    })
+  }
+
   const subtotal = lines.reduce((s, l) => {
     const qty = parseFloat(l.quantity || 0)
     const price = parseFloat(l.unit_price || 0)
@@ -180,6 +237,11 @@ export function CotizacionFormModal({ onClose, onCreated }) {
         notes:        l.notes || null,
         packOptionId: l.pack_option_id ?? null,
         packFactor:   l.pack_factor   ?? 1,
+        // Paquete (si la línea pertenece a uno)
+        bundleId:       l.bundle_id        ?? null,
+        bundleGroupId:  l.bundle_group_id  ?? null,
+        bundleName:     l.bundle_name      ?? null,
+        bundleQuantity: l.bundle_quantity != null ? parseFloat(l.bundle_quantity) : null,
       })),
     }),
     onSuccess: (q) => {
@@ -194,6 +256,8 @@ export function CotizacionFormModal({ onClose, onCreated }) {
     setError(null)
     if (!partner)          return setError('Selecciona un cliente.')
     if (lines.length === 0) return setError('Agrega al menos una línea.')
+    const badBundle = lines.find(l => l.bundle_group_id && !(parseFloat(l.bundle_quantity) > 0))
+    if (badBundle) return setError(`Captura cuántos paquetes de "${badBundle.bundle_name}" lleva la cotización.`)
     for (let i = 0; i < lines.length; i++) {
       const l = lines[i]
       if (!l.product)      return setError(`Línea ${i + 1}: selecciona un producto.`)
@@ -255,13 +319,36 @@ export function CotizacionFormModal({ onClose, onCreated }) {
           <div className="flex flex-col gap-3">
             <div className="flex items-center justify-between">
               <p className="text-xs font-bold text-brand-300 uppercase tracking-wider">Artículos</p>
-              <button type="button" onClick={addLine}
-                className="text-sm font-medium text-brand-300 hover:text-brand-300">
-                + Agregar artículo
-              </button>
+              <div className="flex items-center gap-3">
+                <button type="button" onClick={() => setShowBundlePicker(true)}
+                  className="text-sm font-medium text-brand-300 hover:text-brand-300">
+                  📦 Paquete
+                </button>
+                <button type="button" onClick={addLine}
+                  className="text-sm font-medium text-brand-300 hover:text-brand-300">
+                  + Agregar artículo
+                </button>
+              </div>
             </div>
 
-            {lines.map((l, idx) => {
+            {(() => {
+              const renderedGroups = new Set()
+              return lines.map((l, idx) => {
+              // Líneas de paquete: se pintan UNA vez por grupo, como bloque.
+              if (l.bundle_group_id) {
+                if (renderedGroups.has(l.bundle_group_id)) return null
+                renderedGroups.add(l.bundle_group_id)
+                const members = lines.filter(x => x.bundle_group_id === l.bundle_group_id)
+                return (
+                  <BundleGroupCard
+                    key={l.bundle_group_id}
+                    members={members}
+                    currency="MXN"
+                    onQtyChange={(q) => setBundleQty(l.bundle_group_id, q)}
+                    onRemove={() => removeBundleGroup(l.bundle_group_id)}
+                  />
+                )
+              }
               const qty = parseFloat(l.quantity || 0)
               const price = parseFloat(l.unit_price || 0)
               const disc = parseFloat(l.discount_pct || 0)
@@ -382,11 +469,18 @@ export function CotizacionFormModal({ onClose, onCreated }) {
                   )}
                 </div>
               )
-            })}
-            <button type="button" onClick={addLine}
-              className="w-full border border-dashed border-line-base rounded-xl py-2.5 text-sm font-medium text-brand-300 hover:bg-brand-500/5 transition-colors">
-              + Agregar artículo
-            </button>
+            })
+            })()}
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" onClick={addLine}
+                className="border border-dashed border-line-base rounded-xl py-2.5 text-sm font-medium text-brand-300 hover:bg-brand-500/5 transition-colors">
+                + Agregar artículo
+              </button>
+              <button type="button" onClick={() => setShowBundlePicker(true)}
+                className="border border-dashed border-line-base rounded-xl py-2.5 text-sm font-medium text-brand-300 hover:bg-brand-500/5 transition-colors">
+                📦 Agregar paquete
+              </button>
+            </div>
           </div>
 
           {/* Total */}
@@ -421,6 +515,14 @@ export function CotizacionFormModal({ onClose, onCreated }) {
             </button>
           </div>
         </form>
+
+        {showBundlePicker && (
+          <BundlePickerModal
+            currency="MXN"
+            onConfirm={handleAddBundle}
+            onClose={() => setShowBundlePicker(false)}
+          />
+        )}
       </div>
     </div>,
     document.body

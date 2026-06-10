@@ -172,6 +172,10 @@ async function cleanupTestTenants() {
       DELETE FROM sales_order_lines sol USING sales_orders so, tenants t
        WHERE sol.sales_order_id = so.id AND so.tenant_id = t.id AND t.slug LIKE $1
     `, [slugPattern])
+    await query(`
+      DELETE FROM quotation_lines ql USING quotations q, tenants t
+       WHERE ql.quotation_id = q.id AND q.tenant_id = t.id AND t.slug LIKE $1
+    `, [slugPattern])
     // purchase_order_lines.warehouse_id es RESTRICT a warehouses → pre-borrar
     // antes del CASCADE del tenant (que intenta borrar warehouses).
     await query(`

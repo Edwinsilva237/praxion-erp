@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { quotationsApi } from '@/api/quotations'
 import { tenantsApi } from '@/api/tenants'
 import { CotizacionLineaModal } from '@/components/cotizaciones/CotizacionLineaModal'
+import { BundlePickerModal } from '@/components/ventas/BundlePickerModal'
 import { ProductImageThumb } from '@/components/productos/ProductImageThumb'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
@@ -100,7 +101,7 @@ function DatosGeneralesEdit({ q, onCancel, onSaved }) {
 }
 
 // ── Tabla de líneas (con acciones cuando editable) ──────────────────────────
-function LineasTable({ q, editable, onEditLine, onDeleteLine, deletingLineId }) {
+function LineasTable({ q, editable, onEditLine, onDeleteLine, onRemoveBundle, deletingLineId }) {
   const lines = q.lines || []
   const subtotal = parseFloat(q.subtotal_mxn ?? q.total_mxn ?? 0)
 
@@ -138,6 +139,12 @@ function LineasTable({ q, editable, onEditLine, onDeleteLine, deletingLineId }) 
                     <div className="min-w-0 flex-1">
                       <p className="font-medium text-ink-primary">{l.product_name}</p>
                       {l.sku && <p className="text-[10px] text-ink-muted font-mono">{l.sku}</p>}
+                      {l.bundle_name && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-brand-300 bg-brand-500/10 border border-brand-500/30 rounded-full px-1.5 py-0.5 mt-0.5">
+                          📦 {l.bundle_name}
+                          {l.bundle_quantity != null && Number(l.bundle_quantity) !== 1 && ` ×${Number(l.bundle_quantity)}`}
+                        </span>
+                      )}
                       {l.notes && <p className="text-[10px] text-ink-muted mt-0.5 italic">{l.notes}</p>}
                     </div>
                   </div>
@@ -148,6 +155,19 @@ function LineasTable({ q, editable, onEditLine, onDeleteLine, deletingLineId }) 
                 <td className="text-right font-mono tabular-nums font-medium">{fmtMXN(importe, q.currency)}</td>
                 {editable && (
                   <td className="text-right">
+                    {l.bundle_group_id ? (
+                      /* Línea de paquete: se quita el GRUPO completo (precio prorrateado) */
+                      <button onClick={() => onRemoveBundle(l)}
+                        disabled={deletingLineId === l.id}
+                        className="btn-ghost btn-icon p-1 text-ink-muted hover:text-status-danger"
+                        title={`Quitar el paquete "${l.bundle_name}" completo`}>
+                        {deletingLineId === l.id ? <Spinner size="sm" /> : (
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V3a1 1 0 011-1h4a1 1 0 011 1v4"/>
+                          </svg>
+                        )}
+                      </button>
+                    ) : (
                     <div className="flex items-center justify-end gap-1">
                       <button onClick={() => onEditLine(l)}
                         className="btn-ghost btn-icon p-1 text-ink-muted hover:text-brand-300"
@@ -167,6 +187,7 @@ function LineasTable({ q, editable, onEditLine, onDeleteLine, deletingLineId }) 
                         )}
                       </button>
                     </div>
+                    )}
                   </td>
                 )}
               </tr>
@@ -319,6 +340,7 @@ export function CotizacionDetallePanel({ quotationId, onClose, onConverted }) {
   const [editingDatos, setEditingDatos] = useState(false)
   const [lineModal, setLineModal] = useState(null) // null | { mode: 'new'|'edit', line? }
   const [deletingLineId, setDeletingLineId] = useState(null)
+  const [showBundlePicker, setShowBundlePicker] = useState(false)
 
   const { data: q, isLoading } = useQuery({
     queryKey: ['quotation', quotationId],
@@ -366,6 +388,16 @@ export function CotizacionDetallePanel({ quotationId, onClose, onConverted }) {
     mutationFn: (lineId) => { setDeletingLineId(lineId); return quotationsApi.deleteLine(quotationId, lineId) },
     onSuccess: () => { invalidate(); setDeletingLineId(null) },
     onError: (e) => { setDeletingLineId(null); setError(e.response?.data?.error || e.message) },
+  })
+  const removeBundleMut = useMutation({
+    mutationFn: ({ lineId, groupId }) => { setDeletingLineId(lineId); return quotationsApi.removeBundleGroup(quotationId, groupId) },
+    onSuccess: () => { invalidate(); setDeletingLineId(null) },
+    onError: (e) => { setDeletingLineId(null); setError(e.response?.data?.error || e.message) },
+  })
+  const addBundleMut = useMutation({
+    mutationFn: ({ bundleId, bundleQuantity }) => quotationsApi.addBundle(quotationId, { bundleId, bundleQuantity }),
+    onSuccess: () => { invalidate(); setShowBundlePicker(false) },
+    onError: (e) => { setShowBundlePicker(false); setError(e.response?.data?.error || e.message) },
   })
 
   async function handleDownloadPdf() {
@@ -468,10 +500,16 @@ export function CotizacionDetallePanel({ quotationId, onClose, onConverted }) {
                 {isDraft && (
                   <div className="flex items-center justify-between">
                     <p className="text-xs font-semibold text-ink-secondary uppercase tracking-wide">Líneas</p>
-                    <button onClick={() => setLineModal({ mode: 'new' })}
-                      className="text-sm font-medium text-brand-300 hover:text-brand-300">
-                      + Agregar línea
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => setShowBundlePicker(true)}
+                        className="text-sm font-medium text-brand-300 hover:text-brand-300">
+                        📦 Paquete
+                      </button>
+                      <button onClick={() => setLineModal({ mode: 'new' })}
+                        className="text-sm font-medium text-brand-300 hover:text-brand-300">
+                        + Agregar línea
+                      </button>
+                    </div>
                   </div>
                 )}
                 <LineasTable
@@ -481,6 +519,11 @@ export function CotizacionDetallePanel({ quotationId, onClose, onConverted }) {
                   onDeleteLine={(l) => {
                     if (window.confirm(`¿Eliminar la línea "${l.product_name}"?`)) {
                       deleteLineMut.mutate(l.id)
+                    }
+                  }}
+                  onRemoveBundle={(l) => {
+                    if (window.confirm(`¿Quitar el paquete "${l.bundle_name}" completo? Se eliminan todas sus líneas.`)) {
+                      removeBundleMut.mutate({ lineId: l.id, groupId: l.bundle_group_id })
                     }
                   }}
                   deletingLineId={deletingLineId}
@@ -633,6 +676,16 @@ export function CotizacionDetallePanel({ quotationId, onClose, onConverted }) {
           line={lineModal.mode === 'edit' ? lineModal.line : null}
           onClose={() => setLineModal(null)}
           onSaved={() => { setLineModal(null); invalidate() }}
+        />
+      )}
+
+      {/* Selector de paquete (draft) */}
+      {showBundlePicker && q && (
+        <BundlePickerModal
+          currency={q.currency}
+          busy={addBundleMut.isPending}
+          onConfirm={(bundle, qty) => addBundleMut.mutate({ bundleId: bundle.id, bundleQuantity: qty })}
+          onClose={() => setShowBundlePicker(false)}
         />
       )}
     </div>,

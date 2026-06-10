@@ -194,7 +194,10 @@ async function generateQuotationPDF({ tenantId, quotationId }) {
     const noteWidth = cw.desc + cw.cant + cw.unit + cw.precio - GAP
     lines.forEach((line, i) => {
       const note = (line.notes || '').trim()
-      const noteText = note ? `Nota: ${note}` : ''
+      // Línea de paquete: anteponemos el nombre del paquete al pie del renglón
+      // (mismo estilo cursiva gris que la nota) para que el cliente lo vea.
+      const bundleTag = line.bundle_name ? `Paquete: ${line.bundle_name}` : ''
+      const noteText = [bundleTag, note ? `Nota: ${note}` : ''].filter(Boolean).join('  ·  ')
       doc.fontSize(7).font('Helvetica-Oblique')
       const noteH = noteText ? doc.heightOfString(noteText, { width: noteWidth }) : 0
       const rowH = 20 + (noteText ? noteH + 2 : 0)

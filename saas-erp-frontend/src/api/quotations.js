@@ -18,6 +18,11 @@ export const quotationsApi = {
   updateLine: (id, lineId, payload) => api.patch(`/quotations/${id}/lines/${lineId}`, payload).then(r => r.data),
   deleteLine: (id, lineId)          => api.delete(`/quotations/${id}/lines/${lineId}`).then(r => r.data),
 
+  // Paquetes (solo draft): agregar explota el paquete en líneas prorrateadas;
+  // quitar elimina el grupo completo.
+  addBundle:          (id, payload)  => api.post(`/quotations/${id}/bundles`, payload).then(r => r.data),
+  removeBundleGroup:  (id, groupId)  => api.delete(`/quotations/${id}/bundle-groups/${groupId}`).then(r => r.data),
+
   // Contactos del cliente (para modal de envío)
   contacts: (id) => api.get(`/quotations/${id}/contacts`).then(r => r.data),
 

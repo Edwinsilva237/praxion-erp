@@ -107,6 +107,31 @@ router.delete('/:id/lines/:lineId', checkPermission('sales', 'update'), async (r
   } catch (err) { next(err) }
 })
 
+// ── Paquetes (draft): agregar explota el paquete en líneas prorrateadas ──────
+router.post('/:id/bundles', checkPermission('sales', 'update'), async (req, res, next) => {
+  try {
+    const { bundleId, bundleQuantity } = req.body
+    if (!bundleId) return res.status(400).json({ error: 'bundleId es requerido.' })
+    const q = await quotationService.addBundleToQuotation({
+      tenantId: req.tenant.id, quotationId: req.params.id,
+      bundleId, bundleQuantity,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.headers['user-agent'],
+    })
+    res.status(201).json(q)
+  } catch (err) { next(err) }
+})
+
+router.delete('/:id/bundle-groups/:groupId', checkPermission('sales', 'update'), async (req, res, next) => {
+  try {
+    const q = await quotationService.removeBundleGroup({
+      tenantId: req.tenant.id, quotationId: req.params.id,
+      bundleGroupId: req.params.groupId,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.headers['user-agent'],
+    })
+    res.json(q)
+  } catch (err) { next(err) }
+})
+
 // ── PDF ──────────────────────────────────────────────────────────────────────
 router.get('/:id/pdf', checkPermission('sales', 'read'), async (req, res, next) => {
   try {

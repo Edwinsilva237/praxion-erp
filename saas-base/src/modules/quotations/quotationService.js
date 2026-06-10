@@ -1,5 +1,6 @@
 'use strict'
 
+const { randomUUID } = require('crypto')
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
 const { enqueueEmail: sendMail } = require('../../queues/emailQueue')
@@ -8,6 +9,7 @@ const { generateQuotationPDF } = require('./quotationPdfService')
 const logger = require('../../config/logger')
 const documentSeriesService = require('../document-series/documentSeriesService')
 const { nextOrderNumber } = require('../sales/orderService')
+const bundleService = require('../products/bundleService')
 
 /**
  * Servicio de cotizaciones.
@@ -154,6 +156,25 @@ async function createQuotation({
     )
     if (!partner[0]) throw createError(404, 'Cliente no encontrado.')
 
+    // Líneas de paquete (mig 204): el paquete debe ser del tenant y de la
+    // MISMA moneda de la cotización (el prorrateo es nativo de esa moneda).
+    const bundleIds = [...new Set(lines.map(l => l.bundleId).filter(Boolean))]
+    if (bundleIds.length) {
+      const { rows: bundles } = await client.query(
+        `SELECT id, name, currency FROM product_bundles
+          WHERE tenant_id = $1 AND id = ANY($2::uuid[])`,
+        [tenantId, bundleIds]
+      )
+      if (bundles.length !== bundleIds.length) {
+        throw createError(404, 'Uno de los paquetes de la cotización no existe.')
+      }
+      const wrong = bundles.find(b => b.currency !== currency)
+      if (wrong) {
+        throw createError(400,
+          `El paquete "${wrong.name}" está definido en ${wrong.currency} y la cotización es en ${currency}.`)
+      }
+    }
+
     const quotationNumber = await nextQuotationNumber(client, tenantId)
 
     const { rows } = await client.query(
@@ -179,11 +200,16 @@ async function createQuotation({
         `INSERT INTO quotation_lines
            (quotation_id, product_id, quantity, unit, unit_price, currency,
             discount_pct, notes, line_number,
-            pack_option_id, pack_factor, quantity_base)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+            pack_option_id, pack_factor, quantity_base,
+            bundle_id, bundle_group_id, bundle_name, bundle_quantity)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
         [quotation.id, l.productId, l.quantity, l.unit || 'paquete',
          l.unitPrice, currency, l.discountPct || 0, l.notes || null, i + 1,
-         l.packOptionId || null, packFactor, quantityBase]
+         l.packOptionId || null, packFactor, quantityBase,
+         l.bundleId || null,
+         l.bundleId ? (l.bundleGroupId || null) : null,
+         l.bundleId ? (l.bundleName || null) : null,
+         l.bundleId ? (l.bundleQuantity || null) : null]
       )
     }
 
@@ -255,11 +281,24 @@ async function addLine({ tenantId, quotationId, productId, quantity, unit,
   })
 }
 
+async function _assertNotBundleLine(client, quotationId, lineId) {
+  const { rows } = await client.query(
+    `SELECT bundle_name FROM quotation_lines
+      WHERE id = $1 AND quotation_id = $2 AND bundle_group_id IS NOT NULL`,
+    [lineId, quotationId]
+  )
+  if (rows.length) {
+    throw createError(409,
+      `Esta línea pertenece al paquete "${rows[0].bundle_name}". No se edita individualmente: quita el paquete completo y agrégalo de nuevo (o agrega el producto como línea suelta).`)
+  }
+}
+
 async function updateLine({ tenantId, quotationId, lineId,
   quantity, unit, unitPrice, discountPct, notes,
   packOptionId, packFactor, userId }) {
   return withTransaction(async (client) => {
     await _assertDraft(client, tenantId, quotationId)
+    await _assertNotBundleLine(client, quotationId, lineId)
     // Recalcular quantity_base si alguno de sus dos factores cambia. Si no
     // viene quantity ni packFactor en el body, mantenemos el valor previo
     // dejando que COALESCE no lo toque (subquery a la fila original).
@@ -287,6 +326,7 @@ async function updateLine({ tenantId, quotationId, lineId,
 async function deleteLine({ tenantId, quotationId, lineId }) {
   return withTransaction(async (client) => {
     await _assertDraft(client, tenantId, quotationId)
+    await _assertNotBundleLine(client, quotationId, lineId)
     const { rowCount } = await client.query(
       `DELETE FROM quotation_lines WHERE id = $1 AND quotation_id = $2`,
       [lineId, quotationId]
@@ -300,6 +340,100 @@ async function deleteLine({ tenantId, quotationId, lineId }) {
       throw createError(409, 'No puedes eliminar la última línea. Cancela la cotización si ya no aplica.')
     }
     await recalcQuotationTotals(client, quotationId)
+    return await getQuotation({ tenantId, quotationId, client })
+  })
+}
+
+/**
+ * Agrega un PAQUETE a una cotización en draft: explota el paquete del catálogo
+ * en líneas componente con precio prorrateado (bundleService.explodeBundle) y
+ * las inserta como un grupo atómico (bundle_group_id compartido). Espejo de
+ * orderService.addBundleToOrder.
+ */
+async function addBundleToQuotation({
+  tenantId, quotationId, bundleId, bundleQuantity = 1,
+  userId, ipAddress, userAgent,
+}) {
+  const qty = parseFloat(bundleQuantity)
+  if (!(qty > 0)) throw createError(400, 'La cantidad de paquetes debe ser mayor a cero.')
+
+  // El prorrateo lee catálogo + TC — fuera de la transacción de escritura.
+  const exploded = await bundleService.explodeBundle({ tenantId, bundleId })
+
+  return withTransaction(async (client) => {
+    const { rows: q } = await client.query(
+      `SELECT id, currency, status FROM quotations WHERE id = $1 AND tenant_id = $2`,
+      [quotationId, tenantId]
+    )
+    if (!q[0]) throw createError(404, 'Cotización no encontrada.')
+    if (q[0].status !== 'draft') throw createError(409, 'Solo se pueden agregar paquetes en borrador.')
+
+    if (exploded.bundle.currency !== q[0].currency) {
+      throw createError(400,
+        `El paquete "${exploded.bundle.name}" está definido en ${exploded.bundle.currency} y la cotización es en ${q[0].currency}.`)
+    }
+
+    const { rows: last } = await client.query(
+      `SELECT COALESCE(MAX(line_number), 0) AS n FROM quotation_lines WHERE quotation_id = $1`,
+      [quotationId]
+    )
+
+    const groupId = randomUUID()
+    for (let i = 0; i < exploded.lines.length; i++) {
+      const l = exploded.lines[i]
+      const lineQty = l.quantity * qty
+      await client.query(
+        `INSERT INTO quotation_lines
+           (quotation_id, product_id, quantity, unit, unit_price, currency,
+            discount_pct, line_number, pack_option_id, pack_factor, quantity_base,
+            bundle_id, bundle_group_id, bundle_name, bundle_quantity)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+        [quotationId, l.productId, lineQty, l.unit, l.unitPrice, q[0].currency,
+         0, last[0].n + i + 1, l.packOptionId || null, l.packFactor,
+         lineQty * l.packFactor,
+         exploded.bundle.id, groupId, exploded.bundle.name, qty]
+      )
+    }
+
+    await recalcQuotationTotals(client, quotationId)
+    await audit({ tenantId, userId, ipAddress, userAgent,
+      action: 'quotation.bundle_added', resource: 'quotations', resourceId: quotationId,
+      payload: { bundleId, bundleName: exploded.bundle.name, bundleQuantity: qty } })
+
+    return await getQuotation({ tenantId, quotationId, client })
+  })
+}
+
+/**
+ * Quita un paquete completo (todas las líneas del grupo) de una cotización draft.
+ */
+async function removeBundleGroup({
+  tenantId, quotationId, bundleGroupId, userId, ipAddress, userAgent,
+}) {
+  return withTransaction(async (client) => {
+    await _assertDraft(client, tenantId, quotationId)
+
+    const { rows } = await client.query(
+      `DELETE FROM quotation_lines
+        WHERE quotation_id = $1 AND bundle_group_id = $2
+        RETURNING id, bundle_name`,
+      [quotationId, bundleGroupId]
+    )
+    if (rows.length === 0) throw createError(404, 'Paquete no encontrado en esta cotización.')
+
+    const { rows: remaining } = await client.query(
+      `SELECT COUNT(*)::int AS n FROM quotation_lines WHERE quotation_id = $1`,
+      [quotationId]
+    )
+    if (remaining[0].n === 0) {
+      throw createError(409, 'No puedes dejar la cotización sin líneas. Cancélala si ya no aplica.')
+    }
+
+    await recalcQuotationTotals(client, quotationId)
+    await audit({ tenantId, userId, ipAddress, userAgent,
+      action: 'quotation.bundle_removed', resource: 'quotations', resourceId: quotationId,
+      payload: { bundleGroupId, bundleName: rows[0].bundle_name, linesRemoved: rows.length } })
+
     return await getQuotation({ tenantId, quotationId, client })
   })
 }
@@ -538,11 +672,13 @@ async function convertToOrder({ tenantId, quotationId, userId, ipAddress, userAg
         `INSERT INTO sales_order_lines
            (sales_order_id, product_id, quantity, unit, unit_price, currency,
             discount_pct, notes, line_number,
-            pack_option_id, pack_factor, quantity_base)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+            pack_option_id, pack_factor, quantity_base,
+            bundle_id, bundle_group_id, bundle_name, bundle_quantity)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
         [order.id, l.product_id, l.quantity, l.unit, l.unit_price, l.currency,
          l.discount_pct, l.notes, l.line_number,
-         l.pack_option_id, l.pack_factor, l.quantity_base]
+         l.pack_option_id, l.pack_factor, l.quantity_base,
+         l.bundle_id, l.bundle_group_id, l.bundle_name, l.bundle_quantity]
       )
     }
 
@@ -624,6 +760,8 @@ module.exports = {
   addLine,
   updateLine,
   deleteLine,
+  addBundleToQuotation,
+  removeBundleGroup,
   sendQuotation,
   acceptQuotation,
   convertToOrder,
