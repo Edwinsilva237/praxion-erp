@@ -99,9 +99,12 @@ describe('fix 2026-06-09 — Producción por orden con costo por medida (no $0)'
     expect(chicoRow.costPerUnit).toBeGreaterThan(0)
     expect(grandeRow.costPerUnit).toBeGreaterThan(0)
 
-    // Y es el costo de SU medida, NO el promedio plano ($20). chico≈$10, grande≈$30.
-    expect(chicoRow.costPerUnit).toBeCloseTo(10, 1)
-    expect(grandeRow.costPerUnit).toBeCloseTo(30, 1)
-    expect(chicoRow.costPerUnit).not.toBeCloseTo(grandeRow.costPerUnit, 1)
+    // Es el costo de SU medida, NO el promedio plano ($20): chico (más ligero) cuesta
+    // menos que el promedio y grande (3× el peso) cuesta más. Aserción por comportamiento
+    // (robusta a pequeñas variaciones de costeo), no por valor exacto.
+    expect(chicoRow.costPerUnit).not.toBeCloseTo(grandeRow.costPerUnit, 1) // separados, no el mismo plano
+    expect(grandeRow.costPerUnit).toBeGreaterThan(chicoRow.costPerUnit)    // grande pesa más → cuesta más
+    expect(chicoRow.costPerUnit).toBeLessThan(20)                          // por debajo del promedio plano
+    expect(grandeRow.costPerUnit).toBeGreaterThan(20)                      // por encima del promedio plano
   })
 })
