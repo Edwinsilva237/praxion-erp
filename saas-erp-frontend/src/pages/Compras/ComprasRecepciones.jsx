@@ -301,6 +301,7 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
   const qc = useQueryClient()
   const [confirming, setConf]   = useState(false)
   const [cancelling, setCancel] = useState(false)
+  const [remitting, setRemit]   = useState(false)
   const [cancelReason, setCancelReason] = useState('')
   const [actionErr, setActErr]  = useState(null)
   const [genPdf, setGenPdf]     = useState(false)
@@ -346,6 +347,20 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
       onClose()
     },
     onError: (e) => setActErr(e.response?.data?.error || 'Error al cancelar'),
+  })
+
+  // Fase 2: "no se espera factura" → genera CXP sin factura (remisión no fiscal).
+  const remissionMutation = useMutation({
+    mutationFn: () => purchasesApi.generateReceiptRemission(receiptId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['purchase-receipts'] })
+      qc.invalidateQueries({ queryKey: ['receipt-detail', receiptId] })
+      qc.invalidateQueries({ queryKey: ['receipts-pending'] })
+      qc.invalidateQueries({ queryKey: ['supplier-invoices'] })   // lista de CXP / facturas proveedor
+      qc.invalidateQueries({ queryKey: ['accounts-payable'] })
+      setRemit(false)
+    },
+    onError: (e) => setActErr(e.response?.data?.error || 'Error al generar la CXP'),
   })
 
   async function handlePDF() {
@@ -607,7 +622,47 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
                 </button>
               </>
             )}
+            {/* Fase 2: recepción confirmada SIN documento → generar CXP sin factura */}
+            {receipt.status === 'confirmed' && !receipt.invoiced_at && (
+              <Can do="purchases:create">
+                <button onClick={() => { setActErr(null); setRemit(true) }}
+                  className="btn-secondary btn-sm text-status-info hover:bg-status-info/10"
+                  title="El proveedor no emitirá factura: reconoce la cuenta por pagar ahora (remisión no fiscal, sin IVA)">
+                  💸 No se espera factura → CXP
+                </button>
+              </Can>
+            )}
           </div>
+        )}
+
+        {/* Modal: confirmar "no se espera factura" */}
+        {remitting && createPortal(
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4">
+            <div className="card w-full max-w-md p-5 space-y-4">
+              <h2 className="text-base font-semibold text-ink-primary">Generar CXP sin factura</h2>
+              <p className="text-sm text-ink-secondary">
+                Se creará una <strong>cuenta por pagar</strong> por el valor de la recepción
+                {receipt?.total_mxn != null ? <> (<span className="font-mono">{fmtMXN(receipt.total_mxn)}</span>)</> : null},
+                como <strong>remisión no fiscal (sin IVA)</strong>, con vencimiento según el crédito del proveedor.
+              </p>
+              <p className="text-xs text-ink-muted">
+                Úsalo cuando el proveedor <strong>no</strong> va a emitir CFDI. Si después llega la factura,
+                al registrarla esta CXP se anula sola y se reemplaza por la factura.
+              </p>
+              {actionErr && (
+                <div className="rounded-lg bg-status-danger/10 border border-status-danger/40 px-3 py-2 text-sm text-status-danger">
+                  {actionErr}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <button onClick={() => { setRemit(false); setActErr(null) }} className="btn-secondary flex-1">Cancelar</button>
+                <button onClick={() => remissionMutation.mutate()} disabled={remissionMutation.isPending} className="btn-primary flex-1">
+                  {remissionMutation.isPending ? <Spinner size="sm" /> : 'Generar CXP'}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
         )}
       </div>
     </div>,
@@ -1295,6 +1350,12 @@ export default function ComprasRecepciones() {
                     <td>
                       {r.status !== 'confirmed' ? (
                         <span className="text-ink-muted text-xs">—</span>
+                      ) : r.invoiced_at && r.invoice_type === 'remission' ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-status-info/15 text-status-info"
+                          title={`CXP sin factura${r.invoice_number ? ` ${r.invoice_number}` : ''} — remisión no fiscal`}>
+                          <span className="w-1.5 h-1.5 rounded-full bg-status-info shrink-0" />
+                          CXP s/f{r.invoice_number ? ` · ${r.invoice_number}` : ''}
+                        </span>
                       ) : r.invoiced_at ? (
                         <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-status-success/15 text-status-success"
                           title={r.invoice_number ? `Factura ${r.invoice_number}` : 'Facturada'}>

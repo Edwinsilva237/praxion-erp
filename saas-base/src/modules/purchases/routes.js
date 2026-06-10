@@ -452,6 +452,13 @@ router.get('/receipts/pending-invoice', checkPermission('purchases', 'read'), as
       `SELECT sr.id, sr.receipt_number, sr.received_date, sr.status,
               sr.invoiced_at,
               bp.name AS partner_name,
+              -- ¿ya tiene una CXP sin factura (remisión)? Al facturar se reemplaza.
+              EXISTS (
+                SELECT 1 FROM invoice_receipt_links irl
+                  JOIN supplier_invoices si ON si.id = irl.supplier_invoice_id
+                 WHERE irl.supplier_receipt_id = sr.id
+                   AND si.status <> 'cancelled' AND si.type = 'remission'
+              ) AS has_remission,
               COALESCE((
                 SELECT SUM(srl.subtotal) FROM supplier_receipt_lines srl
                  WHERE srl.supplier_receipt_id = sr.id
@@ -460,7 +467,16 @@ router.get('/receipts/pending-invoice', checkPermission('purchases', 'read'), as
        LEFT JOIN business_partners bp ON bp.id = sr.partner_id
        WHERE sr.tenant_id = $1
          AND sr.status = 'confirmed'
-         AND sr.invoiced_at IS NULL
+         -- "Pendiente de facturar" = SIN factura REAL activa. Una recepción con solo
+         -- una remisión-CXP (Fase 2) SÍ aparece, para poder registrar el CFDI real
+         -- → la sustitución automática anula la remisión. Una con factura real activa
+         -- NO aparece (no se factura dos veces la misma recepción).
+         AND NOT EXISTS (
+           SELECT 1 FROM invoice_receipt_links irl
+             JOIN supplier_invoices si ON si.id = irl.supplier_invoice_id
+            WHERE irl.supplier_receipt_id = sr.id
+              AND si.status <> 'cancelled' AND si.type = 'invoice'
+         )
          ${partnerFilter}
        ORDER BY sr.received_date DESC
        LIMIT 100`,
@@ -521,6 +537,27 @@ router.post('/receipts/:id/confirm', checkPermission('purchases', 'create'), asy
     })
     res.json({ ...receipt, message: 'Recepción confirmada. Inventario actualizado.' })
   } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/receipts/:id/remission  (Fase 2)
+ * "No se espera factura" → genera una CXP sin factura (documento tipo remisión,
+ * NO fiscal, SIN IVA) por el valor de la recepción, vencimiento por
+ * supplier_credit_days. Reversible: si luego llega el CFDI, registrar la factura
+ * de la recepción anula esta remisión automáticamente.
+ */
+router.post('/receipts/:id/remission', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    const result = await supplierInvoiceService.generateReceiptRemission({
+      tenantId: req.tenant.id, receiptId: req.params.id,
+      notes: req.body?.notes || null,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.status(201).json({ ...result, message: 'CXP sin factura generada. Aparece en Cuentas por pagar.' })
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
 })
 
 /**

@@ -71,6 +71,14 @@ async function listReceipts({
                  ON si.id = irl.supplier_invoice_id AND si.status <> 'cancelled'
               WHERE irl.supplier_receipt_id = sr.id
               ORDER BY si.created_at DESC LIMIT 1) AS invoice_number,
+            -- Tipo del documento ligado: 'remission' = CXP sin factura (Fase 2),
+            -- 'invoice' = factura fiscal. Para distinguir el chip en la lista.
+            (SELECT si.type
+               FROM invoice_receipt_links irl
+               JOIN supplier_invoices si
+                 ON si.id = irl.supplier_invoice_id AND si.status <> 'cancelled'
+              WHERE irl.supplier_receipt_id = sr.id
+              ORDER BY si.created_at DESC LIMIT 1) AS invoice_type,
             CASE WHEN sr.evidence_path IS NOT NULL THEN sr.evidence_filename ELSE NULL END AS evidence_filename,
             po.order_number  AS purchase_order_number,
             bp.name          AS partner_name,

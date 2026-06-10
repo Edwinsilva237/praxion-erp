@@ -34,6 +34,8 @@ export const purchasesApi = {
   updateReceipt:  (id, body) => api.put(`${B}/receipts/${id}`, body).then(r => r.data),
   confirmReceipt: (id) => api.post(`${B}/receipts/${id}/confirm`).then(r => r.data),
   cancelReceipt:  (id, body) => api.post(`${B}/receipts/${id}/cancel`, body).then(r => r.data),
+  // Fase 2: "no se espera factura" → genera CXP sin factura (remisión no fiscal).
+  generateReceiptRemission: (id, body) => api.post(`${B}/receipts/${id}/remission`, body || {}).then(r => r.data),
   listPendingInvoiceReceipts: (partnerId) =>
     api.get(`${B}/receipts/pending-invoice`, { params: partnerId ? { partner_id: partnerId } : {} }).then(r => r.data),
 

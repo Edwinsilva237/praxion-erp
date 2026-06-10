@@ -216,10 +216,54 @@ async function registerInvoice({
         : null
     }
 
+    // ── Sustitución Fase 2: factura real reemplaza la remisión-CXP ────────────
+    // Si este documento es una FACTURA (no remisión) y alguna recepción ligada ya
+    // tenía una REMISIÓN-CXP activa (generada con "no se espera factura"), se anula
+    // esa remisión y se enlaza replaced_by_invoice_id → evita doble CXP. Si la
+    // remisión ya tiene pagos aplicados, NO se anula sola (orfandaría el pago):
+    // se aborta pidiendo reversar el pago primero.
+    let replacedRemissionIds = []
+    if (documentType !== 'remission' && allReceiptIds.length > 0) {
+      const ph = allReceiptIds.map((_, i) => `$${i + 3}`).join(',')
+      const { rows: rems } = await client.query(
+        `SELECT DISTINCT si.id, si.invoice_number
+           FROM supplier_invoices si
+           JOIN invoice_receipt_links irl ON irl.supplier_invoice_id = si.id
+          WHERE si.tenant_id = $1 AND si.type = 'remission' AND si.status <> 'cancelled'
+            AND si.id <> $2
+            AND irl.supplier_receipt_id IN (${ph})`,
+        [tenantId, invoice.id, ...allReceiptIds]
+      )
+      for (const rem of rems) {
+        const { rows: apr } = await client.query(
+          `SELECT amount_paid FROM accounts_payable
+            WHERE tenant_id = $1 AND document_type = 'remission' AND document_id = $2`,
+          [tenantId, rem.id]
+        )
+        if (parseFloat(apr[0]?.amount_paid || 0) > 0) {
+          throw createError(409,
+            `La CXP sin factura ${rem.invoice_number} de esta recepción ya tiene pagos aplicados. Reversa el pago antes de registrar la factura (o aplica el pago a la factura nueva).`)
+        }
+        await client.query(
+          `UPDATE supplier_invoices
+              SET status = 'cancelled', replaced_by_invoice_id = $1, updated_at = NOW()
+            WHERE id = $2 AND tenant_id = $3`,
+          [invoice.id, rem.id, tenantId]
+        )
+        await client.query(
+          `UPDATE accounts_payable SET status = 'cancelled'
+            WHERE tenant_id = $1 AND document_type = 'remission' AND document_id = $2`,
+          [tenantId, rem.id]
+        )
+        replacedRemissionIds.push(rem.id)
+      }
+    }
+
     await audit({
       tenantId, userId, action: 'supplier_invoice.registered',
       resource: 'supplier_invoices', resourceId: invoice.id,
-      payload: { documentNumber, documentType, uuidSat, total, totalMxn, supplierId, reconStatus, reconDiff },
+      payload: { documentNumber, documentType, uuidSat, total, totalMxn, supplierId, reconStatus, reconDiff,
+                 replacedRemissionIds },
       ipAddress, userAgent,
     })
 
@@ -229,9 +273,75 @@ async function registerInvoice({
       reconciliation_status: reconStatus, reconciliation_diff: reconDiff,
       ap_id: apId,
       partner_credit_type: partnerCreditType,
+      replaced_remission_ids: replacedRemissionIds,
     }
   }
   return existingClient ? exec(existingClient) : withTransaction(exec)
+}
+
+/**
+ * Fase 2 — Genera una CXP "sin factura" desde una recepción confirmada.
+ *
+ * Caso: el proveedor NO va a emitir CFDI (o aún no), pero ya recibiste la
+ * mercancía y quieres reconocer la cuenta por pagar. Crea un documento de
+ * proveedor tipo 'remission' (NO fiscal, SIN IVA) por el valor de la recepción,
+ * con vencimiento por supplier_credit_days, ligado a la recepción. Reusa
+ * registerInvoice. Si después llega el CFDI real, registrar la factura de esa
+ * recepción anula esta remisión automáticamente (replaced_by_invoice_id).
+ */
+async function generateReceiptRemission({ tenantId, receiptId, notes, userId, ipAddress, userAgent }) {
+  return withTransaction(async (client) => {
+    const { rows: rcptRows } = await client.query(
+      `SELECT sr.id, sr.receipt_number, sr.partner_id, sr.purchase_order_id,
+              sr.status, sr.invoiced_at,
+              COALESCE(po.currency, 'MXN') AS currency,
+              COALESCE((SELECT SUM(srl.subtotal) FROM supplier_receipt_lines srl
+                         WHERE srl.supplier_receipt_id = sr.id), 0) AS subtotal
+         FROM supplier_receipts sr
+         LEFT JOIN purchase_orders po ON po.id = sr.purchase_order_id
+        WHERE sr.id = $1 AND sr.tenant_id = $2
+        FOR UPDATE OF sr`,
+      [receiptId, tenantId]
+    )
+    if (!rcptRows[0]) throw createError(404, 'Recepción no encontrada.')
+    const rcpt = rcptRows[0]
+
+    if (rcpt.status !== 'confirmed') {
+      throw createError(409, 'Solo se puede generar la CXP de una recepción CONFIRMADA.')
+    }
+    if (rcpt.invoiced_at) {
+      throw createError(409, 'Esta recepción ya tiene un documento (factura o remisión).')
+    }
+    // Doble candado: ¿hay un supplier_invoice activo ligado?
+    const { rows: existing } = await client.query(
+      `SELECT 1 FROM invoice_receipt_links irl
+         JOIN supplier_invoices si ON si.id = irl.supplier_invoice_id
+        WHERE irl.supplier_receipt_id = $1 AND si.status <> 'cancelled' LIMIT 1`,
+      [receiptId]
+    )
+    if (existing[0]) throw createError(409, 'Esta recepción ya tiene un documento activo.')
+    if (!rcpt.partner_id) {
+      throw createError(400, 'La recepción no tiene un proveedor del catálogo; asígnalo antes de generar la CXP.')
+    }
+    const subtotal = parseFloat(rcpt.subtotal)
+    if (!(subtotal > 0)) {
+      throw createError(400, 'La recepción no tiene importe (líneas sin precio). Captura los precios primero.')
+    }
+
+    return registerInvoice({
+      tenantId, supplierId: rcpt.partner_id,
+      documentType: 'remission',
+      documentNumber: `S/F-${rcpt.receipt_number}`,
+      currency: rcpt.currency,
+      subtotal, tax: 0, total: subtotal,
+      receiptIds: [receiptId],
+      purchaseOrderId: rcpt.purchase_order_id || null,
+      creditDays: 0, // registerInvoice resuelve supplier_credit_days
+      notes: notes || `CXP sin factura generada desde la recepción ${rcpt.receipt_number}.`,
+      userId, ipAddress, userAgent,
+      client, // misma transacción
+    })
+  })
 }
 
 /**
@@ -570,6 +680,6 @@ function createError(status, message) {
 }
 
 module.exports = {
-  registerInvoice, listInvoices, getInvoice, listExpenses,
+  registerInvoice, generateReceiptRemission, listInvoices, getInvoice, listExpenses,
   registerPayment, getSupplierStatement,
 }

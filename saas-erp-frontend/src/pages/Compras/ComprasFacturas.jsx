@@ -695,7 +695,15 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
                       <input type="checkbox" className="w-4 h-4 accent-brand-600" readOnly
                         checked={selectedReceipts.includes(r.id)} />
                     </td>
-                    <td className="font-mono font-medium text-brand-300">{r.receipt_number}</td>
+                    <td className="font-mono font-medium text-brand-300">
+                      {r.receipt_number}
+                      {r.has_remission && (
+                        <span className="ml-2 inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info align-middle"
+                          title="Ya tiene una CXP sin factura (remisión). Al registrar esta factura, esa CXP se reemplaza automáticamente.">
+                          ↻ CXP s/f
+                        </span>
+                      )}
+                    </td>
                     <td className="text-ink-muted">{fmtDate(r.received_date)}</td>
                     <td className="text-right font-mono">{fmtMXN(r.total_mxn)}</td>
                   </tr>
