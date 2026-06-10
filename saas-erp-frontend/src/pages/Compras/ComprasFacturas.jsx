@@ -412,6 +412,24 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
   const [error, setError]             = useState(null)
   const [showQuickAlta, setShowQuickAlta] = useState(false)
 
+  // Datos fiscales editables: pre-llenados con lo extraído (XML/PDF/IA) y
+  // corregibles a mano. El PDF por texto suele dejar huecos (folio, moneda,
+  // nombre del emisor) → arrancamos en modo edición cuando NO viene de XML.
+  const [editFields, setEditFields] = useState(parsed.method !== 'xml')
+  const [form, setForm] = useState(() => ({
+    serie:       parsed.serie || '',
+    folio:       parsed.folio || (parsed.documentNumber && !parsed.serie ? parsed.documentNumber : '') || '',
+    uuid:        parsed.uuid || '',
+    rfcEmisor:   parsed.emisor?.rfc || '',
+    emisorName:  parsed.emisor?.name || '',
+    invoiceDate: parsed.invoiceDate || '',
+    currency:    parsed.currency || 'MXN',
+    subtotal:    parsed.subtotal != null ? String(parsed.subtotal) : '',
+    tax:         parsed.tax != null ? String(parsed.tax) : '',
+    total:       parsed.total != null ? String(parsed.total) : '',
+  }))
+  const setField = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
   // Solo ofrecemos el "Dar de alta" cuando el XML trae nombre o RFC del
   // emisor y aún no hay proveedor seleccionado (matched o manual).
   const canQuickAdd = !partner && !!(parsed.emisor?.rfc || parsed.emisor?.name)
@@ -533,34 +551,34 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
   const isPartial = pendingLines.length > 0 && selectedLines.length < pendingLines.length
 
   // Conciliar SIN IVA contra SIN IVA: subtotal de la factura vs subtotal de las
-  // líneas seleccionadas (su valor de mercancía, sin IVA).
-  const invoiceSubtotal = parseFloat(parsed.subtotal) || (parseFloat(parsed.total || 0) - parseFloat(parsed.tax || 0))
+  // líneas seleccionadas (su valor de mercancía, sin IVA). Usa los datos EDITABLES
+  // (form), que arrancan con lo extraído pero el usuario pudo corregir/completar.
+  const invoiceSubtotal = parseFloat(form.subtotal) || (parseFloat(form.total || 0) - parseFloat(form.tax || 0))
   const diff = parseFloat((invoiceSubtotal - totalReceipts).toFixed(2))
   const reconStatus = selectedLines.length === 0 ? 'pending'
                     : Math.abs(diff) < 0.01 ? 'reconciled' : 'with_diff'
 
-  const folio = parsed.documentNumber
-             || [parsed.serie, parsed.folio].filter(Boolean).join('-')
-             || parsed.uuid?.slice(-8)
+  const folio = [form.serie, form.folio].filter(Boolean).join('-')
+             || form.uuid?.slice(-8)
              || 'SIN-FOLIO'
 
   const mutation = useMutation({
     mutationFn: () => purchasesApi.createInvoice({
       supplierId:    partner?.id || null,
-      genericSupplier: !partner ? (parsed.emisor?.name || null) : null,
+      genericSupplier: !partner ? (form.emisorName || null) : null,
       documentType:  docType,
       documentNumber: folio,
       // Si el usuario marca remisión, ignoramos los datos fiscales aunque el
-      // XML los traiga — la remisión no es CFDI.
-      uuidSat:       docType === 'remission' ? null : (parsed.uuid || null),
-      serie:         parsed.serie || null,
-      folio:         parsed.folio || null,
-      rfcEmisor:     docType === 'remission' ? null : (parsed.emisor?.rfc || null),
-      invoiceDate:   parsed.invoiceDate,
-      currency:      parsed.currency || 'MXN',
-      subtotal:      parsed.subtotal,
-      tax:           parsed.tax,
-      total:         parsed.total,
+      // documento los traiga — la remisión no es CFDI.
+      uuidSat:       docType === 'remission' ? null : (form.uuid || null),
+      serie:         form.serie || null,
+      folio:         form.folio || null,
+      rfcEmisor:     docType === 'remission' ? null : (form.rfcEmisor || null),
+      invoiceDate:   form.invoiceDate || null,
+      currency:      form.currency || 'MXN',
+      subtotal:      parseFloat(form.subtotal) || 0,
+      tax:           parseFloat(form.tax) || 0,
+      total:         parseFloat(form.total) || 0,
       receiptIds:    selectedReceipts,
       // Facturación PARCIAL por línea (mig 202): si NO se marcaron todas las
       // líneas pendientes, mandamos los IDs exactos. Si se marcaron todas,
@@ -622,35 +640,121 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
             <p className="text-[11px] text-ink-muted">Documento no fiscal — sin CFDI ni deducible</p>
           </button>
         </div>
-        {docType === 'remission' && parsed.uuid && (
+        {docType === 'remission' && form.uuid && (
           <p className="text-[11px] text-status-warning mt-2">
-            ⚠ El XML trae UUID SAT pero estás marcando como remisión. El UUID se ignorará al guardar.
+            ⚠ El documento trae UUID SAT pero estás marcando como remisión. El UUID se ignorará al guardar.
           </p>
         )}
       </div>
 
-      {/* Datos del XML */}
+      {/* Datos del documento — pre-llenados con lo extraído y editables a mano */}
       <div className="bg-status-success/10 border border-status-success/40 rounded-xl p-4">
-        <p className="text-xs font-semibold text-status-success uppercase tracking-wide mb-3">
-          {parsed.method === 'xml' ? '✓ XML procesado' : '✓ Captura manual'}
-        </p>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-          <div className="text-ink-muted">Emisor</div>
-          <div className="font-medium text-ink-primary">{parsed.emisor?.name || '—'}</div>
-          <div className="text-ink-muted">RFC</div>
-          <div className="font-mono text-ink-secondary">{parsed.emisor?.rfc || '—'}</div>
-          <div className="text-ink-muted">Folio</div>
-          <div className="font-mono text-ink-secondary">{folio}</div>
-          <div className="text-ink-muted">Fecha</div>
-          <div className="text-ink-secondary">{fmtDate(parsed.invoiceDate)}</div>
-          <div className="text-ink-muted">Subtotal</div>
-          <div className="font-mono text-ink-secondary">{fmtMXN(parsed.subtotal)}</div>
-          <div className="text-ink-muted">IVA</div>
-          <div className="font-mono text-ink-secondary">{fmtMXN(parsed.tax)}</div>
-          <div className="text-ink-muted font-semibold">Total</div>
-          <div className="font-mono font-bold text-ink-primary">{fmtMXN(parsed.total)}</div>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs font-semibold text-status-success uppercase tracking-wide">
+            {parsed.method === 'xml'  ? '✓ XML procesado'
+              : parsed.method === 'ai'   ? '✓ PDF leído con IA'
+              : parsed.method === 'text' ? '✓ PDF leído (texto) — revisa los datos'
+              : '✓ Captura manual'}
+          </p>
+          <button type="button" onClick={() => setEditFields(v => !v)}
+            className="btn-ghost btn-sm text-xs">
+            {editFields ? 'Listo' : '✏️ Corregir datos'}
+          </button>
         </div>
-        {parsed.uuid && <p className="text-[10px] text-status-success mt-2 font-mono">UUID: {parsed.uuid}</p>}
+
+        {editFields ? (
+          <div className="flex flex-col gap-3">
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="label text-[11px]">Serie</label>
+                <input className="input input-sm" value={form.serie}
+                  onChange={e => setField('serie', e.target.value)} placeholder="A" maxLength={10} />
+              </div>
+              <div className="col-span-2">
+                <label className="label text-[11px]">Folio</label>
+                <input className="input input-sm" value={form.folio}
+                  onChange={e => setField('folio', e.target.value)} placeholder="1042" maxLength={40} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="label text-[11px]">Fecha</label>
+                <input type="date" className="input input-sm" value={form.invoiceDate || ''}
+                  onChange={e => setField('invoiceDate', e.target.value)} />
+              </div>
+              <div>
+                <label className="label text-[11px]">Moneda</label>
+                <select className="select select-sm" value={form.currency}
+                  onChange={e => setField('currency', e.target.value)}>
+                  <option value="MXN">MXN</option>
+                  <option value="USD">USD</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="label text-[11px]">Razón social del emisor</label>
+              <input className="input input-sm" value={form.emisorName}
+                onChange={e => setField('emisorName', e.target.value)} placeholder="Proveedor SA de CV" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="label text-[11px]">RFC emisor</label>
+                <input className="input input-sm font-mono uppercase" value={form.rfcEmisor}
+                  onChange={e => setField('rfcEmisor', e.target.value.toUpperCase())}
+                  placeholder="XAXX010101000" maxLength={13} />
+              </div>
+              {docType === 'invoice' && (
+                <div>
+                  <label className="label text-[11px]">UUID SAT</label>
+                  <input className="input input-sm font-mono text-[10px]" value={form.uuid}
+                    onChange={e => setField('uuid', e.target.value)}
+                    placeholder="0000…" maxLength={36} />
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="label text-[11px]">Subtotal</label>
+                <input type="number" step="0.01" min="0" inputMode="decimal" className="input input-sm"
+                  value={form.subtotal} onChange={e => setField('subtotal', e.target.value)} placeholder="0.00" />
+              </div>
+              <div>
+                <label className="label text-[11px]">IVA</label>
+                <input type="number" step="0.01" min="0" inputMode="decimal" className="input input-sm"
+                  value={form.tax} onChange={e => setField('tax', e.target.value)} placeholder="0.00" />
+              </div>
+              <div>
+                <label className="label text-[11px]">Total</label>
+                <input type="number" step="0.01" min="0" inputMode="decimal" className="input input-sm"
+                  value={form.total} onChange={e => setField('total', e.target.value)} placeholder="0.00" />
+              </div>
+            </div>
+            <p className="text-[10px] text-ink-muted">
+              Corrige o completa lo que el documento no haya traído. El total se concilia contra las líneas que marques abajo.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
+            <div className="text-ink-muted">Emisor</div>
+            <div className="font-medium text-ink-primary">{form.emisorName || '—'}</div>
+            <div className="text-ink-muted">RFC</div>
+            <div className="font-mono text-ink-secondary">{form.rfcEmisor || '—'}</div>
+            <div className="text-ink-muted">Folio</div>
+            <div className="font-mono text-ink-secondary">{folio}</div>
+            <div className="text-ink-muted">Fecha</div>
+            <div className="text-ink-secondary">{fmtDate(form.invoiceDate)}</div>
+            <div className="text-ink-muted">Moneda</div>
+            <div className="text-ink-secondary">{form.currency}</div>
+            <div className="text-ink-muted">Subtotal</div>
+            <div className="font-mono text-ink-secondary">{fmtMXN(form.subtotal)}</div>
+            <div className="text-ink-muted">IVA</div>
+            <div className="font-mono text-ink-secondary">{fmtMXN(form.tax)}</div>
+            <div className="text-ink-muted font-semibold">Total</div>
+            <div className="font-mono font-bold text-ink-primary">{fmtMXN(form.total)}</div>
+            {form.uuid && <><div className="text-ink-muted">UUID</div>
+              <div className="font-mono text-[10px] text-status-success break-all">{form.uuid}</div></>}
+          </div>
+        )}
       </div>
 
       {/* Proveedor */}

@@ -1,7 +1,7 @@
 'use strict'
 
-const pdfParse = require('pdf-parse')
-const logger   = require('../../config/logger')
+const { PDFParse } = require('pdf-parse')
+const logger       = require('../../config/logger')
 
 /**
  * Detecta el tipo de archivo y extrae datos del documento.
@@ -136,33 +136,53 @@ function extractAttrFromString(str, attrName) {
 
 /**
  * Parsea un PDF de factura o remisión de proveedor.
- * Intenta extracción por texto primero, luego Claude API como fallback.
+ *
+ * Estrategia: la IA (Claude leyendo el PDF) es el camino BUENO — saca los
+ * CONCEPTOS/líneas además de totales y emisor, que es lo que la conciliación
+ * necesita. La extracción por texto casi nunca recupera las líneas, así que la
+ * usamos solo como red de seguridad cuando NO hay API key o la IA falla, para
+ * que el modal abra con los totales que se hayan podido leer en vez de reventar.
  */
 async function parsePDF(buffer) {
+  // 1. Texto (barato, sin red). Sirve de respaldo si la IA no está disponible.
+  let textResult = null
   try {
-    const result = await extractPDFByText(buffer)
-    if (isPDFResultUsable(result)) {
-      logger.info('Supplier PDF extracted by text parser')
-      return { ...result, method: 'text' }
-    }
-    logger.info('PDF text extraction incomplete, trying AI fallback')
+    textResult = await extractPDFByText(buffer)
   } catch (err) {
     logger.warn('PDF text extraction failed', { error: err.message })
   }
 
-  try {
-    const result = await extractPDFByAI(buffer)
-    logger.info('Supplier PDF extracted by AI')
-    return { ...result, method: 'ai' }
-  } catch (err) {
-    logger.error('PDF AI extraction failed', { error: err.message })
-    throw createError(422, 'No se pudo extraer la información del documento. Verifica que el archivo sea válido.')
+  // 2. IA (Claude) — solo si hay API key configurada. Extracción rica con líneas.
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const result = await extractPDFByAI(buffer)
+      logger.info('Supplier PDF extracted by AI')
+      return { ...result, method: 'ai' }
+    } catch (err) {
+      logger.error('PDF AI extraction failed', { error: err.message })
+      // cae al resultado por texto (si lo hay) en vez de abortar
+    }
+  } else {
+    logger.info('ANTHROPIC_API_KEY no configurada — extracción de PDF solo por texto')
   }
+
+  // 3. Sin IA (o falló): devolver lo que el texto haya logrado para completar a mano.
+  if (textResult && isPDFResultUsable(textResult)) {
+    logger.info('Supplier PDF extracted by text parser')
+    return { ...textResult, method: 'text' }
+  }
+
+  throw createError(422, process.env.ANTHROPIC_API_KEY
+    ? 'No se pudo extraer la información del PDF. Verifica que el archivo sea válido o sube el XML (CFDI).'
+    : 'No se pudieron leer los datos del PDF. Sube el XML (CFDI) o configura ANTHROPIC_API_KEY para extracción con IA.')
 }
 
 async function extractPDFByText(buffer) {
-  const data = await pdfParse(buffer)
-  const text = data.text
+  // pdf-parse v2 exporta la clase PDFParse (la API vieja `pdfParse(buffer)` ya no
+  // existe → tronaba siempre). Mismo uso que business-partners/csfService.
+  const parser = new PDFParse({ data: buffer })
+  const data = await parser.getText()
+  const text = data?.text || ''
 
   // UUID SAT (si es PDF de factura con timbre)
   const uuid = text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0] || null
@@ -173,7 +193,9 @@ async function extractPDFByText(buffer) {
 
   // Totales
   const subtotalMatch = text.match(/subtotal[:\s$]*([0-9,]+\.?\d{0,2})/i)
-  const totalMatch    = text.match(/total[:\s$]*([0-9,]+\.?\d{0,2})/i)
+  // \b evita que "total" haga match DENTRO de "Subtotal" (ahí no hay frontera de
+  // palabra antes de "total") y tome el subtotal por equivocación.
+  const totalMatch    = text.match(/\btotal[:\s$]*([0-9,]+\.?\d{0,2})/i)
   const ivaMatch      = text.match(/(?:iva|impuesto)[:\s$]*([0-9,]+\.?\d{0,2})/i)
 
   const subtotal = subtotalMatch ? parseFloat(subtotalMatch[1].replace(/,/g, '')) : null
@@ -184,29 +206,54 @@ async function extractPDFByText(buffer) {
   const dateMatch = text.match(/fecha[:\s]+(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/i)
   const invoiceDate = dateMatch ? `${dateMatch[3]}-${dateMatch[2].padStart(2,'0')}-${dateMatch[1].padStart(2,'0')}` : null
 
+  // Serie y folio (best-effort; varía mucho por proveedor). Evitamos confundir el
+  // "Folio Fiscal" (que es el UUID) con el folio comercial.
+  const serie = text.match(/\bserie[:\s]*([A-Z0-9-]{1,10})\b/i)?.[1]?.trim() || null
+  const folioMatch = text.match(/\bfolio(?!\s*fiscal)[:\s]*([A-Z0-9-]{1,40})\b/i)
+  const folio = folioMatch ? folioMatch[1].trim() : null
+
+  // Nombre / razón social del emisor (best-effort). Buscamos una línea con un
+  // sufijo societario típico (SA de CV, S de RL, etc.) que no sea el receptor.
+  const nameMatch = text.match(/^([^\n]{3,80}?\bS(?:\.?\s?A\.?|\.?\s?DE\s?R\.?L\.?)[^\n]{0,20})$/im)
+  const emisorName = nameMatch ? nameMatch[1].replace(/\s+/g, ' ').trim() : null
+
+  // Moneda: por defecto MXN, pero si el texto menciona USD/dólares lo marcamos.
+  const currency = /\b(USD|d[oó]lares?|dolar)\b/i.test(text) ? 'USD' : 'MXN'
+
   return {
     documentType: 'pdf',
     uuid,
-    serie: null,
-    folio: null,
+    serie,
+    folio,
     invoiceDate,
-    currency: 'MXN',
+    currency,
     exchangeRate: null,
     subtotal,
     tax,
     total,
-    emisor: { rfc, name: null, regime: null },
+    emisor: { rfc, name: emisorName, regime: null },
     receptor: { rfc: null, name: null },
     lines: [],
   }
 }
 
 async function extractPDFByAI(buffer) {
+  // Mismo patrón que business-partners/csfService.extractByAI (el que SÍ funciona
+  // en prod): la API de Anthropic exige x-api-key + anthropic-version. Antes
+  // faltaban ambos headers y la key → 401 siempre → la extracción por IA era
+  // código muerto y todo PDF caía a "no se pudo extraer".
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY no configurada')
+
   const base64 = buffer.toString('base64')
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 2000,
