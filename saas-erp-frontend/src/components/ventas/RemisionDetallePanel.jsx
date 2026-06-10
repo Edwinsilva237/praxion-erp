@@ -506,11 +506,28 @@ function PriceAdjustmentHistory({ adjustments, lines = [], currency, compact = f
 function PriceAdjustModal({ note, onSubmit, onClose, saving }) {
   const lines = note.lines || []
   const cur = note.currency
+  // Una línea cotizada en USD (producto en dólares dentro de un doc en pesos)
+  // guarda original_currency='USD' + original_unit_price (USD). Para esas, el
+  // precio EDITABLE es el de dólares; el unit_price del doc (pesos) = USD × TC.
+  const isUsd  = (l) => l.original_currency === 'USD' && l.original_unit_price != null
+  const rateOf = (l) => {
+    const r = parseFloat(l.applied_exchange_rate)
+    if (Number.isFinite(r) && r > 0) return r
+    const ou = parseFloat(l.original_unit_price), up = parseFloat(l.unit_price)
+    if (ou > 0 && Number.isFinite(up)) return up / ou
+    const nr = parseFloat(note.exchange_rate_value)
+    return Number.isFinite(nr) && nr > 0 ? nr : 1
+  }
+  const anyUsd = lines.some(isUsd)
+
   const [edited, setEdited] = useState(() =>
-    Object.fromEntries(lines.map(l => [l.id, {
-      unitPrice:   l.unit_price != null ? String(l.unit_price) : '',
-      discountPct: l.discount_pct != null ? String(l.discount_pct) : '0',
-    }]))
+    Object.fromEntries(lines.map(l => {
+      const editable = isUsd(l) ? l.original_unit_price : l.unit_price
+      return [l.id, {
+        unitPrice:   editable != null ? String(editable) : '',
+        discountPct: l.discount_pct != null ? String(l.discount_pct) : '0',
+      }]
+    }))
   )
   const [reason, setReason] = useState('')
 
@@ -519,20 +536,23 @@ function PriceAdjustModal({ note, onSubmit, onClose, saving }) {
 
   const lineCalc = (l) => {
     const e = edited[l.id] || {}
-    const price = Number(e.unitPrice)
+    const price = Number(e.unitPrice)              // USD (si USD) o MXN
     const disc  = Number(e.discountPct || 0)
     const qty   = parseFloat(l.quantity_delivered || 0)
+    const usd   = isUsd(l)
+    const rate  = usd ? rateOf(l) : 1
+    const priceMxn = usd ? price * rate : price    // unit_price del doc, en pesos
     const validPrice = Number.isFinite(price) && price >= 0
     const validDisc  = Number.isFinite(disc) && disc >= 0 && disc < 100
-    const importe = (validPrice ? price : 0) * qty * (1 - (validDisc ? disc : 0) / 100)
-    const op = parseFloat(l.unit_price)
+    const importe = (validPrice ? priceMxn : 0) * qty * (1 - (validDisc ? disc : 0) / 100) // pesos
+    const op = parseFloat(usd ? l.original_unit_price : l.unit_price)
     const od = parseFloat(l.discount_pct || 0)
     const changed = validPrice && (price !== op || (validDisc ? disc : 0) !== od)
-    return { price, disc, qty, validPrice, validDisc, importe, changed }
+    return { price, priceMxn, disc, qty, usd, rate, validPrice, validDisc, importe, changed }
   }
 
   const calcs = lines.map(l => ({ l, c: lineCalc(l) }))
-  const newTotal = calcs.reduce((acc, { c }) => acc + c.importe, 0)
+  const newTotal = calcs.reduce((acc, { c }) => acc + c.importe, 0)  // pesos
   const allValid = calcs.every(({ c }) => c.validPrice && c.validDisc)
   const changes = calcs.filter(({ c }) => c.changed)
   const canSave = !saving && reason.trim().length >= 5 && changes.length > 0 && allValid
@@ -540,6 +560,8 @@ function PriceAdjustModal({ note, onSubmit, onClose, saving }) {
   function handleSave() {
     const payload = changes.map(({ l }) => ({
       lineId:      l.id,
+      // USD → precio en dólares; MXN → precio en pesos. El backend lo distingue
+      // por original_currency de la línea.
       unitPrice:   Number(edited[l.id].unitPrice),
       discountPct: Number(edited[l.id].discountPct || 0),
     }))
@@ -558,10 +580,12 @@ function PriceAdjustModal({ note, onSubmit, onClose, saving }) {
           y se refleja en el pedido y en el saldo por cobrar.
         </p>
 
-        {cur === 'USD' && (
+        {(cur === 'USD' || anyUsd) && (
           <div className="mb-3 rounded-lg border border-status-info/40 bg-status-info/10 px-3 py-2 text-xs text-status-info">
-            💲 Esta remisión es en <strong>dólares (US$)</strong>. Captura los precios <strong>en US$</strong> —
-            la factura aplicará el tipo de cambio del día{note.exchange_rate_value ? ` (hoy ~$${fmtNum(note.exchange_rate_value, 4)})` : ''}.
+            💲 {cur === 'USD'
+              ? <>Esta remisión es en <strong>dólares (US$)</strong>. Captura los precios <strong>en US$</strong>.</>
+              : <>Hay productos cotizados en <strong>dólares (US$)</strong>. Captura su precio <strong>en US$</strong> — el importe se muestra en pesos.</>}
+            {' '}La factura aplicará el tipo de cambio del día al precio en dólares.
           </div>
         )}
 
@@ -594,12 +618,20 @@ function PriceAdjustModal({ note, onSubmit, onClose, saving }) {
                     {fmtNum(c.qty, 3)} {l.unit}
                   </td>
                   <td className="text-right">
-                    <input
-                      type="number" min="0" step="0.0001" inputMode="decimal"
-                      className={clsx('input input-sm w-28 text-right font-mono', !c.validPrice && 'input-error')}
-                      value={edited[l.id]?.unitPrice ?? ''}
-                      onChange={e => setField(l.id, 'unitPrice', e.target.value)}
-                    />
+                    <div className="flex items-center justify-end gap-1">
+                      <span className="text-[10px] text-ink-muted shrink-0">{c.usd ? 'US$' : '$'}</span>
+                      <input
+                        type="number" min="0" step="0.0001" inputMode="decimal"
+                        className={clsx('input input-sm w-24 text-right font-mono', !c.validPrice && 'input-error')}
+                        value={edited[l.id]?.unitPrice ?? ''}
+                        onChange={e => setField(l.id, 'unitPrice', e.target.value)}
+                      />
+                    </div>
+                    {c.usd && c.validPrice && (
+                      <p className="text-[10px] text-ink-muted mt-0.5 whitespace-nowrap">
+                        = {fmtMXN(c.priceMxn, 'MXN')} <span className="opacity-70">(TC {fmtNum(c.rate, 4)})</span>
+                      </p>
+                    )}
                   </td>
                   <td className="text-right">
                     <input

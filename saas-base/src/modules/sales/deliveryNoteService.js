@@ -1170,14 +1170,20 @@ async function adjustDeliveryNotePrices({ tenantId, noteId, lines, reason, userI
     }
 
     // Cargar TODAS las líneas actuales (para recomputar el total con los cambios).
-    // Incluye los campos de moneda: para una línea en USD, la facturación NO lee
-    // unit_price sino original_unit_price (USD por unidad base) × TC × pack_factor.
-    // Por eso al corregir también hay que actualizar original_unit_price, si no la
-    // factura ignora la corrección y re-aplica el TC al precio viejo (bug 2026-06-09).
+    // Incluye los campos de moneda. MODELO (ver getSuggestedPrice): un producto
+    // cotizado en USD dentro de un documento en MXN guarda
+    //   original_unit_price = precio en USD,
+    //   unit_price          = original_unit_price × applied_exchange_rate  (en MXN),
+    //   original_currency   = 'USD'.
+    // La facturación (revalueLines) re-deriva el precio MXN desde original_unit_price
+    // × TC del día. Por eso, al corregir una línea USD, el precio que captura el
+    // usuario es en USD → actualizamos original_unit_price (USD) y recomputamos
+    // unit_price = USD × TC de la línea. Si solo tocáramos unit_price, la factura
+    // ignoraría la corrección (bug 2026-06-09).
     const { rows: dbLines } = await client.query(
       `SELECT id, line_number, product_id, quantity_delivered,
               unit_price, discount_pct, sales_order_line_id,
-              original_unit_price, original_currency,
+              original_unit_price, original_currency, applied_exchange_rate,
               COALESCE(pack_factor, 1) AS pack_factor
          FROM delivery_note_lines
         WHERE delivery_note_id = $1`,
@@ -1186,16 +1192,19 @@ async function adjustDeliveryNotePrices({ tenantId, noteId, lines, reason, userI
     const byId = Object.fromEntries(dbLines.map(l => [l.id, l]))
 
     // Validar y registrar cada cambio (sin escribir aún).
+    // OJO con la moneda de captura:
+    //   - Línea USD (original_currency='USD'): inp.unitPrice viene en USD. Guardamos
+    //     original_unit_price=USD y recomputamos unit_price (MXN) = USD × TC de la línea.
+    //   - Línea MXN: inp.unitPrice viene en MXN y va directo a unit_price.
     const changes = []
     for (const inp of lines) {
       const cur = byId[inp.lineId]
       if (!cur) throw createError(400, 'Una de las líneas no pertenece a esta remisión.')
-      const newPrice = Number(inp.unitPrice)
-      if (!Number.isFinite(newPrice) || newPrice < 0) {
+      const input = Number(inp.unitPrice)
+      if (!Number.isFinite(input) || input < 0) {
         throw createError(400, 'Precio unitario inválido.')
       }
-      const oldPrice = parseFloat(cur.unit_price)
-      const oldDisc  = cur.discount_pct != null ? parseFloat(cur.discount_pct) : 0
+      const oldDisc = cur.discount_pct != null ? parseFloat(cur.discount_pct) : 0
       let newDisc = oldDisc
       if (inp.discountPct != null && inp.discountPct !== '') {
         newDisc = Number(inp.discountPct)
@@ -1203,22 +1212,42 @@ async function adjustDeliveryNotePrices({ tenantId, noteId, lines, reason, userI
           throw createError(400, 'Descuento inválido (0–99.99%).')
         }
       }
-      // Reflejar en el mapa para el recálculo del total aunque no haya cambio.
-      cur.unit_price   = newPrice
-      cur.discount_pct = newDisc
-      // Para líneas en USD: el precio capturado es en USD (la moneda del doc), por
-      // unidad de venta. La facturación lee original_unit_price (USD por unidad
-      // BASE) × TC × pack_factor, así que lo recalculamos = newPrice / pack_factor.
-      // Sin esto, la factura ignora la corrección y re-aplica el TC al precio viejo.
+
       const isUsdLine = cur.original_currency === 'USD' && cur.original_unit_price != null
-      const packFactor = parseFloat(cur.pack_factor || 1) || 1
-      const newOriginalUnitPrice = isUsdLine ? +(newPrice / packFactor).toFixed(6) : null
-      if (oldPrice !== newPrice || oldDisc !== newDisc) {
+      let newUnitPrice          // unit_price del documento (MXN para línea USD)
+      let newOriginalUnitPrice  // USD (null para líneas no-USD)
+      let editOld, editNew      // valores para el historial, en la moneda de edición
+
+      if (isUsdLine) {
+        const curOrig = parseFloat(cur.original_unit_price)
+        // TC de la línea: el guardado; si falta, el ratio actual unit_price/USD; si no, el del doc.
+        const rate = parseFloat(cur.applied_exchange_rate)
+          || (curOrig > 0 ? parseFloat(cur.unit_price) / curOrig : 0)
+          || parseFloat(note.exchange_rate_value || 0)
+          || 1
+        newOriginalUnitPrice = +input.toFixed(6)           // USD capturado
+        newUnitPrice         = +(input * rate).toFixed(4)  // MXN = USD × TC
+        editOld = curOrig
+        editNew = newOriginalUnitPrice
+      } else {
+        newUnitPrice         = input                       // MXN directo
+        newOriginalUnitPrice = null
+        editOld = parseFloat(cur.unit_price)
+        editNew = newUnitPrice
+      }
+
+      // Reflejar en el mapa para el recálculo del total (siempre unit_price MXN del doc).
+      cur.unit_price   = newUnitPrice
+      cur.discount_pct = newDisc
+
+      if (editOld !== editNew || oldDisc !== newDisc) {
         changes.push({
           lineId: cur.id, lineNumber: cur.line_number, productId: cur.product_id,
-          oldUnitPrice: oldPrice, newUnitPrice: newPrice,
+          currency:       isUsdLine ? 'USD' : note.currency,  // moneda del valor mostrado
+          oldUnitPrice:   editOld, newUnitPrice: editNew,      // en moneda de edición (USD si USD)
           oldDiscountPct: oldDisc, newDiscountPct: newDisc,
-          newOriginalUnitPrice,  // null para líneas no-USD
+          persistUnitPrice:         newUnitPrice,              // unit_price MXN para la BD
+          persistOriginalUnitPrice: newOriginalUnitPrice,      // original_unit_price USD o null
         })
       }
     }
@@ -1226,8 +1255,8 @@ async function adjustDeliveryNotePrices({ tenantId, noteId, lines, reason, userI
       throw createError(400, 'No hay cambios de precio que aplicar.')
     }
 
-    // Persistir los cambios de línea. Para USD también espeja original_unit_price
-    // (CASE: las líneas no-USD lo dejan intacto).
+    // Persistir los cambios de línea. unit_price es SIEMPRE en MXN del doc; para USD
+    // también espeja original_unit_price (CASE: las líneas no-USD lo dejan intacto).
     for (const ch of changes) {
       await client.query(
         `UPDATE delivery_note_lines
@@ -1235,7 +1264,7 @@ async function adjustDeliveryNotePrices({ tenantId, noteId, lines, reason, userI
                 original_unit_price = CASE WHEN $5::numeric IS NOT NULL
                                           THEN $5::numeric ELSE original_unit_price END
           WHERE id = $3 AND delivery_note_id = $4`,
-        [ch.newUnitPrice, ch.newDiscountPct, ch.lineId, noteId, ch.newOriginalUnitPrice]
+        [ch.persistUnitPrice, ch.newDiscountPct, ch.lineId, noteId, ch.persistOriginalUnitPrice]
       )
     }
 
@@ -1276,7 +1305,7 @@ async function adjustDeliveryNotePrices({ tenantId, noteId, lines, reason, userI
                                           THEN $5::numeric ELSE original_unit_price END
           WHERE id = $3
             AND sales_order_id IN (SELECT id FROM sales_orders WHERE tenant_id = $4)`,
-        [ch.newUnitPrice, ch.newDiscountPct, solId, tenantId, ch.newOriginalUnitPrice]
+        [ch.persistUnitPrice, ch.newDiscountPct, solId, tenantId, ch.persistOriginalUnitPrice]
       )
     }
 
