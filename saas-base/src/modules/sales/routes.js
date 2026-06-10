@@ -626,6 +626,40 @@ router.post('/orders/:id/lines', checkPermission('sales', 'create'), async (req,
 })
 
 /**
+ * POST /api/sales/orders/:id/bundles
+ * Agrega un PAQUETE del catálogo al pedido (solo draft): el backend lo explota
+ * en líneas componente con precio prorrateado (grupo atómico).
+ * Body: { bundleId, bundleQuantity? }
+ */
+router.post('/orders/:id/bundles', checkPermission('sales', 'create'), async (req, res, next) => {
+  try {
+    const { bundleId, bundleQuantity } = req.body
+    if (!bundleId) return res.status(400).json({ error: 'bundleId es requerido.' })
+    const result = await orderService.addBundleToOrder({
+      tenantId: req.tenant.id, orderId: req.params.id,
+      bundleId, bundleQuantity,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.status(201).json(result)
+  } catch (err) { next(err) }
+})
+
+/**
+ * DELETE /api/sales/orders/:id/bundle-groups/:groupId
+ * Quita un paquete completo (todas sus líneas) del pedido — solo en draft.
+ */
+router.delete('/orders/:id/bundle-groups/:groupId', checkPermission('sales', 'update'), async (req, res, next) => {
+  try {
+    const result = await orderService.removeBundleGroup({
+      tenantId: req.tenant.id, orderId: req.params.id,
+      bundleGroupId: req.params.groupId,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json({ message: 'Paquete quitado del pedido.', ...result })
+  } catch (err) { next(err) }
+})
+
+/**
  * PATCH /api/sales/orders/:id/lines/:lineId
  * Edita una línea del pedido — solo en draft.
  */

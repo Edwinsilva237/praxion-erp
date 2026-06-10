@@ -1,10 +1,12 @@
 'use strict'
 
+const { randomUUID } = require('crypto')
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
 const pushEvents = require('../push/pushEvents')
 const { getRateForDate } = require('../exchange-rates/exchangeRateService')
 const documentSeriesService = require('../document-series/documentSeriesService')
+const bundleService = require('../products/bundleService')
 
 /**
  * Genera el siguiente número de pedido de venta.
@@ -305,6 +307,26 @@ async function createOrder({
       exchangeRateValue = parseFloat(rate.rate_mxn)
     }
 
+    // Líneas de paquete (mig 203): el paquete debe ser del tenant y de la
+    // MISMA moneda del pedido — el prorrateo se calculó en la moneda del
+    // paquete y las líneas son nativas (sin revaluación al facturar).
+    const bundleIds = [...new Set(lines.map(l => l.bundleId).filter(Boolean))]
+    if (bundleIds.length) {
+      const { rows: bundles } = await client.query(
+        `SELECT id, name, currency FROM product_bundles
+          WHERE tenant_id = $1 AND id = ANY($2::uuid[])`,
+        [tenantId, bundleIds]
+      )
+      if (bundles.length !== bundleIds.length) {
+        throw createError(404, 'Uno de los paquetes del pedido no existe.')
+      }
+      const wrongCurrency = bundles.find(b => b.currency !== resolvedCurrency)
+      if (wrongCurrency) {
+        throw createError(400,
+          `El paquete "${wrongCurrency.name}" está definido en ${wrongCurrency.currency} y el pedido es en ${resolvedCurrency}. Cambia la moneda del pedido o usa productos sueltos.`)
+      }
+    }
+
     // Número de orden
     const orderNumber = await nextOrderNumber(client, tenantId)
 
@@ -378,8 +400,9 @@ async function createOrder({
             currency, discount_pct, line_number, notes,
             original_unit_price, original_currency, applied_exchange_rate,
             applied_exchange_rate_date,
-            pack_option_id, pack_factor, quantity_base)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+            pack_option_id, pack_factor, quantity_base,
+            bundle_id, bundle_group_id, bundle_name, bundle_quantity)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
         [order.id, line.productId, line.quantity, line.unit || 'paquete',
          line.unitPrice, resolvedCurrency, line.discountPct || 0, i + 1,
          line.notes || null,
@@ -389,7 +412,11 @@ async function createOrder({
          line.appliedExchangeRateDate || null,
          line.packOptionId || null,
          packFactor,
-         quantityBase]
+         quantityBase,
+         line.bundleId || null,
+         line.bundleId ? (line.bundleGroupId || null) : null,
+         line.bundleId ? (line.bundleName || null) : null,
+         line.bundleId ? (line.bundleQuantity || null) : null]
       )
     }
 
@@ -666,6 +693,18 @@ async function updateOrderLine({
     )
     if (order.length === 0) throw createError(404, 'Pedido no encontrado o ya no está en borrador.')
 
+    // Las líneas de paquete se mueven en bloque — editar una rompería el
+    // precio especial prorrateado (regla acordada: el paquete es atómico).
+    const { rows: bline } = await client.query(
+      `SELECT bundle_name FROM sales_order_lines
+        WHERE id = $1 AND sales_order_id = $2 AND bundle_group_id IS NOT NULL`,
+      [lineId, orderId]
+    )
+    if (bline.length) {
+      throw createError(409,
+        `Esta línea pertenece al paquete "${bline[0].bundle_name}". No se edita individualmente: quita el paquete completo y agrégalo de nuevo (o agrega el producto como línea suelta).`)
+    }
+
     // original_* puede llegar como null explícito (limpiar) o undefined (no tocar)
     const origPriceProvided    = originalUnitPrice       !== undefined
     const origCurrProvided     = originalCurrency        !== undefined
@@ -728,6 +767,17 @@ async function deleteOrderLine({ tenantId, orderId, lineId }) {
     )
     if (order.length === 0) throw createError(404, 'Pedido no encontrado o ya no está en borrador.')
 
+    // Línea de paquete: se quita el GRUPO completo, no una línea suelta.
+    const { rows: bline } = await client.query(
+      `SELECT bundle_name FROM sales_order_lines
+        WHERE id = $1 AND sales_order_id = $2 AND bundle_group_id IS NOT NULL`,
+      [lineId, orderId]
+    )
+    if (bline.length) {
+      throw createError(409,
+        `Esta línea pertenece al paquete "${bline[0].bundle_name}". Quita el paquete completo en su lugar.`)
+    }
+
     const { rows } = await client.query(
       `DELETE FROM sales_order_lines WHERE id = $1 AND sales_order_id = $2 RETURNING id`,
       [lineId, orderId]
@@ -736,6 +786,104 @@ async function deleteOrderLine({ tenantId, orderId, lineId }) {
 
     await recalcOrderTotals(client, orderId)
     return true
+  })
+}
+
+/**
+ * Agrega un PAQUETE a un pedido en draft: explota el paquete del catálogo en
+ * líneas componente con precio prorrateado (bundleService.explodeBundle) y
+ * las inserta como un grupo atómico (bundle_group_id compartido).
+ */
+async function addBundleToOrder({
+  tenantId, orderId, bundleId, bundleQuantity = 1,
+  userId, ipAddress, userAgent,
+}) {
+  const qty = parseFloat(bundleQuantity)
+  if (!(qty > 0)) throw createError(400, 'La cantidad de paquetes debe ser mayor a cero.')
+
+  // El prorrateo lee catálogo + TC — fuera de la transacción de escritura.
+  const exploded = await bundleService.explodeBundle({ tenantId, bundleId })
+
+  return withTransaction(async (client) => {
+    const { rows: order } = await client.query(
+      `SELECT id, currency FROM sales_orders WHERE id = $1 AND tenant_id = $2 AND status = 'draft'`,
+      [orderId, tenantId]
+    )
+    if (order.length === 0) throw createError(404, 'Pedido no encontrado o ya no está en borrador.')
+
+    if (exploded.bundle.currency !== order[0].currency) {
+      throw createError(400,
+        `El paquete "${exploded.bundle.name}" está definido en ${exploded.bundle.currency} y el pedido es en ${order[0].currency}.`)
+    }
+
+    const { rows: maxLine } = await client.query(
+      `SELECT COALESCE(MAX(line_number), 0) AS max FROM sales_order_lines WHERE sales_order_id = $1`,
+      [orderId]
+    )
+
+    const groupId = randomUUID()
+    const inserted = []
+    for (let i = 0; i < exploded.lines.length; i++) {
+      const l = exploded.lines[i]
+      const lineQty = l.quantity * qty
+      const { rows } = await client.query(
+        `INSERT INTO sales_order_lines
+           (sales_order_id, product_id, quantity, unit, unit_price, currency,
+            discount_pct, line_number, pack_option_id, pack_factor, quantity_base,
+            bundle_id, bundle_group_id, bundle_name, bundle_quantity)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+        [orderId, l.productId, lineQty, l.unit, l.unitPrice, order[0].currency,
+         0, maxLine[0].max + i + 1, l.packOptionId || null, l.packFactor,
+         lineQty * l.packFactor,
+         exploded.bundle.id, groupId, exploded.bundle.name, qty]
+      )
+      inserted.push(rows[0])
+    }
+
+    await recalcOrderTotals(client, orderId)
+
+    await audit({
+      tenantId, userId, action: 'sales_order.bundle_added',
+      resource: 'sales_orders', resourceId: orderId,
+      payload: { bundleId, bundleName: exploded.bundle.name, bundleQuantity: qty },
+      ipAddress, userAgent,
+    })
+
+    return { bundleGroupId: groupId, lines: inserted }
+  })
+}
+
+/**
+ * Quita un paquete completo (todas las líneas del grupo) de un pedido en draft.
+ */
+async function removeBundleGroup({
+  tenantId, orderId, bundleGroupId, userId, ipAddress, userAgent,
+}) {
+  return withTransaction(async (client) => {
+    const { rows: order } = await client.query(
+      `SELECT id FROM sales_orders WHERE id = $1 AND tenant_id = $2 AND status = 'draft'`,
+      [orderId, tenantId]
+    )
+    if (order.length === 0) throw createError(404, 'Pedido no encontrado o ya no está en borrador.')
+
+    const { rows } = await client.query(
+      `DELETE FROM sales_order_lines
+        WHERE sales_order_id = $1 AND bundle_group_id = $2
+        RETURNING id, bundle_name`,
+      [orderId, bundleGroupId]
+    )
+    if (rows.length === 0) throw createError(404, 'Paquete no encontrado en este pedido.')
+
+    await recalcOrderTotals(client, orderId)
+
+    await audit({
+      tenantId, userId, action: 'sales_order.bundle_removed',
+      resource: 'sales_orders', resourceId: orderId,
+      payload: { bundleGroupId, bundleName: rows[0].bundle_name, linesRemoved: rows.length },
+      ipAddress, userAgent,
+    })
+
+    return { removed: rows.length }
   })
 }
 
@@ -800,6 +948,8 @@ async function getOrderDeliveryBreakdown(client, { tenantId, orderId }) {
             sol.unit_price,
             sol.discount_pct,
             sol.notes,
+            sol.bundle_name,
+            sol.bundle_group_id,
             p.name              AS product_name,
             p.sku,
             COALESCE(SUM(dnl.quantity_delivered) FILTER (
@@ -846,6 +996,8 @@ async function getOrderDeliveryBreakdown(client, { tenantId, orderId }) {
       unitPrice:     parseFloat(r.unit_price),
       discountPct:   parseFloat(r.discount_pct),
       notes:         r.notes,
+      bundleName:    r.bundle_name,
+      bundleGroupId: r.bundle_group_id,
       qtyOrdered,
       qtyInvoiced,
       qtyRemisioned,
@@ -974,6 +1126,7 @@ module.exports = {
   confirmOrder, cancelOrder, deleteOrder, getSuggestedPrice,
   assignDriver,
   addOrderLine, updateOrderLine, deleteOrderLine,
+  addBundleToOrder, removeBundleGroup,
   getOrderDeliveryBreakdown, recalcOrderStatusFromDeliveries, recalcOrderStatus,
   nextOrderNumber,
 }

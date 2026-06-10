@@ -17,6 +17,13 @@ export const salesApi = {
   pendingQuantities: (orderId) =>
     api.get(`${B}/orders/${orderId}/pending-quantities`).then(r => r.data),
 
+  // Paquetes en el pedido (draft): agregar explota el paquete en líneas
+  // prorrateadas (grupo atómico); quitar elimina el grupo completo.
+  addOrderBundle: (orderId, body) =>
+    api.post(`${B}/orders/${orderId}/bundles`, body).then(r => r.data),
+  removeOrderBundleGroup: (orderId, groupId) =>
+    api.delete(`${B}/orders/${orderId}/bundle-groups/${groupId}`).then(r => r.data),
+
   // Líneas de pedido (draft)
   addLine:    (orderId, body) => api.post(`${B}/orders/${orderId}/lines`, body).then(r => r.data),
   updateLine: (orderId, lineId, body) =>

@@ -31,6 +31,7 @@ export const NAV_SECTIONS = [
       { label: 'Cuentas por cobrar',  to: '/cxc',             iconKey: 'card',     permission: 'financials:read',         module: 'sales' },
       { label: 'Pagos recibidos',     to: '/pagos-recibidos', iconKey: 'card',     permission: 'financials:read',         module: 'sales' },
       { label: 'Precios por cliente', to: '/precios-cliente', iconKey: 'tag',      permission: 'business_partners:read' },
+      { label: 'Paquetes',            to: '/paquetes',        iconKey: 'package',  permission: 'products:read',          module: 'sales' },
       { label: 'Socios de negocio',   to: '/socios',          iconKey: 'partners', permission: 'business_partners:read' },
     ],
   },

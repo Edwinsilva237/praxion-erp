@@ -7,6 +7,7 @@ import { productsApi } from '@/api/products'
 import { exchangeRatesApi } from '@/api/exchangeRates'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
+import { BundlePickerModal } from '@/components/ventas/BundlePickerModal'
 import { fmtMXN, fmtNum, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
@@ -63,6 +64,89 @@ function TotalesBlock({ lines, currency, exchangeRate }) {
   )
 }
 
+// ── Tarjeta de un PAQUETE dentro del pedido (grupo atómico de líneas) ────────
+// Las cantidades internas y los precios prorrateados no se editan — solo
+// cuántos paquetes llevas, o quitar el paquete completo (regla acordada).
+function BundleGroupCard({ members, currency, onQtyChange, onRemove }) {
+  const m0 = members[0]
+  const qty = parseFloat(m0.bundle_quantity || 0)
+  const groupTotal = members.reduce((s, l) =>
+    s + parseFloat(l.quantity || 0) * parseFloat(l.unit_price || 0), 0)
+  const disc = m0.bundle_discount_pct
+
+  return (
+    <div className="border-2 border-brand-500/40 bg-brand-500/5 rounded-xl p-4 flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="font-semibold text-ink-primary flex items-center gap-2 flex-wrap">
+            <span>📦 {m0.bundle_name}</span>
+            {disc != null && disc > 0 && (
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-status-success/15 text-status-success uppercase tracking-wide">
+                −{Number(disc).toFixed(1)}% vs lista
+              </span>
+            )}
+          </p>
+          <p className="text-[11px] text-ink-muted mt-0.5">
+            Precio especial prorrateado entre los productos — las cantidades internas no se editan.
+          </p>
+        </div>
+        <button type="button" onClick={onRemove}
+          className="text-xs text-red-400 hover:text-status-danger shrink-0">
+          Quitar paquete
+        </button>
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-ink-muted">Paquetes:</label>
+          <input type="number" step="1" min="1" inputMode="numeric"
+            className="input w-20 text-right font-mono"
+            value={m0.bundle_quantity}
+            onChange={e => onQtyChange(e.target.value)} />
+        </div>
+        {m0.bundle_price != null && (
+          <span className="text-xs text-ink-muted">
+            × <span className="font-mono">{fmtMXN(m0.bundle_price, currency)}</span> c/u
+          </span>
+        )}
+        <span className="ml-auto text-sm font-semibold font-mono text-brand-300">
+          {qty > 0 ? fmtMXN(groupTotal, currency) : '—'}
+        </span>
+      </div>
+
+      <div className="border border-line-subtle rounded-lg overflow-x-auto bg-surface-primary">
+        <table className="table text-xs min-w-full">
+          <thead>
+            <tr>
+              <th>Producto</th>
+              <th className="text-right">Cant.</th>
+              <th className="text-right">P. Unit. prorrateado</th>
+              <th className="text-right">Importe</th>
+            </tr>
+          </thead>
+          <tbody>
+            {members.map((l, i) => (
+              <tr key={i}>
+                <td>
+                  <p className="font-medium text-ink-primary">{l.product?.label}</p>
+                  {l.product?.sub && <p className="text-[10px] text-ink-muted font-mono">{l.product.sub}</p>}
+                </td>
+                <td className="text-right font-mono tabular-nums whitespace-nowrap">
+                  {qty > 0 ? fmtNum(parseFloat(l.quantity || 0), 3) : '—'} {l.unit}
+                </td>
+                <td className="text-right font-mono tabular-nums">{fmtMXN(l.unit_price, currency)}</td>
+                <td className="text-right font-mono tabular-nums font-medium">
+                  {qty > 0 ? fmtMXN(parseFloat(l.quantity || 0) * parseFloat(l.unit_price || 0), currency) : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 // ── Chip de origen de precio ─────────────────────────────────────────────────
 function PriceSourceChip({ source }) {
   if (!source || source === 'manual') return null
@@ -92,6 +176,7 @@ function PedidoForm({ onClose, onCreated }) {
   const [error, setError]               = useState(null)
   const [customTC, setCustomTC]         = useState('')
   const [poFiles, setPoFiles]           = useState([])   // documento(s) de la OC del cliente
+  const [showBundlePicker, setShowBundlePicker] = useState(false)
 
   // Cargar TC USD si aplica
   const { data: tcData } = useQuery({
@@ -211,6 +296,78 @@ function PedidoForm({ onClose, onCreated }) {
     }
   }
 
+  // ── Paquetes: el grupo entra/sale como bloque, con precios prorrateados ──
+  async function handleAddBundle(bundle, qty) {
+    try {
+      const ex = await productsApi.explodeBundle(bundle.id)
+      const groupId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : `bg-${Date.now()}-${Math.floor(Math.random() * 1e9)}`
+      const newLines = ex.lines.map(l => ({
+        product:        { id: l.productId, label: l.productName, sub: l.sku },
+        quantity:       String(l.quantity * qty),
+        per_bundle_qty: l.quantity,
+        unit:           l.unit,
+        unit_price:     String(l.unitPrice),
+        discount_pct:   '',
+        notes:          '',
+        price_source:   'bundle',
+        pack_options:   [],
+        pack_option_id: l.packOptionId || null,
+        pack_factor:    l.packFactor || 1,
+        base_unit:      l.baseUnit || '',
+        base_price_ref: null,
+        bundle_id:           ex.bundle.id,
+        bundle_group_id:     groupId,
+        bundle_name:         ex.bundle.name,
+        bundle_quantity:     String(qty),
+        bundle_price:        ex.bundle.bundlePrice,
+        bundle_currency:     ex.bundle.currency,
+        bundle_discount_pct: ex.impliedDiscountPct,
+      }))
+      setLines(prev => {
+        // quitar plantillas vacías para que el paquete no quede entre huecos
+        const keep = prev.filter(l => l.bundle_group_id || l.product || l.quantity || l.unit_price)
+        return [...keep, ...newLines]
+      })
+      setShowBundlePicker(false)
+    } catch (e) {
+      setError(e.response?.data?.error || e.message || 'No se pudo agregar el paquete')
+      setShowBundlePicker(false)
+    }
+  }
+
+  function setBundleQty(groupId, qtyStr) {
+    const q = parseFloat(qtyStr)
+    setLines(prev => prev.map(l => l.bundle_group_id === groupId
+      ? { ...l, bundle_quantity: qtyStr, quantity: q > 0 ? String(l.per_bundle_qty * q) : '' }
+      : l))
+  }
+
+  function removeBundleGroup(groupId) {
+    setLines(prev => {
+      const next = prev.filter(l => l.bundle_group_id !== groupId)
+      return next.length ? next : [EMPTY_LINE()]
+    })
+  }
+
+  // Si cambia la moneda del pedido, los paquetes de otra moneda salen (su
+  // prorrateo es nativo de la moneda del paquete).
+  useEffect(() => {
+    const mismatched = [...new Set(
+      lines.filter(l => l.bundle_currency && l.bundle_currency !== currency)
+           .map(l => l.bundle_name)
+    )]
+    if (mismatched.length) {
+      setLines(prev => {
+        const next = prev.filter(l => !(l.bundle_currency && l.bundle_currency !== currency))
+        return next.length ? next : [EMPTY_LINE()]
+      })
+      setError(`Se quitó "${mismatched.join('", "')}" del pedido: el paquete está en otra moneda.`)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currency])
+
   function updateLine(idx, key, val) {
     setLines(prev => prev.map((l, i) => {
       if (i !== idx) return l
@@ -234,6 +391,8 @@ function PedidoForm({ onClose, onCreated }) {
       const validLines = lines.filter(l => l.product?.id && l.quantity && l.unit_price)
       if (!partner?.id)         throw new Error('Selecciona un cliente.')
       if (!validLines.length)   throw new Error('Agrega al menos una línea con cantidad y precio.')
+      const badBundle = lines.find(l => l.bundle_group_id && !(parseFloat(l.bundle_quantity) > 0))
+      if (badBundle) throw new Error(`Captura cuántos paquetes de "${badBundle.bundle_name}" lleva el pedido.`)
       // requires_po: en el pedido es solo advertencia visual (el cliente puede entregar
       // la OC más tarde). El bloqueo duro ocurre al timbrar factura.
       if (currency === 'USD' && !(exchangeRate > 0)) {
@@ -261,6 +420,11 @@ function PedidoForm({ onClose, onCreated }) {
           appliedExchangeRateDate: l.applied_exchange_rate_date ?? null,
           packOptionId:            l.pack_option_id             ?? null,
           packFactor:              l.pack_factor                ?? 1,
+          // Paquete (si la línea pertenece a uno): grupo atómico prorrateado
+          bundleId:                l.bundle_id                  ?? null,
+          bundleGroupId:           l.bundle_group_id            ?? null,
+          bundleName:              l.bundle_name                ?? null,
+          bundleQuantity:          l.bundle_quantity != null ? parseFloat(l.bundle_quantity) : null,
         })),
       })
     },
@@ -447,13 +611,36 @@ function PedidoForm({ onClose, onCreated }) {
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <p className="text-xs font-bold text-brand-300 uppercase tracking-wider">Artículos</p>
-          <button type="button" onClick={() => setLines(p => [...p, EMPTY_LINE()])} className="btn-ghost btn-sm text-brand-300">
-            + Agregar artículo
-          </button>
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={() => setShowBundlePicker(true)} className="btn-ghost btn-sm text-brand-300">
+              📦 Paquete
+            </button>
+            <button type="button" onClick={() => setLines(p => [...p, EMPTY_LINE()])} className="btn-ghost btn-sm text-brand-300">
+              + Agregar artículo
+            </button>
+          </div>
         </div>
 
-        {lines.map((line, idx) => (
-          <div key={idx} className="border border-line-subtle rounded-xl p-4 flex flex-col gap-3">
+        {(() => {
+          const renderedGroups = new Set()
+          return lines.map((line, idx) => {
+            // Líneas de paquete: se pintan UNA vez por grupo, como bloque.
+            if (line.bundle_group_id) {
+              if (renderedGroups.has(line.bundle_group_id)) return null
+              renderedGroups.add(line.bundle_group_id)
+              const members = lines.filter(l => l.bundle_group_id === line.bundle_group_id)
+              return (
+                <BundleGroupCard
+                  key={line.bundle_group_id}
+                  members={members}
+                  currency={currency}
+                  onQtyChange={(q) => setBundleQty(line.bundle_group_id, q)}
+                  onRemove={() => removeBundleGroup(line.bundle_group_id)}
+                />
+              )
+            }
+            return (
+          <div key={`line-${idx}`} className="border border-line-subtle rounded-xl p-4 flex flex-col gap-3">
             <div className="flex items-center justify-between">
               <p className="text-xs font-medium text-ink-muted">
                 Línea {idx + 1}
@@ -572,12 +759,20 @@ function PedidoForm({ onClose, onCreated }) {
               onChange={e => updateLine(idx, 'notes', e.target.value)}
             />
           </div>
-        ))}
+            )
+          })
+        })()}
 
-        <button type="button" onClick={() => setLines(p => [...p, EMPTY_LINE()])}
-          className="w-full border border-dashed border-line-base rounded-xl py-2.5 text-sm font-medium text-brand-300 hover:bg-brand-500/5 transition-colors">
-          + Agregar artículo
-        </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button type="button" onClick={() => setLines(p => [...p, EMPTY_LINE()])}
+            className="border border-dashed border-line-base rounded-xl py-2.5 text-sm font-medium text-brand-300 hover:bg-brand-500/5 transition-colors">
+            + Agregar artículo
+          </button>
+          <button type="button" onClick={() => setShowBundlePicker(true)}
+            className="border border-dashed border-line-base rounded-xl py-2.5 text-sm font-medium text-brand-300 hover:bg-brand-500/5 transition-colors">
+            📦 Agregar paquete
+          </button>
+        </div>
 
         <TotalesBlock lines={lines} currency={currency} exchangeRate={exchangeRate} />
       </div>
@@ -589,6 +784,14 @@ function PedidoForm({ onClose, onCreated }) {
           {mutation.isPending ? <Spinner size="sm" /> : 'Crear pedido'}
         </button>
       </div>
+
+      {showBundlePicker && (
+        <BundlePickerModal
+          currency={currency}
+          onConfirm={handleAddBundle}
+          onClose={() => setShowBundlePicker(false)}
+        />
+      )}
     </form>
   )
 }

@@ -86,6 +86,11 @@ function LineasTable({ note }) {
                     <div className="min-w-0 flex-1">
                       <p className="font-medium text-ink-primary">{l.product_name}</p>
                       {l.sku && <p className="text-[10px] text-ink-muted font-mono">{l.sku}</p>}
+                      {l.bundle_name && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-brand-300 bg-brand-500/10 border border-brand-500/30 rounded-full px-1.5 py-0.5 mt-0.5">
+                          📦 {l.bundle_name}
+                        </span>
+                      )}
                       {l.notes && <p className="text-[10px] text-ink-muted mt-0.5 italic">{l.notes}</p>}
                       {l.invoice_id ? (
                         <p className="text-[10px] text-teal-300 mt-0.5">

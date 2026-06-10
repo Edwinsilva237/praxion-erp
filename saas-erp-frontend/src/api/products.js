@@ -24,6 +24,26 @@ export const productsApi = {
   addQualitySpec: (id, body) =>
     api.post(`/products/${id}/quality-specs`, body).then((r) => r.data),
 
+  // ── Paquetes (bundles): combos con precio especial prorrateado ─────────
+  listBundles: (params) =>
+    api.get('/products/bundles', { params }).then((r) => r.data),
+
+  getBundle: (bundleId) =>
+    api.get(`/products/bundles/${bundleId}`).then((r) => r.data),
+
+  // Líneas componente por 1 paquete, con precio prorrateado
+  explodeBundle: (bundleId) =>
+    api.get(`/products/bundles/${bundleId}/explode`).then((r) => r.data),
+
+  createBundle: (body) =>
+    api.post('/products/bundles', body).then((r) => r.data),
+
+  updateBundle: (bundleId, body) =>
+    api.patch(`/products/bundles/${bundleId}`, body).then((r) => r.data),
+
+  deleteBundle: (bundleId) =>
+    api.delete(`/products/bundles/${bundleId}`).then((r) => r.data),
+
   // Presentaciones de venta
   listPackOptions: (id) =>
     api.get(`/products/${id}/pack-options`).then((r) => r.data),

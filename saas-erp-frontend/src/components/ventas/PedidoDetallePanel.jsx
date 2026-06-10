@@ -5,6 +5,7 @@ import { salesApi } from '@/api/sales'
 import { partnersApi } from '@/api/partners'
 import { usersApi } from '@/api/users'
 import { PedidoLineaModal } from '@/components/ventas/PedidoLineaModal'
+import { BundlePickerModal } from '@/components/ventas/BundlePickerModal'
 import { RemisionFormModal } from '@/components/ventas/RemisionFormModal'
 import { RemisionDetallePanel } from '@/components/ventas/RemisionDetallePanel'
 import CustomerPoAttachments from '@/components/ventas/CustomerPoAttachments'
@@ -18,7 +19,7 @@ import clsx from 'clsx'
 // ── Tabla de líneas — read-only + acciones edit/delete cuando editable ──────
 // El pedido NO lleva IVA. El total mostrado es el subtotal puro;
 // el IVA se calculará al facturar.
-function LineasTable({ order, editable, onEditLine, onDeleteLine, deletingLineId }) {
+function LineasTable({ order, editable, onEditLine, onDeleteLine, onRemoveBundle, deletingLineId }) {
   const lines = order.lines || []
   // Usamos subtotal como total visible del pedido (pre-IVA).
   // Si por algún motivo (datos legacy) subtotal_mxn está vacío, caemos
@@ -59,6 +60,12 @@ function LineasTable({ order, editable, onEditLine, onDeleteLine, deletingLineId
                     <div className="min-w-0 flex-1">
                       <p className="font-medium text-ink-primary">{l.product_name || '—'}</p>
                       {l.sku && <p className="text-[10px] text-ink-muted font-mono">{l.sku}</p>}
+                      {l.bundle_name && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-brand-300 bg-brand-500/10 border border-brand-500/30 rounded-full px-1.5 py-0.5 mt-0.5">
+                          📦 {l.bundle_name}
+                          {l.bundle_quantity != null && Number(l.bundle_quantity) !== 1 && ` ×${Number(l.bundle_quantity)}`}
+                        </span>
+                      )}
                       {l.notes && <p className="text-[10px] text-ink-muted mt-0.5 italic">{l.notes}</p>}
                     </div>
                   </div>
@@ -69,6 +76,17 @@ function LineasTable({ order, editable, onEditLine, onDeleteLine, deletingLineId
                 <td className="text-right font-mono tabular-nums font-medium">{fmtMXN(importe, order.currency)}</td>
                 {editable && (
                   <td className="text-right">
+                    {l.bundle_group_id ? (
+                      /* Línea de paquete: se quita el GRUPO completo (precio prorrateado) */
+                      <button
+                        onClick={() => onRemoveBundle(l)}
+                        className="btn-ghost btn-icon p-1 text-ink-muted hover:text-status-danger"
+                        title={`Quitar el paquete "${l.bundle_name}" completo`}>
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V3a1 1 0 011-1h4a1 1 0 011 1v4"/>
+                        </svg>
+                      </button>
+                    ) : (
                     <div className="flex items-center justify-end gap-1">
                       <button
                         onClick={() => onEditLine(l)}
@@ -90,6 +108,7 @@ function LineasTable({ order, editable, onEditLine, onDeleteLine, deletingLineId
                         )}
                       </button>
                     </div>
+                    )}
                   </td>
                 )}
               </tr>
@@ -520,6 +539,8 @@ export function PedidoDetallePanel({ orderId, onClose }) {
   const [editingDatos, setEditingDatos] = useState(false)
   const [lineModal, setLineModal]   = useState(null)   // null | { mode: 'new'|'edit', line? }
   const [deletingLineId, setDeletingLineId] = useState(null)
+  const [showBundlePicker, setShowBundlePicker] = useState(false)
+  const [addingBundle, setAddingBundle] = useState(false)
   const [showRemisionModal, setShowRemisionModal] = useState(false)
   const [remisionMsg, setRemisionMsg] = useState(null)
   const [viewingNoteId, setViewingNoteId] = useState(null)
@@ -585,6 +606,40 @@ export function PedidoDetallePanel({ orderId, onClose }) {
       setError(e.response?.data?.error || e.message || 'Error al eliminar la línea')
     } finally {
       setDeletingLineId(null)
+    }
+  }
+
+  // Quitar un paquete completo (todas las líneas del grupo prorrateado).
+  async function handleRemoveBundle(line) {
+    if (!window.confirm(`¿Quitar el paquete "${line.bundle_name}" completo del pedido? Se eliminan todas sus líneas.`)) return
+    setError(null)
+    setDeletingLineId(line.id)
+    try {
+      await salesApi.removeOrderBundleGroup(orderId, line.bundle_group_id)
+      qc.invalidateQueries({ queryKey: ['sales-order', orderId] })
+      qc.invalidateQueries({ queryKey: ['sales-orders'] })
+    } catch (e) {
+      setError(e.response?.data?.error || e.message || 'Error al quitar el paquete')
+    } finally {
+      setDeletingLineId(null)
+    }
+  }
+
+  // Agregar un paquete del catálogo al pedido (el backend lo explota en
+  // líneas con precio prorrateado).
+  async function handleAddBundle(bundle, qty) {
+    setError(null)
+    setAddingBundle(true)
+    try {
+      await salesApi.addOrderBundle(orderId, { bundleId: bundle.id, bundleQuantity: qty })
+      qc.invalidateQueries({ queryKey: ['sales-order', orderId] })
+      qc.invalidateQueries({ queryKey: ['sales-orders'] })
+      setShowBundlePicker(false)
+    } catch (e) {
+      setError(e.response?.data?.error || e.message || 'Error al agregar el paquete')
+      setShowBundlePicker(false)
+    } finally {
+      setAddingBundle(false)
     }
   }
 
@@ -775,10 +830,16 @@ export function PedidoDetallePanel({ orderId, onClose }) {
               {canEditLines && (
                 <div className="flex items-center justify-between -mb-2">
                   <p className="text-xs font-bold text-brand-300 uppercase tracking-wider">Líneas</p>
-                  <button onClick={() => setLineModal({ mode: 'new' })}
-                    className="btn-ghost btn-sm text-brand-300">
-                    + Agregar línea
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => setShowBundlePicker(true)}
+                      className="btn-ghost btn-sm text-brand-300">
+                      📦 Paquete
+                    </button>
+                    <button onClick={() => setLineModal({ mode: 'new' })}
+                      className="btn-ghost btn-sm text-brand-300">
+                      + Agregar línea
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -787,6 +848,7 @@ export function PedidoDetallePanel({ orderId, onClose }) {
                 editable={canEditLines}
                 onEditLine={(line) => setLineModal({ mode: 'edit', line })}
                 onDeleteLine={handleDeleteLine}
+                onRemoveBundle={handleRemoveBundle}
                 deletingLineId={deletingLineId}
               />
 
@@ -874,6 +936,15 @@ export function PedidoDetallePanel({ orderId, onClose }) {
           line={lineModal.mode === 'edit' ? lineModal.line : null}
           onClose={() => setLineModal(null)}
           onSaved={() => {}}
+        />
+      )}
+
+      {showBundlePicker && order && (
+        <BundlePickerModal
+          currency={order.currency}
+          busy={addingBundle}
+          onConfirm={handleAddBundle}
+          onClose={() => setShowBundlePicker(false)}
         />
       )}
 

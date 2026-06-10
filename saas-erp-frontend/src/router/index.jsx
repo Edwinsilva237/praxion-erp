@@ -11,6 +11,7 @@ const Dashboard = lazy(() => import('@/pages/Dashboard'))
 const Socios    = lazy(() => import('@/pages/Socios'))
 const Productos      = lazy(() => import('@/pages/Productos'))
 const PreciosCliente = lazy(() => import('@/pages/PreciosCliente'))
+const Paquetes       = lazy(() => import('@/pages/Paquetes'))
 const PreciosProveedor = lazy(() => import('@/pages/Compras/PreciosProveedor'))
 const MateriasPrimas       = lazy(() => import('@/pages/MateriasPrimas'))
 const ProduccionOrdenes    = lazy(() => import('@/pages/Produccion/ProduccionOrdenes'))
@@ -187,6 +188,7 @@ const router = createBrowserRouter([
       { path: '/clientes',            element: <Socios /> },
       { path: '/productos',           element: <Productos /> },
       { path: '/precios-cliente',     element: <PreciosCliente /> },
+      { path: '/paquetes',            element: <Paquetes /> },
       { path: '/precios-proveedor',   element: <PreciosProveedor /> },
       { path: '/materias-primas',         element: <MateriasPrimas /> },
       { path: '/produccion/ordenes',      element: <ProduccionOrdenes /> },

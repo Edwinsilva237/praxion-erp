@@ -445,9 +445,14 @@ async function getDeliveryNote({ tenantId, noteId }) {
             iv.id              AS invoice_id,
             iv.document_number AS invoice_number,
             iv.status          AS invoice_status,
-            iv.use_cfdi        AS invoice_use_cfdi
+            iv.use_cfdi        AS invoice_use_cfdi,
+            sol.bundle_name,
+            sol.bundle_group_id
      FROM delivery_note_lines dnl
      JOIN products p ON p.id = dnl.product_id
+     -- Paquete (mig 203): el chip de paquete se deriva de la línea de pedido
+     -- origen — solo display, el precio prorrateado ya viene en la dnl.
+     LEFT JOIN sales_order_lines sol ON sol.id = dnl.sales_order_line_id
      -- Solo considerar líneas de facturas NO canceladas. Sin esto, las líneas
      -- de facturas canceladas (intentos fallidos) seguían apuntando a la dnl y
      -- el join producía filas FANTASMA: la misma línea aparecía duplicada (una

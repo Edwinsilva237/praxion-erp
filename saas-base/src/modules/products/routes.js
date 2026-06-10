@@ -7,6 +7,7 @@ const { authGuard }        = require('../../middleware/authGuard')
 const { requireActiveTenant } = require('../../middleware/requireActiveTenant')
 const { checkPermission }  = require('../../middleware/checkPermission')
 const productService       = require('./productService')
+const bundleService        = require('./bundleService')
 const attachmentService    = require('../attachments/attachmentService')
 const storage              = require('../../utils/storage')
 const config               = require('../../config')
@@ -46,6 +47,89 @@ router.get('/', checkPermission('products', 'read'), async (req, res, next) => {
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })
     res.json(result)
+  } catch (err) { next(err) }
+})
+
+// ─── Paquetes (bundles) — mig 203 ───────────────────────────────────────────
+// OJO: estas rutas viven ANTES de '/:id' a propósito — '/bundles' matchearía
+// como un id de producto si se registrara después.
+
+/** GET /api/products/bundles */
+router.get('/bundles', checkPermission('products', 'read'), async (req, res, next) => {
+  try {
+    const { search, isActive, page, limit } = req.query
+    const result = await bundleService.listBundles({
+      tenantId: req.tenant.id,
+      search,
+      isActive: isActive !== undefined ? isActive === 'true' : undefined,
+      page:  parseInt(page  || 1,  10),
+      limit: Math.min(parseInt(limit || 50, 10), 100),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/** GET /api/products/bundles/:bundleId */
+router.get('/bundles/:bundleId', checkPermission('products', 'read'), async (req, res, next) => {
+  try {
+    const bundle = await bundleService.getBundle({
+      tenantId: req.tenant.id, bundleId: req.params.bundleId,
+    })
+    if (!bundle) return res.status(404).json({ error: 'Paquete no encontrado.' })
+    res.json(bundle)
+  } catch (err) { next(err) }
+})
+
+/** GET /api/products/bundles/:bundleId/explode — líneas prorrateadas por 1 paquete */
+router.get('/bundles/:bundleId/explode', checkPermission('products', 'read'), async (req, res, next) => {
+  try {
+    const result = await bundleService.explodeBundle({
+      tenantId: req.tenant.id, bundleId: req.params.bundleId,
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/** POST /api/products/bundles */
+router.post('/bundles', checkPermission('products', 'create'), async (req, res, next) => {
+  try {
+    const { name, description, bundlePrice, currency, items } = req.body
+    const bundle = await bundleService.createBundle({
+      tenantId: req.tenant.id,
+      name, description, bundlePrice, currency, items,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.status(201).json(bundle)
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Ya existe un paquete con ese nombre.' })
+    next(err)
+  }
+})
+
+/** PATCH /api/products/bundles/:bundleId */
+router.patch('/bundles/:bundleId', checkPermission('products', 'update'), async (req, res, next) => {
+  try {
+    const { name, description, bundlePrice, currency, isActive, items } = req.body
+    const bundle = await bundleService.updateBundle({
+      tenantId: req.tenant.id, bundleId: req.params.bundleId,
+      name, description, bundlePrice, currency, isActive, items,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(bundle)
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Ya existe un paquete con ese nombre.' })
+    next(err)
+  }
+})
+
+/** DELETE /api/products/bundles/:bundleId */
+router.delete('/bundles/:bundleId', checkPermission('products', 'update'), async (req, res, next) => {
+  try {
+    const result = await bundleService.deleteBundle({
+      tenantId: req.tenant.id, bundleId: req.params.bundleId,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json({ message: `Paquete ${result.name} eliminado.`, ...result })
   } catch (err) { next(err) }
 })
 
