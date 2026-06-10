@@ -4542,6 +4542,24 @@ async function getShiftSummary({ tenantId, shiftId }) {
   const costPerUnit = goodUnits > 0 ? costGrade1 / goodUnits : 0
   const costPerMeter= totalMeters > 0 ? costGrade1 / totalMeters : 0
 
+  // Costo por ORDEN para "Producción por orden": usa el costo de la MEDIDA de la
+  // orden (shift_product_costs), no el promedio del turno. Antes el objeto de
+  // orden NO traía costPerUnit (solo costPerMeter global) → cuando las piezas no
+  // tenían largo (metros=0) el frontend caía a o.costPerUnit inexistente y
+  // mostraba $0.0000/pza (bug reportado 2026-06-09). Fallback al promedio del
+  // turno si la orden no tiene fila por medida (turno de 1 sola medida).
+  const orderIdsForCost = orderSummary.map(o => o.orderId)
+  const orderProductMap = {}
+  if (orderIdsForCost.length) {
+    const { rows: opr } = await query(
+      `SELECT id, product_id FROM production_orders WHERE id = ANY($1::uuid[])`,
+      [orderIdsForCost]
+    )
+    for (const r of opr) orderProductMap[r.id] = r.product_id
+  }
+  const pcByProduct = {}
+  for (const pc of productCosts) pcByProduct[pc.productId] = pc
+
   // Paquetes fuera de rango
   const outOfRange  = goodPkgs.filter(p => p.weight_ok === false).length
 
@@ -4628,11 +4646,18 @@ async function getShiftSummary({ tenantId, shiftId }) {
       totalPackages:    goodPkgs.length,
       outOfRangePackages: outOfRange,
       totalMeters:      parseFloat(totalMeters.toFixed(2)),
-      orderSummary:     orderSummary.map(o => ({
-        ...o,
-        meters: parseFloat(o.meters.toFixed(2)),
-        costPerMeter: parseFloat(costPerMeter.toFixed(4)),
-      })),
+      orderSummary:     orderSummary.map(o => {
+        // Costo de la MEDIDA de esta orden (o promedio del turno si no hay fila).
+        const pc  = pcByProduct[orderProductMap[o.orderId]]
+        const cpu = (pc && pc.costPerUnit > 0) ? pc.costPerUnit : costPerUnit
+        const cpm = o.meters > 0 ? (cpu * o.units) / o.meters : costPerMeter
+        return {
+          ...o,
+          meters:       parseFloat(o.meters.toFixed(2)),
+          costPerUnit:  parseFloat(cpu.toFixed(4)),
+          costPerMeter: parseFloat(cpm.toFixed(4)),
+        }
+      }),
     },
     materials: {
       totalMpKg:        parseFloat(totalMpKg.toFixed(3)),

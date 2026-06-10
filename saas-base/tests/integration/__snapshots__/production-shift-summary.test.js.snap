@@ -66,6 +66,7 @@ exports[`Golden master: GET /api/production/shifts/:id/summary Devuelve resumen 
     "orderSummary": [
       {
         "costPerMeter": 1.875,
+        "costPerUnit": 1.875,
         "meters": 100,
         "orderId": "<UUID>",
         "orderNumber": "<ORDER_NUMBER>",
