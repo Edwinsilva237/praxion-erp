@@ -1170,9 +1170,15 @@ async function adjustDeliveryNotePrices({ tenantId, noteId, lines, reason, userI
     }
 
     // Cargar TODAS las líneas actuales (para recomputar el total con los cambios).
+    // Incluye los campos de moneda: para una línea en USD, la facturación NO lee
+    // unit_price sino original_unit_price (USD por unidad base) × TC × pack_factor.
+    // Por eso al corregir también hay que actualizar original_unit_price, si no la
+    // factura ignora la corrección y re-aplica el TC al precio viejo (bug 2026-06-09).
     const { rows: dbLines } = await client.query(
       `SELECT id, line_number, product_id, quantity_delivered,
-              unit_price, discount_pct, sales_order_line_id
+              unit_price, discount_pct, sales_order_line_id,
+              original_unit_price, original_currency,
+              COALESCE(pack_factor, 1) AS pack_factor
          FROM delivery_note_lines
         WHERE delivery_note_id = $1`,
       [noteId]
@@ -1200,11 +1206,19 @@ async function adjustDeliveryNotePrices({ tenantId, noteId, lines, reason, userI
       // Reflejar en el mapa para el recálculo del total aunque no haya cambio.
       cur.unit_price   = newPrice
       cur.discount_pct = newDisc
+      // Para líneas en USD: el precio capturado es en USD (la moneda del doc), por
+      // unidad de venta. La facturación lee original_unit_price (USD por unidad
+      // BASE) × TC × pack_factor, así que lo recalculamos = newPrice / pack_factor.
+      // Sin esto, la factura ignora la corrección y re-aplica el TC al precio viejo.
+      const isUsdLine = cur.original_currency === 'USD' && cur.original_unit_price != null
+      const packFactor = parseFloat(cur.pack_factor || 1) || 1
+      const newOriginalUnitPrice = isUsdLine ? +(newPrice / packFactor).toFixed(6) : null
       if (oldPrice !== newPrice || oldDisc !== newDisc) {
         changes.push({
           lineId: cur.id, lineNumber: cur.line_number, productId: cur.product_id,
           oldUnitPrice: oldPrice, newUnitPrice: newPrice,
           oldDiscountPct: oldDisc, newDiscountPct: newDisc,
+          newOriginalUnitPrice,  // null para líneas no-USD
         })
       }
     }
@@ -1212,13 +1226,16 @@ async function adjustDeliveryNotePrices({ tenantId, noteId, lines, reason, userI
       throw createError(400, 'No hay cambios de precio que aplicar.')
     }
 
-    // Persistir los cambios de línea.
+    // Persistir los cambios de línea. Para USD también espeja original_unit_price
+    // (CASE: las líneas no-USD lo dejan intacto).
     for (const ch of changes) {
       await client.query(
         `UPDATE delivery_note_lines
-            SET unit_price = $1, discount_pct = $2
+            SET unit_price = $1, discount_pct = $2,
+                original_unit_price = CASE WHEN $5::numeric IS NOT NULL
+                                          THEN $5::numeric ELSE original_unit_price END
           WHERE id = $3 AND delivery_note_id = $4`,
-        [ch.newUnitPrice, ch.newDiscountPct, ch.lineId, noteId]
+        [ch.newUnitPrice, ch.newDiscountPct, ch.lineId, noteId, ch.newOriginalUnitPrice]
       )
     }
 
@@ -1254,10 +1271,12 @@ async function adjustDeliveryNotePrices({ tenantId, noteId, lines, reason, userI
       if (!solId) continue
       await client.query(
         `UPDATE sales_order_lines
-            SET unit_price = $1, discount_pct = $2
+            SET unit_price = $1, discount_pct = $2,
+                original_unit_price = CASE WHEN $5::numeric IS NOT NULL
+                                          THEN $5::numeric ELSE original_unit_price END
           WHERE id = $3
             AND sales_order_id IN (SELECT id FROM sales_orders WHERE tenant_id = $4)`,
-        [ch.newUnitPrice, ch.newDiscountPct, solId, tenantId]
+        [ch.newUnitPrice, ch.newDiscountPct, solId, tenantId, ch.newOriginalUnitPrice]
       )
     }
 

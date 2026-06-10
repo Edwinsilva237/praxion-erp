@@ -558,6 +558,13 @@ function PriceAdjustModal({ note, onSubmit, onClose, saving }) {
           y se refleja en el pedido y en el saldo por cobrar.
         </p>
 
+        {cur === 'USD' && (
+          <div className="mb-3 rounded-lg border border-status-info/40 bg-status-info/10 px-3 py-2 text-xs text-status-info">
+            💲 Esta remisión es en <strong>dólares (US$)</strong>. Captura los precios <strong>en US$</strong> —
+            la factura aplicará el tipo de cambio del día{note.exchange_rate_value ? ` (hoy ~$${fmtNum(note.exchange_rate_value, 4)})` : ''}.
+          </div>
+        )}
+
         {note.priceAdjustments?.length > 0 && (
           <div className="mb-3">
             <PriceAdjustmentHistory
