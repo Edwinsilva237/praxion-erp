@@ -1,6 +1,7 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { salesApi } from '@/api/sales'
+import { useDebounced } from '@/hooks/useDebounced'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
@@ -134,13 +135,20 @@ export default function VentasPedidos() {
   const { selectedId, setSelectedId, close: closeDoc, href: docHref } = useDeepLinkDoc('/ventas')
   const [createdMsg, setCreatedMsg]     = useState(null)
 
+  // Búsqueda server-side (sobre TODO el dataset, no solo la página actual).
+  const searchDebounced = useDebounced(search, 300)
+
+  // Al cambiar cualquier filtro, volver a la página 1.
+  useEffect(() => { setPage(1) }, [statusFilter, from, to, searchDebounced])
+
   const queryParams = useMemo(() => {
     const p = { page, limit: PAGE_SIZE }
     if (statusFilter) p.status = statusFilter
     if (from)         p.from   = from
     if (to)           p.to     = to
+    if (searchDebounced.trim()) p.search = searchDebounced.trim()
     return p
-  }, [statusFilter, from, to, page])
+  }, [statusFilter, from, to, searchDebounced, page])
 
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['sales-orders', queryParams],
@@ -149,18 +157,7 @@ export default function VentasPedidos() {
     ...LIVE_LIST,
   })
 
-  // Filtro local por search (sobre número, cliente, RFC)
-  const orders = useMemo(() => {
-    const list = data?.data || []
-    if (!search.trim()) return list
-    const q = search.trim().toLowerCase()
-    return list.filter(o =>
-      (o.order_number || '').toLowerCase().includes(q) ||
-      (o.partner_name || '').toLowerCase().includes(q) ||
-      (o.partner_tax_name || '').toLowerCase().includes(q) ||
-      (o.partner_rfc  || '').toLowerCase().includes(q)
-    )
-  }, [data, search])
+  const orders = data?.data || []
 
   // Split: pendientes de entrega arriba (ordenados por fecha programada asc),
   // entregados / cerrados abajo. Asignamos también la urgencia para colorear.

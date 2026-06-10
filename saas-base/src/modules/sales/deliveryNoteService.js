@@ -324,7 +324,7 @@ async function createDeliveryNote({ tenantId, salesOrderId, salesOrderIds, lines
 /**
  * Lista remisiones con filtros.
  */
-async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, invoiceable, page = 1, limit = 50 }) {
+async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, search, invoiceable, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
@@ -334,6 +334,23 @@ async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, 
   if (partnerId) { params.push(partnerId); filters.push(`dn.partner_id = $${params.length}`) }
   if (from)      { params.push(from);      filters.push(`dn.issue_date >= $${params.length}`) }
   if (to)        { params.push(to);        filters.push(`dn.issue_date <= $${params.length}`) }
+
+  // Búsqueda de texto sobre TODO el dataset (no solo la página): folio,
+  // cliente (nombre/razón social/RFC), pedido ligado y receptor. Requiere los
+  // JOINs a business_partners (bp) y sales_orders (so) — presentes en ambos
+  // queries (data y count).
+  if (search && search.trim()) {
+    params.push(`%${search.trim()}%`)
+    const n = params.length
+    filters.push(`(
+      dn.document_number ILIKE $${n}
+      OR bp.name         ILIKE $${n}
+      OR bp.tax_name     ILIKE $${n}
+      OR bp.rfc          ILIKE $${n}
+      OR so.order_number ILIKE $${n}
+      OR dn.receiver_name ILIKE $${n}
+    )`)
+  }
 
   // Filtro "facturable": entregada, sin marca de "no requiere factura"
   // y con al menos una línea sin facturar (permite split de remisiones donde
@@ -404,7 +421,10 @@ async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, 
   )
 
   const { rows: countRows } = await query(
-    `SELECT COUNT(*) FROM delivery_notes dn WHERE dn.tenant_id = $1 ${where}`,
+    `SELECT COUNT(*) FROM delivery_notes dn
+     JOIN business_partners bp ON bp.id = dn.partner_id
+     LEFT JOIN sales_orders so ON so.id = dn.sales_order_id
+     WHERE dn.tenant_id = $1 ${where}`,
     params.slice(0, params.length - 2)
   )
 

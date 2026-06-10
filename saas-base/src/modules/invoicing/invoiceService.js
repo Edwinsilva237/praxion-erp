@@ -191,7 +191,7 @@ async function nextInvoiceNumber(client, tenantId, opts = {}) {
 /**
  * Lista facturas con filtros.
  */
-async function listInvoices({ tenantId, status, partnerId, from, to, page = 1, limit = 50 }) {
+async function listInvoices({ tenantId, status, partnerId, from, to, search, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
@@ -200,6 +200,21 @@ async function listInvoices({ tenantId, status, partnerId, from, to, page = 1, l
   if (partnerId) { params.push(partnerId); filters.push(`inv.partner_id = $${params.length}`) }
   if (from)      { params.push(from);      filters.push(`inv.issue_date >= $${params.length}`) }
   if (to)        { params.push(to);        filters.push(`inv.issue_date <= $${params.length}`) }
+
+  // Búsqueda de texto sobre TODO el dataset: folio, UUID del CFDI, cliente
+  // (nombre/RFC) y remisión ligada. Requiere los JOINs a business_partners (bp)
+  // y delivery_notes (dn), presentes en ambos queries (data y count).
+  if (search && search.trim()) {
+    params.push(`%${search.trim()}%`)
+    const n = params.length
+    filters.push(`(
+      inv.document_number  ILIKE $${n}
+      OR inv.cfdi_uuid::text ILIKE $${n}
+      OR bp.name           ILIKE $${n}
+      OR bp.rfc            ILIKE $${n}
+      OR dn.document_number ILIKE $${n}
+    )`)
+  }
 
   const where = filters.length ? `AND ${filters.join(' AND ')}` : ''
   params.push(limit, offset)
@@ -226,6 +241,8 @@ async function listInvoices({ tenantId, status, partnerId, from, to, page = 1, l
 
   const { rows: countRows } = await query(
     `SELECT COUNT(*) FROM invoices inv
+     JOIN business_partners bp ON bp.id = inv.partner_id
+     LEFT JOIN delivery_notes dn ON dn.id = inv.delivery_note_id
      WHERE inv.tenant_id = $1 AND inv.type = 'issued' ${where}`,
     params.slice(0, params.length - 2)
   )

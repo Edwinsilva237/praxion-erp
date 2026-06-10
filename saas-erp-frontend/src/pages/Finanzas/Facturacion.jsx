@@ -1,6 +1,7 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { invoicingApi } from '@/api/invoicing'
+import { useDebounced } from '@/hooks/useDebounced'
 import { partnersApi } from '@/api/partners'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Badge from '@/components/ui/Badge'
@@ -35,14 +36,21 @@ export default function Facturacion() {
   const { selectedId, setSelectedId, close: closeDoc, href: docHref } = useDeepLinkDoc('/facturacion')
   const [createdMsg, setCreatedMsg]     = useState(null)
 
+  // Búsqueda server-side (sobre TODO el dataset, no solo la página actual).
+  const searchDebounced = useDebounced(search, 300)
+
+  // Al cambiar cualquier filtro, volver a la página 1.
+  useEffect(() => { setPage(1) }, [statusFilter, partner, from, to, searchDebounced])
+
   const queryParams = useMemo(() => {
     const p = { page, limit: PAGE_SIZE }
     if (statusFilter)  p.status    = statusFilter
     if (partner?.id)   p.partnerId = partner.id
     if (from)          p.from      = from
     if (to)            p.to        = to
+    if (searchDebounced.trim()) p.search = searchDebounced.trim()
     return p
-  }, [statusFilter, partner, from, to, page])
+  }, [statusFilter, partner, from, to, searchDebounced, page])
 
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['invoices', queryParams],
@@ -55,18 +63,7 @@ export default function Facturacion() {
     return (res.data || res).map(p => ({ id: p.id, label: p.name, sub: [p.rfc, p.tax_name && p.tax_name !== p.name ? p.tax_name : null].filter(Boolean).join(' · ') }))
   }, [])
 
-  const invoices = useMemo(() => {
-    const list = data?.data || []
-    if (!search.trim()) return list
-    const q = search.trim().toLowerCase()
-    return list.filter(i =>
-      (i.document_number  || '').toLowerCase().includes(q) ||
-      (i.partner_name     || '').toLowerCase().includes(q) ||
-      (i.partner_rfc      || '').toLowerCase().includes(q) ||
-      (i.remission_number || '').toLowerCase().includes(q) ||
-      (i.cfdi_uuid        || '').toLowerCase().includes(q)
-    )
-  }, [data, search])
+  const invoices = data?.data || []
 
   const total = data?.total || 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))

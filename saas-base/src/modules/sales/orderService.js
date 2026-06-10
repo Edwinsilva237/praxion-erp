@@ -38,7 +38,7 @@ async function nextOrderNumber(client, tenantId, opts = {}) {
 /**
  * Lista pedidos con filtros.
  */
-async function listOrders({ tenantId, status, partnerId, from, to, page = 1, limit = 50 }) {
+async function listOrders({ tenantId, status, partnerId, from, to, search, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
@@ -47,6 +47,21 @@ async function listOrders({ tenantId, status, partnerId, from, to, page = 1, lim
   if (partnerId) { params.push(partnerId); filters.push(`so.partner_id = $${params.length}`) }
   if (from)      { params.push(from);      filters.push(`so.created_at >= $${params.length}`) }
   if (to)        { params.push(to);        filters.push(`so.created_at <= $${params.length}`) }
+
+  // Búsqueda de texto sobre TODO el dataset: folio del pedido, cliente
+  // (nombre/razón social/RFC) y OC del cliente. Requiere el JOIN a
+  // business_partners (bp), presente en ambos queries (data y count).
+  if (search && search.trim()) {
+    params.push(`%${search.trim()}%`)
+    const n = params.length
+    filters.push(`(
+      so.order_number ILIKE $${n}
+      OR bp.name      ILIKE $${n}
+      OR bp.tax_name  ILIKE $${n}
+      OR bp.rfc       ILIKE $${n}
+      OR so.po_number ILIKE $${n}
+    )`)
+  }
 
   const where = filters.length ? `AND ${filters.join(' AND ')}` : ''
   params.push(limit, offset)
@@ -94,7 +109,9 @@ async function listOrders({ tenantId, status, partnerId, from, to, page = 1, lim
   )
 
   const { rows: countRows } = await query(
-    `SELECT COUNT(*) FROM sales_orders so WHERE so.tenant_id = $1 ${where}`,
+    `SELECT COUNT(*) FROM sales_orders so
+     JOIN business_partners bp ON bp.id = so.partner_id
+     WHERE so.tenant_id = $1 ${where}`,
     params.slice(0, params.length - 2)
   )
 

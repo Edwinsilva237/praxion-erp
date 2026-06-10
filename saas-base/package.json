@@ -11,9 +11,9 @@
     "seed": "node src/db/seed.js",
     "seed:sandbox": "node src/db/seed-sandbox.js",
     "reset:sandbox": "node src/db/reset-sandbox.js",
-    "test": "jest --runInBand --forceExit",
-    "test:unit": "jest tests/unit --runInBand --forceExit",
-    "test:integration": "jest tests/integration --runInBand --forceExit",
+    "test": "node --max-old-space-size=4096 node_modules/jest/bin/jest.js --runInBand --forceExit",
+    "test:unit": "node --max-old-space-size=4096 node_modules/jest/bin/jest.js tests/unit --runInBand --forceExit",
+    "test:integration": "node --max-old-space-size=4096 node_modules/jest/bin/jest.js tests/integration --runInBand --forceExit",
     "test:clean": "node tests/cleanup.js"
   },
   "jest": {

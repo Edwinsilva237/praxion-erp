@@ -40,10 +40,10 @@ router.use(requireModule('sales'))
  */
 router.get('/orders', checkPermission('sales', 'read'), async (req, res, next) => {
   try {
-    const { status, partnerId, from, to, page, limit } = req.query
+    const { status, partnerId, from, to, search, page, limit } = req.query
     const result = await orderService.listOrders({
       tenantId: req.tenant.id,
-      status, partnerId, from, to,
+      status, partnerId, from, to, search,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })
@@ -259,10 +259,10 @@ router.delete('/orders/:id/attachments/:attachmentId',
  */
 router.get('/delivery-notes', checkPermission('sales', 'read'), async (req, res, next) => {
   try {
-    const { type, status, partnerId, from, to, page, limit, invoiceable } = req.query
+    const { type, status, partnerId, from, to, search, page, limit, invoiceable } = req.query
     const result = await deliveryNoteService.listDeliveryNotes({
       tenantId: req.tenant.id,
-      type: type || 'sale', status, partnerId, from, to,
+      type: type || 'sale', status, partnerId, from, to, search,
       // Query string siempre llega como string; normalizamos a boolean real.
       invoiceable: invoiceable === 'true' || invoiceable === true,
       page:  parseInt(page || 1, 10),

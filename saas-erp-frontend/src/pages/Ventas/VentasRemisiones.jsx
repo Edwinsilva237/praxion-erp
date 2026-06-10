@@ -1,6 +1,7 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { salesApi } from '@/api/sales'
+import { useDebounced } from '@/hooks/useDebounced'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
@@ -97,14 +98,22 @@ export default function VentasRemisiones() {
   const { selectedId, setSelectedId, close: closeDoc, href: docHref } = useDeepLinkDoc('/remisiones')
   const [createdMsg, setCreatedMsg]     = useState(null)
 
+  // Búsqueda server-side (sobre TODO el dataset, no solo la página actual).
+  const searchDebounced = useDebounced(search, 300)
+
+  // Al cambiar cualquier filtro, volver a la página 1 (si no, un filtro con
+  // pocos resultados dejaría la tabla vacía estando en una página alta).
+  useEffect(() => { setPage(1) }, [statusFilter, from, to, searchDebounced])
+
   const queryParams = useMemo(() => {
     const p = { page, limit: PAGE_SIZE, type: 'sale' }
     if (statusFilter === '__invoiceable__') p.invoiceable = true
     else if (statusFilter)                  p.status = statusFilter
-    if (from)         p.from   = from
-    if (to)           p.to     = to
+    if (from)             p.from   = from
+    if (to)               p.to     = to
+    if (searchDebounced.trim()) p.search = searchDebounced.trim()
     return p
-  }, [statusFilter, from, to, page])
+  }, [statusFilter, from, to, searchDebounced, page])
 
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['delivery-notes', queryParams],
@@ -113,18 +122,7 @@ export default function VentasRemisiones() {
     ...LIVE_LIST,
   })
 
-  const notes = useMemo(() => {
-    const list = data?.data || []
-    if (!search.trim()) return list
-    const q = search.trim().toLowerCase()
-    return list.filter(n =>
-      (n.document_number || '').toLowerCase().includes(q) ||
-      (n.partner_name    || '').toLowerCase().includes(q) ||
-      (n.partner_tax_name || '').toLowerCase().includes(q) ||
-      (n.order_number    || '').toLowerCase().includes(q) ||
-      (n.receiver_name   || '').toLowerCase().includes(q)
-    )
-  }, [data, search])
+  const notes = data?.data || []
 
   // Split: pendientes (issued/sent/partial) ordenados por fecha de emisión asc
   // (más viejas primero — sospecha de atraso). Entregadas/canceladas abajo.
