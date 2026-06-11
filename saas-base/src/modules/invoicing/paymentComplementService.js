@@ -232,12 +232,13 @@ async function stampPaymentComplement(client, {
     throw createError(422, `Error al timbrar complemento de pago de ${inv.document_number}: ${err.message}`)
   }
 
-  await client.query(
+  const { rows: pcRows } = await client.query(
     `INSERT INTO payment_complements
        (tenant_id, invoice_id, facturapi_id, cfdi_uuid,
         payment_date, payment_form, amount, currency,
         reference, status, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'stamped',$10)`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'stamped',$10)
+     RETURNING id`,
     [tenantId, invoiceId, complement.id, complement.uuid,
      paymentDate || new Date().toISOString().split('T')[0],
      paymentForm || '03', amount, currency,
@@ -245,12 +246,54 @@ async function stampPaymentComplement(client, {
   )
 
   return {
+    id:           pcRows[0].id,    // id local en payment_complements (para ligar al cobro)
     facturapi_id: complement.id,
     uuid:         complement.uuid,
     invoice_id:   invoiceId,
     invoice_number: inv.document_number,
     amount:       amountNum,
   }
+}
+
+/**
+ * Cancela un complemento de pago (CFDI tipo P) ante el SAT vía Facturapi y lo
+ * marca `cancelled` en BD. Trabaja sobre el `client` de la transacción del
+ * llamador (p.ej. cxcService.reversePayment) para que la cancelación y la
+ * reversa del saldo sean atómicas. Idempotente: si ya está cancelado NO vuelve
+ * a llamar a Facturapi.
+ *
+ * @param {string} motive - Motivo SAT de cancelación. Para complementos el
+ *   correcto es '02' (comprobante emitido con errores SIN relación — los
+ *   complementos de pago no se sustituyen).
+ */
+async function cancelComplement(client, { tenantId, complementId, motive = '02' }) {
+  const { rows } = await client.query(
+    `SELECT id, facturapi_id, cfdi_uuid, status
+       FROM payment_complements
+      WHERE id = $1 AND tenant_id = $2
+      FOR UPDATE`,
+    [complementId, tenantId]
+  )
+  if (!rows.length) throw createError(404, 'Complemento de pago no encontrado.')
+  const pc = rows[0]
+  if (pc.status === 'cancelled') {
+    return { alreadyCancelled: true, cfdi_uuid: pc.cfdi_uuid }
+  }
+
+  const facturapi = await getFacturapiForTenant(tenantId)
+  try {
+    await facturapi.invoices.cancel(pc.facturapi_id, { motive: motive || '02' })
+  } catch (err) {
+    throw createError(422,
+      `Error al cancelar el complemento de pago ${pc.cfdi_uuid} ante el SAT: ${err.message}`)
+  }
+
+  await client.query(
+    `UPDATE payment_complements SET status = 'cancelled' WHERE id = $1 AND tenant_id = $2`,
+    [pc.id, tenantId]
+  )
+
+  return { cancelled: true, cfdi_uuid: pc.cfdi_uuid, facturapi_id: pc.facturapi_id, motive: motive || '02' }
 }
 
 /**
@@ -397,6 +440,6 @@ function createError(status, message) {
 }
 
 module.exports = {
-  createPaymentComplement, stampPaymentComplement,
+  createPaymentComplement, stampPaymentComplement, cancelComplement,
   downloadXML, downloadPDF, sendComplementByEmail,
 }

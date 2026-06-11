@@ -20,6 +20,10 @@ export const financialsApi = {
   stampMissingComplement: (arId, body) =>
     api.post(`${B}/cxc/${arId}/stamp-complement`, body).then(r => r.data),
 
+  // Reversa un cobro aplicado (revierte saldo CXC + cancela complemento si lo hubo)
+  reversePayment: (paymentId, reason) =>
+    api.post(`${B}/payments/${paymentId}/reverse`, { reason }).then(r => r.data),
+
   // Complementos de pago — descargas y envío por correo desde CXC
   downloadComplementPdf: (facturapiId) =>
     api.get(`${B}/payment-complements/${facturapiId}/pdf`, { responseType: 'blob' }),

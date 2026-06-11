@@ -188,6 +188,27 @@ router.post('/payments/:id/receipt-email', checkPermission('financials', 'create
   })
 
 /**
+ * POST /api/financials/payments/:id/reverse
+ * Reversa un cobro aplicado: revierte el saldo de la CXC y cancela el
+ * complemento de pago (CFDI tipo P) ante el SAT si el cobro lo generó.
+ * Body: { reason }
+ */
+router.post('/payments/:id/reverse', checkPermission('financials', 'reverse_payment'),
+  async (req, res, next) => {
+    try {
+      const result = await cxcService.reversePayment({
+        tenantId:  req.tenant.id,
+        paymentId: req.params.id,
+        reason:    req.body?.reason,
+        userId:    req.auth.userId,
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent'),
+      })
+      res.json(result)
+    } catch (err) { next(err) }
+  })
+
+/**
  * POST /api/financials/payment-complements/:id/send-email
  * Envía un complemento de pago timbrado por correo (SMTP) con PDF+XML.
  * Body: { emails?: string[] } — si no llegan se usan contactos del cliente.

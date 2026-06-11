@@ -2,7 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit }                  = require('../../utils/audit')
-const { stampPaymentComplement } = require('../invoicing/paymentComplementService')
+const { stampPaymentComplement, cancelComplement } = require('../invoicing/paymentComplementService')
 
 // Mapeo método de pago interno (modal CXC) → forma de pago SAT (CFDI tipo P)
 const METHOD_TO_SAT_FORM = {
@@ -207,14 +207,16 @@ async function registerPayment({
       if (toApply <= 0) continue
 
       // Insertar pago en ar_payments
-      await client.query(
+      const { rows: payIns } = await client.query(
         `INSERT INTO ar_payments
            (tenant_id, ar_id, amount, payment_method, reference, payment_date, notes, created_by, bank_account_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         RETURNING id`,
         [tenantId, app.arId, toApply, method, reference || null,
          paymentDate || new Date().toISOString().split('T')[0],
          notes || null, userId, bankAccountId]
       )
+      const arPaymentId = payIns[0].id
 
       // Actualizar CXC
       const newPaid   = parseFloat(ar.amount_paid) + toApply
@@ -263,6 +265,11 @@ async function registerPayment({
           exchangeRate: ar.currency === 'USD' ? parseFloat(ar.invoice_exchange_rate || 1) : undefined,
           userId,
         })
+        // Liga determinista cobro ↔ complemento (para una reversa precisa).
+        await client.query(
+          `UPDATE ar_payments SET payment_complement_id = $1 WHERE id = $2`,
+          [comp.id, arPaymentId]
+        )
         complementsIssued.push(comp)
       }
     }
@@ -404,12 +411,15 @@ async function getCXC({ tenantId, arId }) {
     `SELECT arp.id, arp.amount, arp.payment_method, arp.reference,
             arp.payment_date, arp.advance_id, arp.notes, arp.created_at,
             arp.bank_account_id,
+            arp.reversed_at, arp.reversal_reason, arp.payment_complement_id,
             ba.bank_name      AS bank_name,
             ba.alias          AS bank_alias,
             ba.account_number AS bank_account_number,
-            u.full_name AS created_by_name
+            u.full_name  AS created_by_name,
+            ru.full_name AS reversed_by_name
        FROM ar_payments arp
-       LEFT JOIN users u ON u.id = arp.created_by
+       LEFT JOIN users u  ON u.id  = arp.created_by
+       LEFT JOIN users ru ON ru.id = arp.reversed_by
        LEFT JOIN bank_accounts ba ON ba.id = arp.bank_account_id
       WHERE arp.ar_id = $1
       ORDER BY arp.payment_date ASC, arp.created_at ASC`,
@@ -564,7 +574,8 @@ async function stampMissingComplement({
 async function listPayments({ tenantId, partnerId, from, to, method, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
-  const filters = []
+  // Los cobros reversados no son movimientos reales de dinero → fuera del historial.
+  const filters = ['arp.reversed_at IS NULL']
   if (partnerId) { params.push(partnerId); filters.push(`ar.partner_id = $${params.length}`) }
   if (from)      { params.push(from);      filters.push(`arp.payment_date >= $${params.length}`) }
   if (to)        { params.push(to);        filters.push(`arp.payment_date <= $${params.length}`) }
@@ -606,7 +617,118 @@ async function listPayments({ tenantId, partnerId, from, to, method, page = 1, l
   }
 }
 
+/**
+ * Reversa un cobro aplicado (ar_payments). Deshace su efecto en la CXC y, si el
+ * cobro timbró un complemento de pago (CFDI tipo P), lo CANCELA ante el SAT
+ * (motivo '02' — comprobante con errores sin relación).
+ *
+ * El cobro NO se borra: queda marcado (reversed_at/by/reason) para auditoría y
+ * se excluye de saldos e historial. Para corregir un cobro mal aplicado, el
+ * operador lo reversa y vuelve a registrarlo en el documento correcto.
+ *
+ * Atómico: si Facturapi falla al cancelar el complemento, se revierte TODO (el
+ * saldo no se toca y el complemento sigue timbrado).
+ */
+async function reversePayment({ tenantId, paymentId, reason, userId, ipAddress, userAgent }) {
+  if (!reason || !String(reason).trim()) {
+    throw createError(400, 'La razón de la reversa es requerida.')
+  }
+  const reasonTrim = String(reason).trim()
+
+  return withTransaction(async (client) => {
+    // Cargar el cobro + su CXC (lock del cobro para evitar dobles reversas).
+    const { rows: payRows } = await client.query(
+      `SELECT arp.id, arp.ar_id, arp.amount, arp.payment_method, arp.advance_id,
+              arp.reversed_at, arp.payment_complement_id,
+              ar.document_type, ar.document_id, ar.document_number,
+              ar.amount_total, ar.amount_paid
+         FROM ar_payments arp
+         JOIN accounts_receivable ar ON ar.id = arp.ar_id
+        WHERE arp.id = $1 AND arp.tenant_id = $2
+        FOR UPDATE OF arp`,
+      [paymentId, tenantId]
+    )
+    if (!payRows.length) throw createError(404, 'Cobro no encontrado.')
+    const pay = payRows[0]
+    if (pay.reversed_at) throw createError(409, 'Este cobro ya fue reversado.')
+
+    const amount = parseFloat(pay.amount)
+
+    // 1. Resolver el complemento timbrado a cancelar (si lo hay).
+    //    Preferir el link directo; para cobros previos a la mig 205 (sin link),
+    //    match best-effort por (factura, monto) sobre complementos vivos.
+    let complementId = pay.payment_complement_id
+    if (!complementId && pay.document_type === 'invoice') {
+      const { rows: pcRows } = await client.query(
+        `SELECT id FROM payment_complements
+          WHERE tenant_id = $1 AND invoice_id = $2
+            AND status = 'stamped'
+            AND ROUND(amount, 2) = ROUND($3::numeric, 2)
+          ORDER BY created_at DESC
+          LIMIT 1`,
+        [tenantId, pay.document_id, amount]
+      )
+      if (pcRows.length) complementId = pcRows[0].id
+    }
+
+    let complementCancelled = null
+    if (complementId) {
+      const res = await cancelComplement(client, { tenantId, complementId, motive: '02' })
+      if (res?.cancelled || res?.alreadyCancelled) complementCancelled = res.cfdi_uuid
+    }
+
+    // 2. Revertir el saldo de la CXC (amount_pending es columna generada).
+    const newPaid   = +(parseFloat(pay.amount_paid) - amount).toFixed(2)
+    const safePaid  = newPaid < 0 ? 0 : newPaid
+    const total     = parseFloat(pay.amount_total)
+    const newStatus = safePaid <= 0.001 ? 'pending'
+                    : safePaid >= total - 0.001 ? 'paid'
+                    : 'partial'
+    await client.query(
+      `UPDATE accounts_receivable SET amount_paid = $1, status = $2 WHERE id = $3`,
+      [safePaid, newStatus, pay.ar_id]
+    )
+
+    // 3. Si el cobro fue aplicación de anticipo, devolver el saldo al anticipo.
+    if (pay.payment_method === 'advance_application' && pay.advance_id) {
+      await client.query(
+        `UPDATE ar_advances
+            SET amount_applied = GREATEST(amount_applied - $1, 0)
+          WHERE id = $2 AND tenant_id = $3`,
+        [amount, pay.advance_id, tenantId]
+      )
+    }
+
+    // 4. Marcar el cobro como reversado (no se borra).
+    await client.query(
+      `UPDATE ar_payments
+          SET reversed_at = NOW(), reversed_by = $1, reversal_reason = $2
+        WHERE id = $3`,
+      [userId, reasonTrim, paymentId]
+    )
+
+    await audit({
+      tenantId, userId, action: 'ar_payment.reversed',
+      resource: 'ar_payments', resourceId: paymentId,
+      payload: {
+        ar_id: pay.ar_id, document_number: pay.document_number,
+        amount, method: pay.payment_method, reason: reasonTrim,
+        new_status: newStatus, complement_cancelled: complementCancelled,
+      },
+      ipAddress, userAgent,
+    })
+
+    return {
+      reversed: true,
+      paymentId,
+      amount,
+      newStatus,
+      complementCancelled,
+    }
+  })
+}
+
 module.exports = {
   listCXC, getCXC, getCustomerStatement, listPayments,
-  registerPayment, applyAdvance, stampMissingComplement,
+  registerPayment, applyAdvance, stampMissingComplement, reversePayment,
 }

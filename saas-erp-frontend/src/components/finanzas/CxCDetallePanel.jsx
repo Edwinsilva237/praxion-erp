@@ -123,10 +123,14 @@ function DocumentoOrigen({ ar }) {
 }
 
 // ── Pagos aplicados ──────────────────────────────────────────────────────────
-function PagosAplicados({ payments, partnerId }) {
+function PagosAplicados({ payments, partnerId, ar }) {
+  const qc = useQueryClient()
+  const can = useAuthStore(s => s.can)
+  const canReverse = can('financials', 'reverse_payment')
   const [loadingKey, setLoadingKey] = useState(null)
   const [error, setError]           = useState(null)
-  const [sending, setSending]       = useState(null)  // payment object
+  const [sending, setSending]       = useState(null)   // payment object (enviar recibo)
+  const [reversing, setReversing]   = useState(null)   // payment object (reversar)
 
   if (!payments?.length) {
     return (
@@ -170,12 +174,14 @@ function PagosAplicados({ payments, partnerId }) {
               <th>Referencia</th>
               <th>Registró</th>
               <th className="text-right">Importe</th>
-              <th className="text-right">Recibo</th>
+              <th className="text-right">Acciones</th>
             </tr>
           </thead>
           <tbody>
-            {payments.map(p => (
-              <tr key={p.id}>
+            {payments.map(p => {
+              const isReversed = !!p.reversed_at
+              return (
+              <tr key={p.id} className={clsx(isReversed && 'opacity-60')}>
                 <td className="text-ink-secondary">{fmtDateOnly(p.payment_date)}</td>
                 <td>{PAYMENT_METHOD_LABEL[p.payment_method] || p.payment_method}</td>
                 <td className="text-ink-secondary text-[11px]">
@@ -188,21 +194,39 @@ function PagosAplicados({ payments, partnerId }) {
                 </td>
                 <td className="font-mono text-ink-secondary">{p.reference || '—'}</td>
                 <td className="text-ink-secondary">{p.created_by_name || '—'}</td>
-                <td className="text-right font-mono tabular-nums font-semibold text-status-success">
+                <td className={clsx('text-right font-mono tabular-nums font-semibold',
+                  isReversed ? 'text-ink-muted line-through' : 'text-status-success')}>
                   {fmtMXN(p.amount)}
                 </td>
                 <td className="text-right whitespace-nowrap">
-                  <button onClick={() => downloadReceipt(p)} disabled={!!loadingKey}
-                    className="btn-ghost btn-sm" title="Descargar recibo en PDF">
-                    {loadingKey === `pdf-${p.id}` ? <Spinner size="sm" /> : 'PDF'}
-                  </button>
-                  <button onClick={() => setSending(p)} disabled={!!loadingKey}
-                    className="btn-ghost btn-sm text-brand-300" title="Enviar recibo por correo">
-                    Enviar
-                  </button>
+                  {isReversed ? (
+                    <span className="text-[10px] font-bold uppercase tracking-wide bg-status-danger/15 text-status-danger px-1.5 py-0.5 rounded-full"
+                      title={p.reversal_reason
+                        ? `Reversado por ${p.reversed_by_name || '—'}: ${p.reversal_reason}`
+                        : 'Cobro reversado'}>
+                      Reversado
+                    </span>
+                  ) : (
+                    <>
+                      <button onClick={() => downloadReceipt(p)} disabled={!!loadingKey}
+                        className="btn-ghost btn-sm" title="Descargar recibo en PDF">
+                        {loadingKey === `pdf-${p.id}` ? <Spinner size="sm" /> : 'PDF'}
+                      </button>
+                      <button onClick={() => setSending(p)} disabled={!!loadingKey}
+                        className="btn-ghost btn-sm text-brand-300" title="Enviar recibo por correo">
+                        Enviar
+                      </button>
+                      {canReverse && (
+                        <button onClick={() => setReversing(p)} disabled={!!loadingKey}
+                          className="btn-ghost btn-sm text-status-danger" title="Reversar este cobro">
+                          Reversar
+                        </button>
+                      )}
+                    </>
+                  )}
                 </td>
               </tr>
-            ))}
+            )})}
           </tbody>
         </table>
       </div>
@@ -213,6 +237,20 @@ function PagosAplicados({ payments, partnerId }) {
           payment={sending}
           onClose={() => setSending(null)}
           onSent={() => setSending(null)}
+        />
+      )}
+
+      {reversing && (
+        <ReversarPagoModal
+          payment={reversing}
+          ar={ar}
+          onClose={() => setReversing(null)}
+          onReversed={(res) => {
+            setReversing(null)
+            qc.invalidateQueries({ queryKey: ['cxc', ar?.id] })
+            qc.invalidateQueries({ queryKey: ['cxc'] })
+            qc.invalidateQueries({ queryKey: ['financials', 'payments'] })
+          }}
         />
       )}
     </>
@@ -244,7 +282,9 @@ export function CxCDetallePanel({ arId, onClose }) {
              && ar.sourceDoc?.payment_method === 'PPD'
              && ar.sourceDoc?.status === 'stamped'
   const totalPaid = useMemo(
-    () => (ar?.payments || []).reduce((s, p) => s + parseFloat(p.amount || 0), 0),
+    () => (ar?.payments || [])
+      .filter(p => !p.reversed_at)   // los cobros reversados no cuentan al saldo cobrado
+      .reduce((s, p) => s + parseFloat(p.amount || 0), 0),
     [ar?.payments]
   )
   const totalComplemented = parseFloat(ar?.complement_total || 0)
@@ -377,7 +417,7 @@ export function CxCDetallePanel({ arId, onClose }) {
                 <p className="text-xs font-bold text-brand-300 uppercase tracking-wider mb-2">
                   Pagos aplicados ({ar.payments?.length || 0})
                 </p>
-                <PagosAplicados payments={ar.payments} partnerId={ar.partner_id} />
+                <PagosAplicados payments={ar.payments} partnerId={ar.partner_id} ar={ar} />
               </div>
 
               {/* Complementos de pago timbrados (solo factura PPD) */}
@@ -905,6 +945,79 @@ function StampComplementModal({ ar, missing, onClose, onStamped }) {
           </button>
           <button type="submit" className="btn-primary flex-1" disabled={mutation.isPending}>
             {mutation.isPending ? <Spinner size="sm" /> : 'Timbrar complemento'}
+          </button>
+        </div>
+      </form>
+    </div>,
+    document.body
+  )
+}
+
+// ── Modal: reversar un cobro aplicado ────────────────────────────────────────
+function ReversarPagoModal({ payment, ar, onClose, onReversed }) {
+  const [reason, setReason] = useState('')
+  const [error, setError]   = useState(null)
+
+  // Complemento timbrado que se cancelaría (best-effort: factura PPD, mismo monto).
+  const matchedComplement = (ar?.paymentComplements || []).find(
+    pc => pc.status === 'stamped'
+       && Math.abs(parseFloat(pc.amount || 0) - parseFloat(payment.amount || 0)) < 0.01
+  )
+
+  const mutation = useMutation({
+    mutationFn: () => {
+      if (!reason.trim()) throw new Error('La razón de la reversa es obligatoria.')
+      return financialsApi.reversePayment(payment.id, reason.trim())
+    },
+    onSuccess: onReversed,
+    onError: (e) => setError(e.response?.data?.error || e.message),
+  })
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4">
+      <form
+        onSubmit={(e) => { e.preventDefault(); setError(null); mutation.mutate() }}
+        className="card w-full max-w-md p-6 flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-ink-primary">Reversar cobro</h2>
+          <button type="button" onClick={onClose} className="text-ink-muted hover:text-ink-secondary">×</button>
+        </div>
+
+        <div className="bg-status-danger/10 border border-status-danger/40 rounded-lg px-3 py-2 text-xs text-status-danger flex flex-col gap-1">
+          <p>
+            Se revertirá el cobro de <strong>{fmtMXN(payment.amount, ar?.currency)}</strong>
+            {' '}del {fmtDateOnly(payment.payment_date)} sobre <strong>{ar?.document_number}</strong>.
+            El saldo de este documento volverá a quedar pendiente.
+          </p>
+          {matchedComplement && (
+            <p className="border-t border-status-danger/30 pt-1 mt-1">
+              ⚠️ Este cobro timbró un <strong>complemento de pago (CFDI tipo P)</strong>. Al reversar
+              se <strong>CANCELARÁ ante el SAT</strong> (motivo 02) el complemento{' '}
+              <span className="font-mono break-all">{matchedComplement.cfdi_uuid}</span>.
+            </p>
+          )}
+          <p className="text-[11px] text-ink-muted">
+            Después podrás volver a registrar el cobro en el documento correcto.
+          </p>
+        </div>
+
+        <div>
+          <label className="label">Razón de la reversa <span className="text-status-danger">*</span></label>
+          <textarea className="input" rows={3} value={reason}
+            onChange={e => setReason(e.target.value)}
+            placeholder="Ej. Cobro aplicado a la factura equivocada" />
+        </div>
+
+        {error && <p className="field-error">{error}</p>}
+
+        <div className="flex gap-2">
+          <button type="button" onClick={onClose} className="btn-secondary flex-1"
+            disabled={mutation.isPending}>
+            Cancelar
+          </button>
+          <button type="submit" className="btn-danger flex-1"
+            disabled={mutation.isPending || !reason.trim()}>
+            {mutation.isPending ? <Spinner size="sm" /> : 'Reversar cobro'}
           </button>
         </div>
       </form>
