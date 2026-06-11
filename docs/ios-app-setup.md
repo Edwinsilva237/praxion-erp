@@ -440,3 +440,58 @@ se ejecuta **en la Mac** (Xcode). Apple Developer de paga **ACTIVO**, Team `Z69Z
   (se cuela el `GoogleService-Info.plist`).
 - Dejar nota aquí (qué build se subió, fecha, cualquier rechazo de Apple + cómo se resolvió) para
   que Windows lo lea en el siguiente `git pull`.
+
+---
+
+## ✅ HECHO 2026-06-10 — Build 2 subido a App Store Connect (v1.0) desde la Mac
+
+Ejecutado en la Mac. **El binario llegó a App Store Connect / TestFlight (build 2, procesando).**
+
+### Pre-vuelo
+- `git pull --ff-only origin main`: de `f61a0fd` → **`f38de0c`** (**46 commits**, no ~15: paquetes de
+  productos, búsqueda server-side en pedidos/remisiones/facturas, facturación parcial, devoluciones a
+  proveedor, pagos, etc.). FF limpio (HEAD era ancestro). `npm install` → "up to date".
+- `rm -rf ios/App/build` (no existía) + `npm run sync:ios` → vite build OK, `cap sync` con **8 plugins**,
+  `pod install` OK (FirebaseMessaging incluido). `GoogleService-Info.plist` presente en el target.
+
+### Tres ajustes pre-Archive (en `ios/`, gitignored)
+1. `App.entitlements`: `aps-environment` `development` → **`production`** ✅
+2. `Info.plist`: `ITSAppUsesNonExemptEncryption` = **NO** — **ya estaba** `<false/>` de un sync previo
+   (no se tocó).
+3. Build number: **1 → 2** vía `xcrun agvtool new-version -all 2`. Version (marketing) sigue `1.0`.
+
+### Archive — por CLI (no GUI)
+- `xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release -destination
+  'generic/platform=iOS' -archivePath ~/Desktop/Praxion-1.0-b2.xcarchive -allowProvisioningUpdates archive`
+  → **ARCHIVE SUCCEEDED**, `-validate-for-store` OK. Firma automática (team `Z69ZT5UW4M`, bundle
+  `com.praxionops.erp`, v1.0 build 2). El `.xcarchive` se abrió en el Organizer para distribuir.
+- Distribute lo hizo el **usuario** desde el Organizer: **Distribute App → App Store Connect → Upload**.
+
+### ⚠️ Incidencia en la subida — "App Record Creation Error" (nombre en uso)
+- Al primer Upload, Xcode intentó **auto-crear el registro de la app** en App Store Connect y rebotó:
+  *"App Record Creation failed … The App Name you entered is already being used."* Los nombres de la
+  App Store son **únicos a nivel mundial** y "Praxion" estaba tomado. **No era problema del binario.**
+- **Causa:** el registro de la app **aún no existía** en App Store Connect (el §2 de
+  `GUIA-APP-STORE.md` estaba pendiente), así que Xcode trató de crearlo solo.
+- **Solución (la próxima vez, hacerlo ANTES de subir):** crear el registro manual en
+  **appstoreconnect.apple.com → My Apps → ➕ New App** (Platform iOS, Bundle `com.praxionops.erp`,
+  SKU `praxion-erp-ios`, idioma Spanish (Mexico), Name **`Praxion ERP`** — **aceptado** sin colisión).
+  El nombre de tienda solo debe ser único; el nombre bajo el ícono sigue siendo "Praxion"
+  (`CFBundleDisplayName`). Tras crear el registro, **se reintentó el Upload → "subió con éxito"**.
+
+### ⛔ Paso 5 (capturas 6.9") — BLOQUEADO en este Mac, queda PENDIENTE
+- **No se pudieron tomar del Simulador.** Los pods de **Google MLKit** (escáner de barras) fijan
+  `EXCLUDED_ARCHS[sdk=iphonesimulator*] = arm64` (MLKit no trae slice **arm64 de simulador**, solo
+  x86_64) → la app se compila **x86_64** para sim → **no instala** en el runtime **iOS 26.5** del
+  simulador, porque este Mac es **Apple Silicon (arm64)** y los simuladores iOS 26 corren **solo arm64**
+  (Apple quitó Rosetta de los sims). Error: *"Failed to find matching arch"*.
+- Además el **"iPhone 16 Pro Max" no existe** en Xcode 26.5 (solo iPhone 17). El iPhone 17 Pro Max
+  *sí* da 1320×2868, pero igual choca con el bloqueo de arch de MLKit.
+- **Cómo sacarlas:** en un **iPhone Pro Max FÍSICO** (vía TestFlight cuando procese, o Xcode Run en
+  device) → `⌘`+side/volume. La guía §6 ya contempla: pasar las crudas y reencuadrar a 1320×2868.
+
+### Pendientes (lado usuario, navegador) para enviar a revisión
+- Completar la ficha de `Praxion ERP` (textos en `GUIA-APP-STORE.md`): descripción, keywords,
+  subtítulo, App Privacy, Age Rating 4+, App Review Information con **cuenta demo** + notas de
+  funciones nativas (§4.4), **≥1 captura 6.9"**, y seleccionar el **build 2** → Submit for Review.
+- **Próxima subida:** subir el **build (3, 4…)** — ASC rechaza builds con número repetido.
