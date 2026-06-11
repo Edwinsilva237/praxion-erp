@@ -20,10 +20,10 @@ router.use(requireModule('quotations'))
 // ── List ────────────────────────────────────────────────────────────────────
 router.get('/', checkPermission('sales', 'read'), async (req, res, next) => {
   try {
-    const { status, partnerId, from, to, page, limit } = req.query
+    const { status, partnerId, from, to, sortBy, sortDir, page, limit } = req.query
     const result = await quotationService.listQuotations({
       tenantId: req.tenant.id,
-      status, partnerId, from, to,
+      status, partnerId, from, to, sortBy, sortDir,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })

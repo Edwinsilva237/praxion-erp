@@ -7,6 +7,20 @@ const pushEvents = require('../push/pushEvents')
 const { getRateForDate } = require('../exchange-rates/exchangeRateService')
 const documentSeriesService = require('../document-series/documentSeriesService')
 const bundleService = require('../products/bundleService')
+const { buildOrderBy } = require('../../utils/sortOrder')
+
+// Columnas permitidas para ordenar la lista de pedidos (allowlist anti-inyección).
+// `relevancia` (default) = pedidos activos PRIMERO, luego más nuevos: así un
+// pedido viejo pero aún por entregar no se hunde a páginas posteriores.
+const ORDER_SORT_COLUMNS = {
+  relevancia: `(CASE WHEN so.status IN ('confirmed','in_delivery','partially_delivered') THEN 0 ELSE 1 END), so.created_at`,
+  folio:    'so.order_number',
+  fecha:    'so.created_at',
+  cliente:  'bp.name',
+  programada: 'so.scheduled_date',
+  estatus:  'so.status',
+  total:    'so.total_mxn',
+}
 
 /**
  * Genera el siguiente número de pedido de venta.
@@ -38,10 +52,13 @@ async function nextOrderNumber(client, tenantId, opts = {}) {
 /**
  * Lista pedidos con filtros.
  */
-async function listOrders({ tenantId, status, partnerId, from, to, search, page = 1, limit = 50 }) {
+async function listOrders({ tenantId, status, partnerId, from, to, search, sortBy, sortDir, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
+  const orderBy = buildOrderBy({
+    sortBy, sortDir, columns: ORDER_SORT_COLUMNS, defaultKey: 'relevancia', tiebreaker: 'so.id DESC',
+  })
 
   if (status)    { params.push(status);    filters.push(`so.status = $${params.length}`) }
   if (partnerId) { params.push(partnerId); filters.push(`so.partner_id = $${params.length}`) }
@@ -103,7 +120,7 @@ async function listOrders({ tenantId, status, partnerId, from, to, search, page 
      LEFT JOIN sales_order_lines sol ON sol.sales_order_id = so.id
      WHERE so.tenant_id = $1 ${where}
      GROUP BY so.id, bp.id, u.id, udrv.id
-     ORDER BY so.created_at DESC
+     ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   )

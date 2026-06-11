@@ -2,6 +2,8 @@ import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { salesApi } from '@/api/sales'
 import { useDebounced } from '@/hooks/useDebounced'
+import { useTableSort } from '@/hooks/useTableSort'
+import { SortableHeader } from '@/components/ui/SortableHeader'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
@@ -125,9 +127,10 @@ export default function VentasPedidos() {
   const [from, setFrom]                 = useState('')
   const [to, setTo]                     = useState('')
   const [page, setPage]                 = useState(1)
-  // Los entregados/cerrados arrancan COLAPSADOS para no abrumar — el foco son los
-  // pendientes. El usuario los muestra con el toggle de la sección.
-  const [showDone, setShowDone]         = useState(false)
+  // Mostramos entregados/cerrados por defecto: el backend ya ordena activos
+  // primero, así que la página no esconde renglones (causaba que se vieran
+  // "saltados" entre páginas). El usuario puede colapsarlos con el toggle.
+  const [showDone, setShowDone]         = useState(true)
 
   // Modal y panel. selectedId + deep-link: si la URL es /ventas/:id (nueva
   // pestaña) el panel abre solo; el clic normal lo abre in-app.
@@ -138,17 +141,19 @@ export default function VentasPedidos() {
   // Búsqueda server-side (sobre TODO el dataset, no solo la página actual).
   const searchDebounced = useDebounced(search, 300)
 
-  // Al cambiar cualquier filtro, volver a la página 1.
-  useEffect(() => { setPage(1) }, [statusFilter, from, to, searchDebounced])
+  const { sortBy, sortDir, onSort } = useTableSort('relevancia', 'desc')
+
+  // Al cambiar cualquier filtro u orden, volver a la página 1.
+  useEffect(() => { setPage(1) }, [statusFilter, from, to, searchDebounced, sortBy, sortDir])
 
   const queryParams = useMemo(() => {
-    const p = { page, limit: PAGE_SIZE }
+    const p = { page, limit: PAGE_SIZE, sortBy, sortDir }
     if (statusFilter) p.status = statusFilter
     if (from)         p.from   = from
     if (to)           p.to     = to
     if (searchDebounced.trim()) p.search = searchDebounced.trim()
     return p
-  }, [statusFilter, from, to, searchDebounced, page])
+  }, [statusFilter, from, to, searchDebounced, page, sortBy, sortDir])
 
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['sales-orders', queryParams],
@@ -168,12 +173,8 @@ export default function VentasPedidos() {
       if (PENDING_STATUSES.includes(o.status)) pending.push(o)
       else done.push(o)
     }
-    const FAR_FUTURE = 8640000000000000 // sin fecha → al final del grupo pendiente
-    pending.sort((a, b) => {
-      const da = a.scheduled_date ? new Date(a.scheduled_date).getTime() : FAR_FUTURE
-      const db = b.scheduled_date ? new Date(b.scheduled_date).getTime() : FAR_FUTURE
-      return da - db
-    })
+    // El orden lo decide el backend (sortBy/sortDir, default fecha de creación
+    // desc). Aquí solo separamos pendientes/listos preservando ese orden.
     return { pendingOrders: pending, doneOrders: done }
   }, [orders])
 
@@ -346,12 +347,12 @@ export default function VentasPedidos() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Número</th>
-                  <th>Cliente</th>
-                  <th>F. creación</th>
-                  <th>F. programada</th>
-                  <th>Estado</th>
-                  <th className="text-right">Total</th>
+                  <SortableHeader sortKey="folio"      sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Número</SortableHeader>
+                  <SortableHeader sortKey="cliente"    sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Cliente</SortableHeader>
+                  <SortableHeader sortKey="fecha"      sortBy={sortBy} sortDir={sortDir} onSort={onSort}>F. creación</SortableHeader>
+                  <SortableHeader sortKey="programada" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>F. programada</SortableHeader>
+                  <SortableHeader sortKey="estatus"    sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Estado</SortableHeader>
+                  <SortableHeader sortKey="total"      sortBy={sortBy} sortDir={sortDir} onSort={onSort} align="right">Total</SortableHeader>
                 </tr>
               </thead>
               <tbody>

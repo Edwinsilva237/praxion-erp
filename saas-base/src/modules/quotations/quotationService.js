@@ -10,6 +10,15 @@ const logger = require('../../config/logger')
 const documentSeriesService = require('../document-series/documentSeriesService')
 const { nextOrderNumber } = require('../sales/orderService')
 const bundleService = require('../products/bundleService')
+const { buildOrderBy } = require('../../utils/sortOrder')
+
+const QUOT_SORT_COLUMNS = {
+  folio:   'q.quotation_number',
+  fecha:   'q.created_at',
+  cliente: 'bp.name',
+  estatus: 'q.status',
+  total:   'q.total_mxn',
+}
 
 /**
  * Servicio de cotizaciones.
@@ -71,8 +80,9 @@ async function recalcQuotationTotals(client, quotationId) {
 }
 
 // ── List ────────────────────────────────────────────────────────────────────
-async function listQuotations({ tenantId, status, partnerId, from, to, page = 1, limit = 25 }) {
+async function listQuotations({ tenantId, status, partnerId, from, to, sortBy, sortDir, page = 1, limit = 25 }) {
   const off = (Math.max(1, page) - 1) * limit
+  const orderBy = buildOrderBy({ sortBy, sortDir, columns: QUOT_SORT_COLUMNS, defaultKey: 'fecha', tiebreaker: 'q.id DESC' })
   const params = [tenantId]
   let where = `q.tenant_id = $1`
   if (status)    { params.push(status);    where += ` AND q.status = $${params.length}` }
@@ -91,7 +101,7 @@ async function listQuotations({ tenantId, status, partnerId, from, to, page = 1,
       JOIN business_partners bp ON bp.id = q.partner_id
       LEFT JOIN sales_orders so ON so.id = q.converted_order_id
      WHERE ${where}
-     ORDER BY q.created_at DESC
+     ORDER BY ${orderBy}
      LIMIT ${limit} OFFSET ${off}
   `
   const countSql = `SELECT COUNT(*)::int AS total FROM quotations q WHERE ${where}`

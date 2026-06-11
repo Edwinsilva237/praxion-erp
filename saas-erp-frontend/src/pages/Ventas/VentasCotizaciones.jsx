@@ -1,6 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { quotationsApi } from '@/api/quotations'
+import { useTableSort } from '@/hooks/useTableSort'
+import { SortableHeader } from '@/components/ui/SortableHeader'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
@@ -58,13 +60,16 @@ export default function VentasCotizaciones() {
   const [selectedId, setSelectedId] = useState(null)
   const [createdMsg, setCreatedMsg] = useState(null)
 
+  const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')
+  useEffect(() => { setPage(1) }, [statusFilter, from, to, sortBy, sortDir])
+
   const queryParams = useMemo(() => {
-    const p = { page, limit: PAGE_SIZE }
+    const p = { page, limit: PAGE_SIZE, sortBy, sortDir }
     if (statusFilter) p.status = statusFilter
     if (from)         p.from   = from
     if (to)           p.to     = to
     return p
-  }, [statusFilter, from, to, page])
+  }, [statusFilter, from, to, page, sortBy, sortDir])
 
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['quotations', queryParams],
@@ -212,12 +217,12 @@ export default function VentasCotizaciones() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Número</th>
-                  <th>Cliente</th>
-                  <th>F. emisión</th>
+                  <SortableHeader sortKey="folio"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Número</SortableHeader>
+                  <SortableHeader sortKey="cliente" sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Cliente</SortableHeader>
+                  <SortableHeader sortKey="fecha"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>F. emisión</SortableHeader>
                   <th>Vigencia</th>
-                  <th>Estado</th>
-                  <th className="text-right">Total</th>
+                  <SortableHeader sortKey="estatus" sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Estado</SortableHeader>
+                  <SortableHeader sortKey="total"   sortBy={sortBy} sortDir={sortDir} onSort={onSort} align="right">Total</SortableHeader>
                 </tr>
               </thead>
               <tbody>

@@ -7,6 +7,18 @@ const storage = require('../../utils/storage')
 const { getRateForDate } = require('../exchange-rates/exchangeRateService')
 const { recalcOrderStatusFromDeliveries } = require('./orderService')
 const { recordMovement } = require('../inventory/inventoryService')
+const { buildOrderBy } = require('../../utils/sortOrder')
+
+// Orden de la lista de remisiones (allowlist anti-inyección). `relevancia`
+// (default) = remisiones por entregar PRIMERO, luego más nuevas.
+const DN_SORT_COLUMNS = {
+  relevancia: `(CASE WHEN dn.status IN ('issued','sent_by_email','partially_delivered') THEN 0 ELSE 1 END), dn.created_at`,
+  folio:   'dn.document_number',
+  fecha:   'dn.created_at',
+  cliente: 'bp.name',
+  total:   'dn.total_mxn',
+  estatus: 'dn.status',
+}
 const { enqueueEmail } = require('../../queues/emailQueue')
 const documentSeriesService = require('../document-series/documentSeriesService')
 const { remisionEmail } = require('../email/templates/sales')
@@ -324,10 +336,15 @@ async function createDeliveryNote({ tenantId, salesOrderId, salesOrderIds, lines
 /**
  * Lista remisiones con filtros.
  */
-async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, search, invoiceable, page = 1, limit = 50 }) {
+async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, search, invoiceable, sortBy, sortDir, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
+  // El modo "facturable" conserva su orden especial (agrupado por cliente para
+  // elegir qué facturar); la lista normal usa el orden elegido por el usuario.
+  const orderBy = invoiceable
+    ? 'bp.name ASC, dn.delivered_at DESC NULLS LAST, dn.issue_date DESC, dn.document_number DESC'
+    : buildOrderBy({ sortBy, sortDir, columns: DN_SORT_COLUMNS, defaultKey: 'relevancia', tiebreaker: 'dn.id DESC' })
 
   if (type)      { params.push(type);      filters.push(`dn.type = $${params.length}`) }
   if (status)    { params.push(status);    filters.push(`dn.status = $${params.length}`) }
@@ -414,8 +431,7 @@ async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, 
         LIMIT 1
      ) inv ON true
      WHERE dn.tenant_id = $1 ${where}
-     ORDER BY ${invoiceable ? 'bp.name ASC, dn.delivered_at DESC NULLS LAST,' : ''}
-              dn.issue_date DESC, dn.document_number DESC
+     ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   )
