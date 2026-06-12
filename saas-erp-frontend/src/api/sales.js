@@ -68,6 +68,9 @@ export const salesApi = {
     api.get(`${B}/delivery-notes/${id}/attachments/${attId}/download`, { responseType: 'blob' }).then(r => r.data),
   deleteEvidence: (id, attId) =>
     api.delete(`${B}/delivery-notes/${id}/attachments/${attId}`).then(r => r.data),
+  // Quita la FOTO de evidencia del receptor (capturada al registrar la entrega).
+  deletePhoto: (id) =>
+    api.delete(`${B}/delivery-notes/${id}/photo`).then(r => r.data),
 
   // OC del cliente adjunta al pedido (documento que el cliente exige para recibir).
   listOrderPo: (orderId) =>

@@ -1395,9 +1395,34 @@ function createError(status, message) {
   return err
 }
 
+/**
+ * Quita la foto de evidencia (receptor) de una remisión, cuando se capturó en el
+ * documento equivocado. Borra el archivo de R2 y limpia `receiver_photo_path`.
+ * No toca status, inventario ni CXC. Idempotente (removed:false si no había foto).
+ */
+async function removeDeliveryPhoto({ tenantId, noteId, userId, ipAddress, userAgent }) {
+  const { rows } = await query(
+    `SELECT id, receiver_photo_path FROM delivery_notes WHERE id = $1 AND tenant_id = $2`,
+    [noteId, tenantId]
+  )
+  if (!rows.length) throw createError(404, 'Remisión no encontrada.')
+  if (!rows[0].receiver_photo_path) return { removed: false }
+
+  await storage.remove(rows[0].receiver_photo_path)
+  await query(
+    `UPDATE delivery_notes SET receiver_photo_path = NULL WHERE id = $1 AND tenant_id = $2`,
+    [noteId, tenantId]
+  )
+  await audit({
+    tenantId, userId, action: 'delivery_note.photo_removed',
+    resource: 'delivery_notes', resourceId: noteId, payload: {}, ipAddress, userAgent,
+  })
+  return { removed: true }
+}
+
 module.exports = {
   createDeliveryNote, listDeliveryNotes, getDeliveryNote,
   recordDelivery, markAsSentByEmail, setNoInvoice, cancelDelivery, deleteDelivery,
-  adjustDeliveryNotePrices,
+  adjustDeliveryNotePrices, removeDeliveryPhoto,
   generateCXC,  // exportado para test del guard de facturación anticipada
 }

@@ -1005,9 +1005,28 @@ export function RemisionDetallePanel({ noteId, onClose }) {
               {/* Foto de evidencia */}
               {note.receiver_photo_path && (
                 <div>
-                  <p className="text-xs font-bold text-brand-300 uppercase tracking-wider mb-2">
-                    Evidencia de entrega
-                  </p>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs font-bold text-brand-300 uppercase tracking-wider">
+                      Evidencia de entrega
+                    </p>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!window.confirm('¿Quitar la foto de evidencia de esta remisión? Esta acción no se puede deshacer.')) return
+                        setError(null); setMsg(null)
+                        try {
+                          await salesApi.deletePhoto(note.id)
+                          qc.invalidateQueries({ queryKey: ['delivery-note', noteId] })
+                          qc.invalidateQueries({ queryKey: ['delivery-notes'] })
+                          setMsg('Foto de evidencia eliminada.')
+                        } catch (e) {
+                          setError(e.response?.data?.error || e.message || 'No se pudo quitar la foto.')
+                        }
+                      }}
+                      className="btn-ghost btn-sm text-status-danger">
+                      Quitar foto
+                    </button>
+                  </div>
                   <DeliveryPhoto noteId={note.id} />
                 </div>
               )}

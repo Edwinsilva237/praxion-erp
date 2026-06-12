@@ -585,6 +585,23 @@ router.get('/delivery-notes/:id/photo', checkPermission('sales', 'read'), async 
   } catch (err) { next(err) }
 })
 
+/**
+ * DELETE /api/sales/delivery-notes/:id/photo
+ * Quita la foto de evidencia (receptor) capturada en el documento equivocado.
+ */
+router.delete('/delivery-notes/:id/photo',
+  checkAnyPermission([['sales', 'deliver'], ['sales', 'update']]),
+  async (req, res, next) => {
+    try {
+      const result = await deliveryNoteService.removeDeliveryPhoto({
+        tenantId: req.tenant.id, noteId: req.params.id,
+        userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+      })
+      res.json(result)
+    } catch (err) { next(err) }
+  }
+)
+
 module.exports = router
 
 // ─── Edición de pedidos en draft ─────────────────────────────────────────────
