@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useTableSort } from '@/hooks/useTableSort'
+import { SortableHeader } from '@/components/ui/SortableHeader'
 import { createPortal } from 'react-dom'
 import { purchasesApi } from '@/api/purchases'
 import { processConfigApi } from '@/api/processConfig'
@@ -236,11 +238,14 @@ export default function Gastos() {
     queryFn:  () => processConfigApi.listExpenseCategories({ isActive: true }),
   })
 
+  const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')
+
   const { data: resp, isLoading } = useQuery({
-    queryKey: ['expenses', filterCat, filterCfdi],
+    queryKey: ['expenses', filterCat, filterCfdi, sortBy, sortDir],
     queryFn:  () => purchasesApi.listExpenses({
       categoryId: filterCat || undefined,
       hasCfdi: filterCfdi || undefined,
+      sortBy, sortDir,
     }),
   })
   const expenses = resp?.data || []
@@ -323,10 +328,10 @@ export default function Gastos() {
             <table className="table min-w-[640px]">
               <thead>
                 <tr>
-                  <th>Proveedor</th>
+                  <SortableHeader sortKey="proveedor" sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Proveedor</SortableHeader>
                   <th>Categoría</th>
-                  <th>Fecha</th>
-                  <th className="text-right">Total</th>
+                  <SortableHeader sortKey="fecha"     sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Fecha</SortableHeader>
+                  <SortableHeader sortKey="total"     sortBy={sortBy} sortDir={sortDir} onSort={onSort} align="right">Total</SortableHeader>
                   <th>Factura</th>
                   <th>Pago</th>
                 </tr>

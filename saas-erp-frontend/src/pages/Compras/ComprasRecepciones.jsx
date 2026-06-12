@@ -13,6 +13,8 @@ import Can from '@/components/auth/Can'
 import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob, printBlob } from '@/utils/downloadBlob'
 import { useDocumentScanner } from '@/hooks/useDocumentScanner'
+import { useTableSort } from '@/hooks/useTableSort'
+import { SortableHeader } from '@/components/ui/SortableHeader'
 import { LIVE_LIST } from '@/config/livePolling'
 import clsx from 'clsx'
 import api from '@/api/axios'
@@ -1171,8 +1173,11 @@ export default function ComprasRecepciones() {
     queryFn: inventoryApi.getWarehouses,
   })
 
+  const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')
+  useEffect(() => { setPage(1) }, [sortBy, sortDir])
+
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['purchase-receipts', search, statusFilter, warehouseFilter, evidenceFilter, invoiceFilter, fromDate, toDate, page],
+    queryKey: ['purchase-receipts', search, statusFilter, warehouseFilter, evidenceFilter, invoiceFilter, fromDate, toDate, sortBy, sortDir, page],
     queryFn: () => purchasesApi.listReceipts({
       search:        search || undefined,
       status:        statusFilter || undefined,
@@ -1181,6 +1186,7 @@ export default function ComprasRecepciones() {
       invoiceStatus: invoiceFilter || undefined,
       from:          fromDate || undefined,
       to:            toDate || undefined,
+      sortBy, sortDir,
       page, limit: 20,
     }),
     keepPreviousData: true,
@@ -1304,16 +1310,16 @@ export default function ComprasRecepciones() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Número</th>
+                  <SortableHeader sortKey="folio"     sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Número</SortableHeader>
                   <th>OC</th>
                   <th>Folio proveedor</th>
-                  <th>Proveedor</th>
+                  <SortableHeader sortKey="proveedor" sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Proveedor</SortableHeader>
                   <th>Almacén</th>
                   <th>Recibió</th>
                   <th>Confirmó</th>
-                  <th>Estado</th>
+                  <SortableHeader sortKey="estatus"   sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Estado</SortableHeader>
                   <th>Factura</th>
-                  <th>Fecha</th>
+                  <SortableHeader sortKey="fecha"     sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Fecha</SortableHeader>
                   <th className="text-right">Total</th>
                   <th></th>
                 </tr>

@@ -1,6 +1,8 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useTableSort } from '@/hooks/useTableSort'
+import { SortableHeader } from '@/components/ui/SortableHeader'
 import { purchasesApi } from '@/api/purchases'
 import { partnersApi } from '@/api/partners'
 import { PagoProveedorModal } from '@/components/finanzas/PagoProveedorModal'
@@ -1191,15 +1193,18 @@ export default function ComprasFacturas() {
   const [from, setFrom]                 = useState('')
   const [to, setTo]                     = useState('')
 
+  const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')
+  useEffect(() => { setPage(1) }, [sortBy, sortDir])
+
   const queryParams = useMemo(() => {
-    const p = { page, limit: 25 }
+    const p = { page, limit: 25, sortBy, sortDir }
     if (typeFilter)   p.type       = typeFilter
     if (statusFilter) p.status     = statusFilter
     if (partner?.id)  p.supplierId = partner.id
     if (from)         p.from       = from
     if (to)           p.to         = to
     return p
-  }, [typeFilter, statusFilter, partner, from, to, page])
+  }, [typeFilter, statusFilter, partner, from, to, page, sortBy, sortDir])
 
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['purchase-invoices', queryParams],
@@ -1408,13 +1413,13 @@ export default function ComprasFacturas() {
               <thead>
                 <tr>
                   <th>Tipo</th>
-                  <th>Documento</th>
-                  <th>Proveedor</th>
-                  <th>Fecha</th>
+                  <SortableHeader sortKey="folio"     sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Documento</SortableHeader>
+                  <SortableHeader sortKey="proveedor" sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Proveedor</SortableHeader>
+                  <SortableHeader sortKey="emision"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Fecha</SortableHeader>
                   <th>Vencimiento</th>
                   <th>Ciclo</th>
                   <th title="Evidencias adjuntas">📎</th>
-                  <th className="text-right">Total</th>
+                  <SortableHeader sortKey="total"     sortBy={sortBy} sortDir={sortDir} onSort={onSort} align="right">Total</SortableHeader>
                   <th className="text-right">Pendiente</th>
                 </tr>
               </thead>

@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { purchasesApi } from '@/api/purchases'
 import { partnersApi } from '@/api/partners'
+import { useTableSort } from '@/hooks/useTableSort'
+import { SortableHeader } from '@/components/ui/SortableHeader'
 import Spinner from '@/components/ui/Spinner'
 import Badge from '@/components/ui/Badge'
 import Can from '@/components/auth/Can'
@@ -32,9 +34,11 @@ export default function Devoluciones() {
   const [detailId, setDetailId] = useState(null)
   const [msg, setMsg] = useState(null)
 
+  const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')
+
   const { data: returns = [], isLoading } = useQuery({
-    queryKey: ['supplier-returns'],
-    queryFn: () => purchasesApi.listReturns(),
+    queryKey: ['supplier-returns', sortBy, sortDir],
+    queryFn: () => purchasesApi.listReturns({ sortBy, sortDir }),
   })
 
   const flash = (m) => { setMsg(m); setTimeout(() => setMsg(null), 2500) }
@@ -74,8 +78,12 @@ export default function Devoluciones() {
           <table className="table">
             <thead>
               <tr>
-                <th>Folio</th><th>Proveedor</th><th>Fecha</th><th>Motivo</th>
-                <th className="text-right">Total</th><th>Estado</th><th>Crédito</th>
+                <SortableHeader sortKey="folio" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Folio</SortableHeader>
+                <SortableHeader sortKey="proveedor" sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Proveedor</SortableHeader>
+                <SortableHeader sortKey="fecha" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Fecha</SortableHeader>
+                <th>Motivo</th>
+                <SortableHeader sortKey="total" sortBy={sortBy} sortDir={sortDir} onSort={onSort} align="right">Total</SortableHeader>
+                <SortableHeader sortKey="estatus" sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Estado</SortableHeader><th>Crédito</th>
               </tr>
             </thead>
             <tbody>
