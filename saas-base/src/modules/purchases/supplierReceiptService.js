@@ -466,6 +466,34 @@ async function getEvidenceFile({ tenantId, receiptId }) {
   }
 }
 
+/**
+ * Quita la evidencia de una recepción (cuando se subió en el documento
+ * equivocado). Borra el archivo de R2 y limpia los 3 campos. Idempotente: si no
+ * había evidencia, devuelve removed:false sin error.
+ */
+async function deleteEvidence({ tenantId, receiptId, userId, ipAddress, userAgent }) {
+  const { rows } = await query(
+    `SELECT id, evidence_path FROM supplier_receipts WHERE id = $1 AND tenant_id = $2`,
+    [receiptId, tenantId]
+  )
+  if (rows.length === 0) throw createError(404, 'Recepción no encontrada.')
+  if (!rows[0].evidence_path) return { removed: false }
+
+  await storage.remove(rows[0].evidence_path)
+  await query(
+    `UPDATE supplier_receipts
+        SET evidence_path = NULL, evidence_filename = NULL, evidence_mimetype = NULL
+      WHERE id = $1 AND tenant_id = $2`,
+    [receiptId, tenantId]
+  )
+  await audit({
+    tenantId, userId, action: 'supplier_receipt.evidence_removed',
+    resource: 'supplier_receipts', resourceId: receiptId, payload: {},
+    ipAddress, userAgent,
+  })
+  return { removed: true }
+}
+
 async function confirmReceipt({ tenantId, receiptId, userId, ipAddress, userAgent }) {
   const result = await withTransaction(async (client) => {
     const { rows: receiptRows } = await client.query(
@@ -632,5 +660,5 @@ function createError(status, message) {
 module.exports = {
   listReceipts, getReceipt,
   createReceipt, updateReceipt, confirmReceipt, cancelReceipt,
-  uploadEvidence, getEvidenceFile,
+  uploadEvidence, getEvidenceFile, deleteEvidence,
 }

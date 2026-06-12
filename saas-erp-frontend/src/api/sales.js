@@ -66,6 +66,8 @@ export const salesApi = {
     }).then(r => r.data),
   downloadEvidence: (id, attId) =>
     api.get(`${B}/delivery-notes/${id}/attachments/${attId}/download`, { responseType: 'blob' }).then(r => r.data),
+  deleteEvidence: (id, attId) =>
+    api.delete(`${B}/delivery-notes/${id}/attachments/${attId}`).then(r => r.data),
 
   // OC del cliente adjunta al pedido (documento que el cliente exige para recibir).
   listOrderPo: (orderId) =>

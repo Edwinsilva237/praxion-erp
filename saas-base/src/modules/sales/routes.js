@@ -482,6 +482,26 @@ router.get('/delivery-notes/:id/attachments/:attachmentId/download',
 )
 
 /**
+ * DELETE /api/sales/delivery-notes/:id/attachments/:attachmentId
+ * Quita una evidencia mal adjuntada a la remisión (p.ej. puesta en el documento
+ * equivocado). Solo borra el adjunto; no toca status, inventario ni CXC.
+ */
+router.delete('/delivery-notes/:id/attachments/:attachmentId',
+  checkAnyPermission([['sales', 'deliver'], ['sales', 'update']]),
+  async (req, res, next) => {
+    try {
+      const note = await loadNoteForEvidence(req, res)
+      if (!note) return
+      const deleted = await attachmentService.deleteAttachment({
+        tenantId: req.tenant.id, attachmentId: req.params.attachmentId,
+      })
+      if (!deleted) return res.status(404).json({ error: 'Archivo no encontrado.' })
+      res.json({ message: 'Evidencia eliminada.', id: deleted.id })
+    } catch (err) { next(err) }
+  }
+)
+
+/**
  * POST /api/sales/delivery-notes/:id/adjust-prices
  * Corrige precios (unit_price/discount_pct) de una remisión NO facturada, con
  * observación obligatoria. Recalcula total + CXC y espeja el precio al pedido.

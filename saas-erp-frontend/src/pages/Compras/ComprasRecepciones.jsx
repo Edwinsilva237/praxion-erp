@@ -142,6 +142,21 @@ function EvidenciaSection({ receiptId, existingFilename, existingMimetype, onUpl
     }
   }
 
+  // Quita la evidencia (cuando se subió en el documento equivocado).
+  async function removeEvidence() {
+    if (!receiptId) return
+    if (!window.confirm('¿Quitar la evidencia de esta recepción? Esta acción no se puede deshacer.')) return
+    setUploading(true); setError(null)
+    try {
+      await purchasesApi.deleteEvidence(receiptId)
+      onUploaded?.()
+    } catch (e) {
+      setError(e.response?.data?.error || 'No se pudo quitar la evidencia.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
   async function openCamera() {
     setCameraOpen(true)
     try {
@@ -195,6 +210,12 @@ function EvidenciaSection({ receiptId, existingFilename, existingMimetype, onUpl
               className="btn-ghost btn-sm text-xs text-brand-300">
               Ver
             </button>
+            {receiptId && (
+              <button type="button" onClick={removeEvidence} disabled={uploading}
+                className="btn-ghost btn-sm text-xs text-status-danger">
+                Quitar
+              </button>
+            )}
           </div>
         </div>
       )}

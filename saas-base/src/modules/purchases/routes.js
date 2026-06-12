@@ -658,6 +658,23 @@ router.get('/receipts/:id/evidence',
   }
 )
 
+/**
+ * DELETE /api/purchases/receipts/:id/evidence
+ * Quita la evidencia de la recepción (cuando se subió en el documento equivocado).
+ */
+router.delete('/receipts/:id/evidence',
+  checkAnyPermission([['purchases', 'create'], ['purchases', 'upload_evidence']]),
+  async (req, res, next) => {
+    try {
+      const result = await supplierReceiptService.deleteEvidence({
+        tenantId: req.tenant.id, receiptId: req.params.id,
+        userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+      })
+      res.json(result)
+    } catch (err) { next(err) }
+  }
+)
+
 // ─── Facturas y CXP de proveedor ─────────────────────────────────────────────
 
 /**

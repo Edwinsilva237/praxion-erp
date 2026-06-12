@@ -45,6 +45,8 @@ export const purchasesApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     }).then(r => r.data),
   getEvidenceUrl: (id) => `${B}/receipts/${id}/evidence`,
+  deleteEvidence: (id) =>
+    api.delete(`${B}/receipts/${id}/evidence`).then(r => r.data),
 
   // ── Facturas proveedor ─────────────────────────────────────────────────
   listInvoices:  (p) => api.get(`${B}/invoices`, { params: p }).then(r => r.data),

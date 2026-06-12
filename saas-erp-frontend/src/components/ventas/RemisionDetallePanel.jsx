@@ -172,6 +172,19 @@ function RemisionEvidencia({ note }) {
     }
   }
 
+  async function remove(att) {
+    if (!window.confirm(`¿Quitar la evidencia "${att.filename}"? Esta acción no se puede deshacer.`)) return
+    setBusy(true); setErr(null)
+    try {
+      await salesApi.deleteEvidence(note.id, att.id)
+      qc.invalidateQueries({ queryKey: ['delivery-evidence', note.id] })
+    } catch (e) {
+      setErr(e.response?.data?.error || e.message || 'No se pudo quitar la evidencia.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="border-t border-line-subtle pt-4 mt-3 flex flex-col gap-2">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
@@ -189,7 +202,7 @@ function RemisionEvidencia({ note }) {
       </div>
       <p className="text-[11px] text-ink-muted">
         Adjunta el acuse cuando el cliente recibe la mercancía (p. ej. tras entregar con la factura impresa).
-        Solo se agrega evidencia; no se edita ni se borra la previa.
+        Si adjuntaste un archivo al documento equivocado, puedes quitarlo con “Quitar”.
       </p>
       {err && <p className="text-xs text-status-danger">{err}</p>}
       {busy && <p className="text-xs text-ink-muted">Subiendo…</p>}
@@ -199,7 +212,10 @@ function RemisionEvidencia({ note }) {
           {files.map((f) => (
             <li key={f.id} className="flex items-center justify-between gap-2 text-xs bg-surface-elevated/40 rounded-lg px-3 py-1.5">
               <span className="truncate text-ink-secondary">{f.filename}</span>
-              <button type="button" onClick={() => view(f)} className="text-brand-300 hover:underline shrink-0">Ver</button>
+              <div className="flex items-center gap-3 shrink-0">
+                <button type="button" onClick={() => view(f)} className="text-brand-300 hover:underline">Ver</button>
+                <button type="button" onClick={() => remove(f)} disabled={busy} className="text-status-danger hover:underline">Quitar</button>
+              </div>
             </li>
           ))}
         </ul>
