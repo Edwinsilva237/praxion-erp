@@ -2,6 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit }                  = require('../../utils/audit')
+const { buildOrderBy }           = require('../../utils/sortOrder')
 const { getRateForDate }         = require('../exchange-rates/exchangeRateService')
 const invoiceSeriesService       = require('../invoice-series/invoiceSeriesService')
 const { normalizeLineTax, lineCausesTax } = require('./lineTax')
@@ -188,13 +189,22 @@ async function nextInvoiceNumber(client, tenantId, opts = {}) {
   }
 }
 
+const INVOICE_SORT_COLUMNS = {
+  folio:   'inv.document_number',
+  fecha:   'inv.created_at',
+  cliente: 'bp.name',
+  estatus: 'inv.status',
+  total:   'inv.total_mxn',
+}
+
 /**
  * Lista facturas con filtros.
  */
-async function listInvoices({ tenantId, status, partnerId, from, to, search, page = 1, limit = 50 }) {
+async function listInvoices({ tenantId, status, partnerId, from, to, search, sortBy, sortDir, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
+  const orderBy = buildOrderBy({ sortBy, sortDir, columns: INVOICE_SORT_COLUMNS, defaultKey: 'fecha', tiebreaker: 'inv.id DESC' })
 
   if (status)    { params.push(status);    filters.push(`inv.status = $${params.length}`) }
   if (partnerId) { params.push(partnerId); filters.push(`inv.partner_id = $${params.length}`) }
@@ -234,7 +244,7 @@ async function listInvoices({ tenantId, status, partnerId, from, to, search, pag
      LEFT JOIN delivery_notes dn ON dn.id = inv.delivery_note_id
      LEFT JOIN users u ON u.id = inv.created_by
      WHERE inv.tenant_id = $1 AND inv.type = 'issued' ${where}
-     ORDER BY inv.issue_date DESC, inv.document_number DESC
+     ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   )

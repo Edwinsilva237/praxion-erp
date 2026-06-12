@@ -26,10 +26,10 @@ router.use(requireActiveTenant)
  */
 router.get('/cxc', checkPermission('financials', 'read'), async (req, res, next) => {
   try {
-    const { status, partnerId, from, to, page, limit } = req.query
+    const { status, partnerId, from, to, sortBy, sortDir, page, limit } = req.query
     const result = await cxcService.listCXC({
       tenantId: req.tenant.id,
-      status, partnerId, from, to,
+      status, partnerId, from, to, sortBy, sortDir,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })
@@ -42,10 +42,10 @@ router.get('/cxc', checkPermission('financials', 'read'), async (req, res, next)
  */
 router.get('/payments', checkPermission('financials', 'read'), async (req, res, next) => {
   try {
-    const { partnerId, from, to, method, page, limit } = req.query
+    const { partnerId, from, to, method, sortBy, sortDir, page, limit } = req.query
     const result = await cxcService.listPayments({
       tenantId: req.tenant.id,
-      partnerId, from, to, method,
+      partnerId, from, to, method, sortBy, sortDir,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })

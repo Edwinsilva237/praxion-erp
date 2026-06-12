@@ -1,7 +1,9 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { financialsApi } from '@/api/financials'
 import { partnersApi } from '@/api/partners'
+import { useTableSort } from '@/hooks/useTableSort'
+import { SortableHeader } from '@/components/ui/SortableHeader'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
 import { fmtMXN, fmtDateOnly } from '@/utils/fmt'
@@ -32,14 +34,17 @@ export default function PagosRecibidos() {
   const [method, setMethod]   = useState('')
   const [page, setPage]       = useState(1)
 
+  const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')
+  useEffect(() => { setPage(1) }, [partner, from, to, method, sortBy, sortDir])
+
   const queryParams = useMemo(() => {
-    const p = { page, limit: PAGE_SIZE }
+    const p = { page, limit: PAGE_SIZE, sortBy, sortDir }
     if (partner?.id) p.partnerId = partner.id
     if (from)        p.from      = from
     if (to)          p.to        = to
     if (method)      p.method    = method
     return p
-  }, [partner, from, to, method, page])
+  }, [partner, from, to, method, page, sortBy, sortDir])
 
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['pagos-recibidos', queryParams],
@@ -182,12 +187,12 @@ export default function PagosRecibidos() {
               <table className="table">
                 <thead>
                   <tr>
-                    <th>Fecha</th>
-                    <th>Cliente</th>
-                    <th>Documento</th>
-                    <th>Método</th>
+                    <SortableHeader sortKey="fecha"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Fecha</SortableHeader>
+                    <SortableHeader sortKey="cliente" sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Cliente</SortableHeader>
+                    <SortableHeader sortKey="folio"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Documento</SortableHeader>
+                    <SortableHeader sortKey="metodo"  sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Método</SortableHeader>
                     <th>Banco</th>
-                    <th className="text-right">Monto</th>
+                    <SortableHeader sortKey="monto"   sortBy={sortBy} sortDir={sortDir} onSort={onSort} align="right">Monto</SortableHeader>
                     <th></th>
                   </tr>
                 </thead>

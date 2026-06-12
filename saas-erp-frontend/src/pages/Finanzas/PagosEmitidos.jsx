@@ -1,5 +1,7 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useTableSort } from '@/hooks/useTableSort'
+import { SortableHeader } from '@/components/ui/SortableHeader'
 import { cxpApi } from '@/api/cxp'
 import { partnersApi } from '@/api/partners'
 import Autocomplete from '@/components/ui/Autocomplete'
@@ -31,14 +33,17 @@ export default function PagosEmitidos() {
   const [method, setMethod]   = useState('')
   const [page, setPage]       = useState(1)
 
+  const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')
+  useEffect(() => { setPage(1) }, [partner, from, to, method, sortBy, sortDir])
+
   const queryParams = useMemo(() => {
-    const p = { page, limit: PAGE_SIZE }
+    const p = { page, limit: PAGE_SIZE, sortBy, sortDir }
     if (partner?.id) p.partnerId = partner.id
     if (from)        p.from      = from
     if (to)          p.to        = to
     if (method)      p.method    = method
     return p
-  }, [partner, from, to, method, page])
+  }, [partner, from, to, method, page, sortBy, sortDir])
 
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['pagos-emitidos', queryParams],
@@ -169,12 +174,12 @@ export default function PagosEmitidos() {
               <table className="table">
                 <thead>
                   <tr>
-                    <th>Fecha</th>
-                    <th>Proveedor</th>
+                    <SortableHeader sortKey="fecha"     sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Fecha</SortableHeader>
+                    <SortableHeader sortKey="proveedor" sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Proveedor</SortableHeader>
                     <th>Documentos</th>
-                    <th>Método</th>
+                    <SortableHeader sortKey="metodo"    sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Método</SortableHeader>
                     <th>Banco</th>
-                    <th className="text-right">Monto</th>
+                    <SortableHeader sortKey="monto"     sortBy={sortBy} sortDir={sortDir} onSort={onSort} align="right">Monto</SortableHeader>
                   </tr>
                 </thead>
                 <tbody>

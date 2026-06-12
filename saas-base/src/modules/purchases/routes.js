@@ -90,9 +90,9 @@ router.get('/returnable-lots', checkPermission('purchases', 'read'), async (req,
 // Devoluciones
 router.get('/returns', checkPermission('purchases', 'read'), async (req, res, next) => {
   try {
-    const { status, partnerId, from, to, page, limit } = req.query
+    const { status, partnerId, from, to, sortBy, sortDir, page, limit } = req.query
     res.json(await supplierReturnService.listReturns({
-      tenantId: req.tenant.id, status, partnerId, from, to,
+      tenantId: req.tenant.id, status, partnerId, from, to, sortBy, sortDir,
       page: page ? parseInt(page, 10) : 1, limit: limit ? parseInt(limit, 10) : 50,
     }))
   } catch (err) { retErr(res, next)(err) }
@@ -217,10 +217,10 @@ router.delete('/supplier-prices/:id',
  */
 router.get('/orders', checkPermission('purchases', 'read'), async (req, res, next) => {
   try {
-    const { status, order_type, partnerId, search, from, to, page, limit } = req.query
+    const { status, order_type, partnerId, search, from, to, sortBy, sortDir, page, limit } = req.query
     const result = await purchaseOrderService.listOrders({
       tenantId: req.tenant.id,
-      status, orderType: order_type, partnerId, search, from, to,
+      status, orderType: order_type, partnerId, search, from, to, sortBy, sortDir,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })
@@ -423,10 +423,10 @@ router.post('/parse-document',
  */
 router.get('/receipts', checkPermission('purchases', 'read'), async (req, res, next) => {
   try {
-    const { status, partnerId, purchaseOrderId, from, to, invoiceStatus, page, limit } = req.query
+    const { status, partnerId, purchaseOrderId, from, to, invoiceStatus, search, sortBy, sortDir, page, limit } = req.query
     const result = await supplierReceiptService.listReceipts({
       tenantId: req.tenant.id,
-      status, partnerId, purchaseOrderId, from, to, invoiceStatus,
+      status, partnerId, purchaseOrderId, from, to, invoiceStatus, search, sortBy, sortDir,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })
@@ -668,10 +668,10 @@ router.get('/receipts/:id/evidence',
  */
 router.get('/expenses', checkPermission('expenses', 'read'), async (req, res, next) => {
   try {
-    const { categoryId, status, hasCfdi, from, to, search, page, limit } = req.query
+    const { categoryId, status, hasCfdi, from, to, search, sortBy, sortDir, page, limit } = req.query
     const result = await supplierInvoiceService.listExpenses({
       tenantId: req.tenant.id,
-      categoryId, status, hasCfdi, from, to, search,
+      categoryId, status, hasCfdi, from, to, search, sortBy, sortDir,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })
@@ -733,10 +733,10 @@ router.post('/expenses', checkPermission('expenses', 'create'), async (req, res,
  */
 router.get('/invoices', checkPermission('purchases', 'read'), async (req, res, next) => {
   try {
-    const { type, status, supplierId, from, to, page, limit } = req.query
+    const { type, status, supplierId, from, to, sortBy, sortDir, page, limit } = req.query
     const result = await supplierInvoiceService.listInvoices({
       tenantId: req.tenant.id,
-      type, status, supplierId, from, to,
+      type, status, supplierId, from, to, sortBy, sortDir,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })
@@ -876,10 +876,10 @@ router.get('/suppliers/:id/statement', checkPermission('purchases', 'read'), asy
  */
 router.get('/cxp', checkPermission('purchases', 'read'), async (req, res, next) => {
   try {
-    const { status, partnerId, from, to, page, limit } = req.query
+    const { status, partnerId, from, to, sortBy, sortDir, page, limit } = req.query
     const result = await cxpService.listCXP({
       tenantId: req.tenant.id,
-      status, partnerId, from, to,
+      status, partnerId, from, to, sortBy, sortDir,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })
@@ -892,10 +892,10 @@ router.get('/cxp', checkPermission('purchases', 'read'), async (req, res, next) 
  */
 router.get('/payments', checkPermission('purchases', 'read'), async (req, res, next) => {
   try {
-    const { partnerId, from, to, method, page, limit } = req.query
+    const { partnerId, from, to, method, sortBy, sortDir, page, limit } = req.query
     const result = await cxpService.listPayments({
       tenantId: req.tenant.id,
-      partnerId, from, to, method,
+      partnerId, from, to, method, sortBy, sortDir,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })

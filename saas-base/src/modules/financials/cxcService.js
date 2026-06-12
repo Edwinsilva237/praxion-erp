@@ -3,6 +3,27 @@
 const { query, withTransaction } = require('../../db')
 const { audit }                  = require('../../utils/audit')
 const { stampPaymentComplement, cancelComplement } = require('../invoicing/paymentComplementService')
+const { buildOrderBy } = require('../../utils/sortOrder')
+
+// Orden de la lista CXC (default: vencimiento más próximo arriba = cobranza).
+const CXC_SORT_COLUMNS = {
+  vencimiento: 'ar.due_date',
+  fecha:    'ar.issue_date',
+  folio:    'ar.document_number',
+  cliente:  'bp.name',
+  estatus:  'ar.status',
+  total:    'ar.amount_total',
+  pendiente:'ar.amount_pending',
+}
+
+// Orden del historial de cobros (default: pago más reciente arriba).
+const AR_PAYMENT_SORT_COLUMNS = {
+  fecha:   'arp.payment_date',
+  cliente: 'bp.name',
+  folio:   'ar.document_number',
+  metodo:  'arp.payment_method',
+  monto:   'arp.amount',
+}
 
 // Mapeo método de pago interno (modal CXC) → forma de pago SAT (CFDI tipo P)
 const METHOD_TO_SAT_FORM = {
@@ -80,10 +101,13 @@ async function getCustomerStatement({ tenantId, partnerId, from, to }) {
  *   - 'partial'        → suma de complementos < amount_paid
  *   - 'complete'       → suma de complementos cubre amount_paid (con tolerancia 0.01)
  */
-async function listCXC({ tenantId, status, partnerId, from, to, page = 1, limit = 50 }) {
+async function listCXC({ tenantId, status, partnerId, from, to, sortBy, sortDir, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
+  const orderBy = buildOrderBy({
+    sortBy, sortDir, columns: CXC_SORT_COLUMNS, defaultKey: 'vencimiento', defaultDir: 'asc', tiebreaker: 'ar.id DESC',
+  })
 
   if (status) {
     params.push(status); filters.push(`ar.status = $${params.length}`)
@@ -128,7 +152,7 @@ async function listCXC({ tenantId, status, partnerId, from, to, page = 1, limit 
         GROUP BY invoice_id
      ) pc ON pc.invoice_id = inv.id
      WHERE ar.tenant_id = $1 ${where}
-     ORDER BY ar.due_date ASC, ar.issue_date ASC
+     ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   )
@@ -571,11 +595,15 @@ async function stampMissingComplement({
  * Historial de PAGOS RECIBIDOS (cobros): lista cronológica de ar_payments, no de
  * cuentas por cobrar. Cada fila es un cobro real con su documento, socio y método.
  */
-async function listPayments({ tenantId, partnerId, from, to, method, page = 1, limit = 50 }) {
+async function listPayments({ tenantId, partnerId, from, to, method, sortBy, sortDir, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   // Los cobros reversados no son movimientos reales de dinero → fuera del historial.
   const filters = ['arp.reversed_at IS NULL']
+  const orderBy = buildOrderBy({
+    sortBy, sortDir, columns: AR_PAYMENT_SORT_COLUMNS, defaultKey: 'fecha',
+    tiebreaker: 'arp.created_at DESC, arp.id DESC',
+  })
   if (partnerId) { params.push(partnerId); filters.push(`ar.partner_id = $${params.length}`) }
   if (from)      { params.push(from);      filters.push(`arp.payment_date >= $${params.length}`) }
   if (to)        { params.push(to);        filters.push(`arp.payment_date <= $${params.length}`) }
@@ -596,7 +624,7 @@ async function listPayments({ tenantId, partnerId, from, to, method, page = 1, l
        LEFT JOIN bank_accounts ba  ON ba.id = arp.bank_account_id
        LEFT JOIN users u           ON u.id  = arp.created_by
       WHERE arp.tenant_id = $1 ${where}
-      ORDER BY arp.payment_date DESC, arp.created_at DESC
+      ORDER BY ${orderBy}
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   )

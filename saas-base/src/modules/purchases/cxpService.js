@@ -1,16 +1,39 @@
 'use strict'
 
 const { query } = require('../../db')
+const { buildOrderBy } = require('../../utils/sortOrder')
+
+// Orden de la lista CXP (default: vencimiento más próximo arriba = pagos).
+const CXP_SORT_COLUMNS = {
+  vencimiento: 'ap.due_date',
+  fecha:    'ap.issue_date',
+  folio:    'ap.document_number',
+  proveedor:'bp.name',
+  estatus:  'ap.status',
+  total:    'ap.amount_total',
+  pendiente:'ap.amount_pending',
+}
+
+// Orden del historial de pagos a proveedor (default: pago más reciente arriba).
+const SP_PAYMENT_SORT_COLUMNS = {
+  fecha:    'sp.payment_date',
+  proveedor:'bp.name',
+  metodo:   'sp.method',
+  monto:    'sp.amount_mxn',
+}
 
 /**
  * Listado de Cuentas por Pagar (CXP) — espejo de cxcService.listCXC pero del
  * lado del proveedor. Devuelve filas centradas en accounts_payable con datos
  * del proveedor y del documento origen (supplier_invoices).
  */
-async function listCXP({ tenantId, status, partnerId, from, to, page = 1, limit = 50 }) {
+async function listCXP({ tenantId, status, partnerId, from, to, sortBy, sortDir, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
+  const orderBy = buildOrderBy({
+    sortBy, sortDir, columns: CXP_SORT_COLUMNS, defaultKey: 'vencimiento', defaultDir: 'asc', tiebreaker: 'ap.id DESC',
+  })
 
   if (status) {
     params.push(status); filters.push(`ap.status = $${params.length}`)
@@ -50,7 +73,7 @@ async function listCXP({ tenantId, status, partnerId, from, to, page = 1, limit 
      JOIN business_partners bp     ON bp.id = ap.partner_id
      LEFT JOIN supplier_invoices si ON si.id = ap.document_id
      WHERE ap.tenant_id = $1 ${where}
-     ORDER BY ap.due_date ASC, ap.issue_date ASC
+     ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   )
@@ -158,10 +181,14 @@ async function getCXP({ tenantId, apId }) {
  * Historial de PAGOS EMITIDOS (a proveedor): lista cronológica de supplier_payments,
  * un registro por pago, con los documentos a los que se aplicó (agregados).
  */
-async function listPayments({ tenantId, partnerId, from, to, method, page = 1, limit = 50 }) {
+async function listPayments({ tenantId, partnerId, from, to, method, sortBy, sortDir, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
+  const orderBy = buildOrderBy({
+    sortBy, sortDir, columns: SP_PAYMENT_SORT_COLUMNS, defaultKey: 'fecha',
+    tiebreaker: 'sp.created_at DESC, sp.id DESC',
+  })
   if (partnerId) { params.push(partnerId); filters.push(`sp.partner_id = $${params.length}`) }
   if (from)      { params.push(from);      filters.push(`sp.payment_date >= $${params.length}`) }
   if (to)        { params.push(to);        filters.push(`sp.payment_date <= $${params.length}`) }
@@ -185,7 +212,7 @@ async function listPayments({ tenantId, partnerId, from, to, method, page = 1, l
        LEFT JOIN bank_accounts ba     ON ba.id = sp.bank_account_id
        LEFT JOIN users u              ON u.id  = sp.created_by
       WHERE sp.tenant_id = $1 ${where}
-      ORDER BY sp.payment_date DESC, sp.created_at DESC
+      ORDER BY ${orderBy}
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   )

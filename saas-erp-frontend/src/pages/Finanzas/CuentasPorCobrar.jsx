@@ -1,5 +1,7 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useTableSort } from '@/hooks/useTableSort'
+import { SortableHeader } from '@/components/ui/SortableHeader'
 import { financialsApi } from '@/api/financials'
 import { partnersApi } from '@/api/partners'
 import Autocomplete from '@/components/ui/Autocomplete'
@@ -51,14 +53,17 @@ export default function CuentasPorCobrar() {
   const [selectedArId, setSelectedArId]   = useState(null)
   const [paidMsg, setPaidMsg]             = useState(null)
 
+  const { sortBy, sortDir, onSort } = useTableSort('vencimiento', 'asc')
+  useEffect(() => { setPage(1) }, [statusFilter, partner, from, to, sortBy, sortDir])
+
   const queryParams = useMemo(() => {
-    const p = { page, limit: PAGE_SIZE }
+    const p = { page, limit: PAGE_SIZE, sortBy, sortDir }
     if (statusFilter)  p.status    = statusFilter
     if (partner?.id)   p.partnerId = partner.id
     if (from)          p.from      = from
     if (to)            p.to        = to
     return p
-  }, [statusFilter, partner, from, to, page])
+  }, [statusFilter, partner, from, to, page, sortBy, sortDir])
 
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['cxc', queryParams],
@@ -237,14 +242,14 @@ export default function CuentasPorCobrar() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Documento</th>
-                  <th>Cliente</th>
-                  <th>F. emisión</th>
-                  <th>Vence</th>
-                  <th>Estado</th>
+                  <SortableHeader sortKey="folio"       sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Documento</SortableHeader>
+                  <SortableHeader sortKey="cliente"     sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Cliente</SortableHeader>
+                  <SortableHeader sortKey="fecha"       sortBy={sortBy} sortDir={sortDir} onSort={onSort}>F. emisión</SortableHeader>
+                  <SortableHeader sortKey="vencimiento" sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Vence</SortableHeader>
+                  <SortableHeader sortKey="estatus"     sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Estado</SortableHeader>
                   <th>Complemento</th>
-                  <th className="text-right">Total</th>
-                  <th className="text-right">Pendiente</th>
+                  <SortableHeader sortKey="total"       sortBy={sortBy} sortDir={sortDir} onSort={onSort} align="right">Total</SortableHeader>
+                  <SortableHeader sortKey="pendiente"   sortBy={sortBy} sortDir={sortDir} onSort={onSort} align="right">Pendiente</SortableHeader>
                 </tr>
               </thead>
               <tbody>

@@ -6,6 +6,16 @@ const pushEvents = require('../push/pushEvents')
 const { getRateForDate } = require('../exchange-rates/exchangeRateService')
 const documentSeriesService = require('../document-series/documentSeriesService')
 const supplierPriceService = require('./supplierPriceService')
+const { buildOrderBy } = require('../../utils/sortOrder')
+
+const PO_SORT_COLUMNS = {
+  folio:     'po.order_number',
+  fecha:     'po.created_at',
+  proveedor: 'bp.name',
+  esperada:  'po.expected_date',
+  estatus:   'po.status',
+  total:     'po.total_mxn',
+}
 
 /**
  * Genera el siguiente número de OC. Usa serie configurada si existe,
@@ -33,10 +43,11 @@ async function nextOrderNumber(client, tenantId, opts = {}) {
 /**
  * Lista OC con filtros y estatus.
  */
-async function listOrders({ tenantId, status, orderType, partnerId, search, from, to, page = 1, limit = 50 }) {
+async function listOrders({ tenantId, status, orderType, partnerId, search, from, to, sortBy, sortDir, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
+  const orderBy = buildOrderBy({ sortBy, sortDir, columns: PO_SORT_COLUMNS, defaultKey: 'fecha', tiebreaker: 'po.id DESC' })
 
   if (status)    { params.push(status);    filters.push(`po.status = $${params.length}`) }
   if (orderType) { params.push(orderType); filters.push(`po.order_type = $${params.length}`) }
@@ -66,7 +77,7 @@ async function listOrders({ tenantId, status, orderType, partnerId, search, from
      LEFT JOIN purchase_order_lines pol ON pol.purchase_order_id = po.id
      WHERE po.tenant_id = $1 ${where}
      GROUP BY po.id, bp.id, u.id
-     ORDER BY po.created_at DESC
+     ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   )

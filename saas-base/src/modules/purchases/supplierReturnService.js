@@ -19,6 +19,15 @@
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
 const { recordMovement } = require('../inventory/inventoryService')
+const { buildOrderBy } = require('../../utils/sortOrder')
+
+const RETURN_SORT_COLUMNS = {
+  folio:     'r.return_number',
+  fecha:     'r.created_at',
+  proveedor: 'bp.name',
+  estatus:   'r.status',
+  total:     'r.total_mxn',
+}
 const documentSeriesService = require('../document-series/documentSeriesService')
 const apAdvanceService = require('./apAdvanceService')
 const supplierInvoiceService = require('./supplierInvoiceService')
@@ -122,9 +131,10 @@ async function listReturnableLots({ tenantId, rawMaterialId, warehouseId, partne
 }
 
 // ─── Lectura ─────────────────────────────────────────────────────────────────
-async function listReturns({ tenantId, status, partnerId, from, to, page = 1, limit = 50 }) {
+async function listReturns({ tenantId, status, partnerId, from, to, sortBy, sortDir, page = 1, limit = 50 }) {
   const params = [tenantId]
   const filters = []
+  const orderBy = buildOrderBy({ sortBy, sortDir, columns: RETURN_SORT_COLUMNS, defaultKey: 'fecha', tiebreaker: 'r.id DESC' })
   if (status)    { params.push(status);    filters.push(`r.status = $${params.length}`) }
   if (partnerId) { params.push(partnerId); filters.push(`r.partner_id = $${params.length}`) }
   if (from)      { params.push(from);      filters.push(`r.return_date >= $${params.length}`) }
@@ -143,7 +153,7 @@ async function listReturns({ tenantId, status, partnerId, from, to, page = 1, li
        JOIN business_partners bp ON bp.id = r.partner_id
        LEFT JOIN tenant_return_reasons rr ON rr.id = r.reason_id
       WHERE r.tenant_id = $1 ${where}
-      ORDER BY r.created_at DESC
+      ORDER BY ${orderBy}
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   )

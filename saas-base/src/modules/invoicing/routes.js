@@ -28,10 +28,10 @@ router.use(requireModule('invoicing'))
  */
 router.get('/invoices', checkPermission('invoicing', 'read'), async (req, res, next) => {
   try {
-    const { status, partnerId, from, to, search, page, limit } = req.query
+    const { status, partnerId, from, to, search, sortBy, sortDir, page, limit } = req.query
     const result = await invoiceService.listInvoices({
       tenantId: req.tenant.id,
-      status, partnerId, from, to, search,
+      status, partnerId, from, to, search, sortBy, sortDir,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })

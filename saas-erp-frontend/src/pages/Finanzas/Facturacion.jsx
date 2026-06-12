@@ -2,6 +2,8 @@ import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { invoicingApi } from '@/api/invoicing'
 import { useDebounced } from '@/hooks/useDebounced'
+import { useTableSort } from '@/hooks/useTableSort'
+import { SortableHeader } from '@/components/ui/SortableHeader'
 import { partnersApi } from '@/api/partners'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Badge from '@/components/ui/Badge'
@@ -40,17 +42,18 @@ export default function Facturacion() {
   const searchDebounced = useDebounced(search, 300)
 
   // Al cambiar cualquier filtro, volver a la página 1.
-  useEffect(() => { setPage(1) }, [statusFilter, partner, from, to, searchDebounced])
+  const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')
+  useEffect(() => { setPage(1) }, [statusFilter, partner, from, to, searchDebounced, sortBy, sortDir])
 
   const queryParams = useMemo(() => {
-    const p = { page, limit: PAGE_SIZE }
+    const p = { page, limit: PAGE_SIZE, sortBy, sortDir }
     if (statusFilter)  p.status    = statusFilter
     if (partner?.id)   p.partnerId = partner.id
     if (from)          p.from      = from
     if (to)            p.to        = to
     if (searchDebounced.trim()) p.search = searchDebounced.trim()
     return p
-  }, [statusFilter, partner, from, to, searchDebounced, page])
+  }, [statusFilter, partner, from, to, searchDebounced, page, sortBy, sortDir])
 
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['invoices', queryParams],
@@ -178,13 +181,13 @@ export default function Facturacion() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Folio</th>
-                  <th>Cliente</th>
+                  <SortableHeader sortKey="folio"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Folio</SortableHeader>
+                  <SortableHeader sortKey="cliente" sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Cliente</SortableHeader>
                   <th>Origen</th>
-                  <th>F. emisión</th>
+                  <SortableHeader sortKey="fecha"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>F. emisión</SortableHeader>
                   <th>Pago</th>
-                  <th>Estado</th>
-                  <th className="text-right">Total</th>
+                  <SortableHeader sortKey="estatus" sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Estado</SortableHeader>
+                  <SortableHeader sortKey="total"   sortBy={sortBy} sortDir={sortDir} onSort={onSort} align="right">Total</SortableHeader>
                 </tr>
               </thead>
               <tbody>

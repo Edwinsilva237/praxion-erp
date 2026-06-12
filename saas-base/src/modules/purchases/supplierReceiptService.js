@@ -9,6 +9,14 @@ const pushEvents = require('../push/pushEvents')
 const { generate: generateLotNumber } = require('../production/lotNumberGenerator')
 const documentSeriesService = require('../document-series/documentSeriesService')
 const supplierPriceService = require('./supplierPriceService')
+const { buildOrderBy } = require('../../utils/sortOrder')
+
+const RECEIPT_SORT_COLUMNS = {
+  folio:     'sr.receipt_number',
+  fecha:     'sr.created_at',
+  proveedor: 'bp.name',
+  estatus:   'sr.status',
+}
 
 async function nextReceiptNumber(client, tenantId, opts = {}) {
   const result = await documentSeriesService.generateDocumentNumber({
@@ -31,11 +39,12 @@ async function nextReceiptNumber(client, tenantId, opts = {}) {
 
 async function listReceipts({
   tenantId, status, partnerId, purchaseOrderId,
-  search, warehouseId, hasEvidence, invoiceStatus, from, to, page = 1, limit = 50,
+  search, warehouseId, hasEvidence, invoiceStatus, from, to, sortBy, sortDir, page = 1, limit = 50,
 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
+  const orderBy = buildOrderBy({ sortBy, sortDir, columns: RECEIPT_SORT_COLUMNS, defaultKey: 'fecha', tiebreaker: 'sr.id DESC' })
 
   if (status)          { params.push(status);          filters.push(`sr.status = $${params.length}`) }
   if (partnerId)       { params.push(partnerId);       filters.push(`sr.partner_id = $${params.length}`) }
@@ -96,7 +105,7 @@ async function listReceipts({
      LEFT JOIN supplier_receipt_lines srl ON srl.supplier_receipt_id = sr.id
      WHERE sr.tenant_id = $1 ${where}
      GROUP BY sr.id, po.id, bp.id, w.id, u.id, cb.id
-     ORDER BY sr.received_date DESC, sr.created_at DESC
+     ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   )

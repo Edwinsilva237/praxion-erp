@@ -2,6 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit }                  = require('../../utils/audit')
+const { buildOrderBy }           = require('../../utils/sortOrder')
 const { getRateForDate }         = require('../exchange-rates/exchangeRateService')
 
 /**
@@ -403,13 +404,24 @@ async function generateReceiptRemission({ tenantId, receiptId, notes, userId, ip
   })
 }
 
+// Orden de las listas de facturas de proveedor y gastos (default por creación).
+const SI_SORT_COLUMNS = {
+  folio:     'si.invoice_number',
+  fecha:     'si.created_at',
+  proveedor: 'bp.name',
+  emision:   'si.invoice_date',
+  estatus:   'si.status',
+  total:     'si.total_mxn',
+}
+
 /**
  * Lista facturas/remisiones de proveedor con filtros.
  */
-async function listInvoices({ tenantId, type, status, supplierId, from, to, page = 1, limit = 50 }) {
+async function listInvoices({ tenantId, type, status, supplierId, from, to, sortBy, sortDir, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
+  const orderBy = buildOrderBy({ sortBy, sortDir, columns: SI_SORT_COLUMNS, defaultKey: 'fecha', tiebreaker: 'si.id DESC' })
 
   if (type)       { params.push(type);       filters.push(`si.type = $${params.length}`) }
   else            { filters.push(`si.type <> 'credit_note'`) }   // las NC recibidas no son facturas por pagar
@@ -452,7 +464,7 @@ async function listInvoices({ tenantId, type, status, supplierId, from, to, page
      LEFT JOIN users u              ON u.id  = si.created_by
      LEFT JOIN accounts_payable ap  ON ap.document_id = si.id AND ap.tenant_id = si.tenant_id
      WHERE si.tenant_id = $1 ${where}
-     ORDER BY si.invoice_date DESC, si.created_at DESC
+     ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   )
@@ -679,10 +691,11 @@ async function getSupplierStatement({ tenantId, supplierId, from, to }) {
  * dos semáforos: CFDI (¿tiene uuid_sat?) y pago (status del CXP).
  * Filtros: categoryId, status (pago), hasCfdi ('yes'|'no'), from, to, search.
  */
-async function listExpenses({ tenantId, categoryId, status, hasCfdi, from, to, search, page = 1, limit = 50 }) {
+async function listExpenses({ tenantId, categoryId, status, hasCfdi, from, to, search, sortBy, sortDir, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = ['si.is_expense = true']
+  const orderBy = buildOrderBy({ sortBy, sortDir, columns: SI_SORT_COLUMNS, defaultKey: 'fecha', tiebreaker: 'si.id DESC' })
 
   if (categoryId) { params.push(categoryId); filters.push(`si.expense_category_id = $${params.length}`) }
   if (status)     { params.push(status);     filters.push(`si.status = $${params.length}`) }
@@ -717,7 +730,7 @@ async function listExpenses({ tenantId, categoryId, status, hasCfdi, from, to, s
      LEFT JOIN tenant_expense_categories ec ON ec.id = si.expense_category_id
      LEFT JOIN accounts_payable ap ON ap.document_id = si.id AND ap.tenant_id = si.tenant_id
      ${where}
-     ORDER BY si.invoice_date DESC, si.created_at DESC
+     ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   )
