@@ -488,6 +488,22 @@ async function confirmPresence({ tenantId, id, userId, ipAddress, userAgent }) {
 
     const shift = ss[0]
 
+    // ── GUARD: un operador no puede tener dos turnos de captura ABIERTOS a la
+    //    vez. Caso típico: dejó un "turno atrasado" (registrado con startMissedShift)
+    //    sin cerrar y ahora intenta confirmar el de hoy. Si lo permitiéramos, el
+    //    relevo creería que el turno viejo le "entrega" al de hoy y se enredaría.
+    //    Le pedimos cerrar el abierto primero. NO rompe el relevo normal: ahí el
+    //    operador entrante (shift.operator_id) es DISTINTO al que está activo.
+    const { rows: ownOpen } = await client.query(
+      `SELECT ps.id, ps.shift_number FROM production_shifts ps
+        WHERE ps.tenant_id = $1 AND ps.operator_id = $2 AND ps.status = 'active'
+        LIMIT 1`,
+      [tenantId, shift.operator_id]
+    )
+    if (ownOpen[0]) {
+      throw createError(409, `Tienes un turno todavía abierto (turno ${ownOpen[0].shift_number}). Ciérralo antes de iniciar otro.`)
+    }
+
     // ── CANDADO: verificar si hay turno activo del turno anterior ─────────────
     const { rows: activeShifts } = await client.query(
       `SELECT ps.id, ps.operator_id, u.full_name AS operator_name
@@ -585,6 +601,98 @@ async function confirmPresence({ tenantId, id, userId, ipAddress, userAgent }) {
       } : null,
       previous_active_order_id: prevActiveOrder[0]?.previous_active_order_id || null,
     }
+  })
+}
+
+// ─── Iniciar un turno ATRASADO que nunca se confirmó ────────────────────────
+//
+// Acción correctiva de admin: un operador hizo producción pero NUNCA inició su
+// turno en la app (lo anotó en papel) y ya pasaron otros turnos. Esta función
+// crea el turno de captura REAL con la FECHA ORIGINAL del turno programado para
+// que pueda capturar lo de la hoja y se valide con la fecha correcta.
+//
+// Diferencias clave vs confirmPresence (a propósito):
+//   1. NO dispara el candado de relevo: es un relleno histórico, así que NO
+//      toca el turno activo de hoy (no le marca handover_requested a nadie) y
+//      se crea directo en 'active' aunque otro operador esté trabajando.
+//   2. Solo aplica a turnos programados de un día ANTERIOR (los de hoy/futuro
+//      usan "Confirmar presencia" normal).
+// Guard: si el operador ya tiene un turno de captura abierto (active), se aborta
+// para no dejarlo con dos turnos vivos a la vez.
+async function startMissedShift({ tenantId, scheduledShiftId, userId, ipAddress, userAgent }) {
+  return withTransaction(async (client) => {
+    const { rows: ss } = await client.query(
+      `SELECT ss.*,
+              (ss.scheduled_date < (NOW() AT TIME ZONE $3)::date) AS is_past
+         FROM scheduled_shifts ss
+        WHERE ss.id = $1 AND ss.tenant_id = $2 AND ss.status = 'scheduled'`,
+      [scheduledShiftId, tenantId, OPS_TIMEZONE]
+    )
+    if (!ss[0]) throw createError(400, 'Turno no encontrado o ya no está programado.')
+    const shift = ss[0]
+
+    if (!shift.is_past) {
+      throw createError(400, 'Solo se pueden registrar turnos atrasados de días anteriores. Para el turno de hoy, el operador debe confirmar su presencia.')
+    }
+
+    // Guard: el operador no debe tener ya un turno de captura abierto.
+    const { rows: open } = await client.query(
+      `SELECT ps.id, ps.shift_number FROM production_shifts ps
+        WHERE ps.tenant_id = $1 AND ps.operator_id = $2 AND ps.status = 'active'
+        LIMIT 1`,
+      [tenantId, shift.operator_id]
+    )
+    if (open[0]) {
+      throw createError(409, `El operador ya tiene un turno abierto (turno ${open[0].shift_number}). Ciérralo y valídalo antes de registrar otro.`)
+    }
+
+    // Crear el turno de captura con la FECHA ORIGINAL, activo, SIN relevo.
+    const { rows: newShift } = await client.query(
+      `INSERT INTO production_shifts
+         (tenant_id, production_order_id, shift_number, shift_date,
+          operator_id, supervisor_id, status, started_at)
+       VALUES ($1,$2,$3,$4,$5,$6,'active',NOW())
+       RETURNING *`,
+      [tenantId, shift.production_order_id, shift.shift_number,
+       shift.scheduled_date, shift.operator_id, shift.supervisor_id]
+    )
+
+    // Copiar los miembros programados al turno de runtime (capturista, etc.).
+    await copyMembersToRuntime(client, tenantId, {
+      scheduledShiftId:    shift.id,
+      productionShiftId:   newShift[0].id,
+      fallbackOperatorId:  shift.operator_id,
+      fallbackSupervisorId: shift.supervisor_id,
+    })
+
+    // Si traía orden asignada y estaba liberada, marcarla en proceso.
+    if (shift.production_order_id) {
+      await client.query(
+        `UPDATE production_orders SET status = 'in_progress'
+         WHERE id = $1 AND status = 'released'`,
+        [shift.production_order_id]
+      )
+    }
+
+    // Marcar el turno programado como activo y enlazar el turno de runtime.
+    const { rows: updated } = await client.query(
+      `UPDATE scheduled_shifts SET
+         status       = 'active',
+         confirmed_at = NOW(),
+         confirmed_by = $1,
+         shift_id     = $2
+       WHERE id = $3 RETURNING *`,
+      [userId, newShift[0].id, scheduledShiftId]
+    )
+
+    await audit({
+      tenantId, userId, action: 'scheduled_shift.started_missed', resource: 'scheduled_shifts',
+      resourceId: scheduledShiftId,
+      payload: { shiftId: newShift[0].id, scheduledDate: shift.scheduled_date },
+      ipAddress, userAgent,
+    })
+
+    return { scheduledShift: updated[0], shift: newShift[0] }
   })
 }
 
@@ -719,6 +827,7 @@ module.exports = {
   getTodayShiftsForOperator,
   updateScheduledShift,
   confirmPresence,
+  startMissedShift,
   autoActivatePendingShifts,
   getOperatorHoursForDate,
   // Exportado para que productionService lo reuse al validar quién puede

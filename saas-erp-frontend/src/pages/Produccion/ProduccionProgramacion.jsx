@@ -295,6 +295,22 @@ function EditModal({ shift, users, shiftConfig = [], onClose, onSaved }) {
     onError: (e) => setError(e.response?.data?.error || 'Error al cancelar'),
   })
 
+  // Turno atrasado: programado de un día ANTERIOR que nunca se inició. Permite
+  // registrarlo ahora con su fecha original (sin afectar el turno activo de hoy).
+  const todayIso  = toLocalISODate(new Date())
+  const schedIso  = (shift.scheduled_date || '').slice(0, 10)
+  const isMissedPast = shift.status === 'scheduled' && schedIso && schedIso < todayIso
+
+  const startMissedMutation = useMutation({
+    mutationFn: () => productionApi.startMissedShift(shift.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['scheduled-shifts'] })
+      onSaved?.()
+      onClose()
+    },
+    onError: (e) => setError(e.response?.data?.error || 'Error al iniciar el turno atrasado'),
+  })
+
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
       <div className="card w-full max-w-md p-6 flex flex-col gap-4 max-h-[90vh] overflow-y-auto">
@@ -382,6 +398,31 @@ function EditModal({ shift, users, shiftConfig = [], onClose, onSaved }) {
             </div>
           )}
         </div>
+
+        {/* Turno atrasado: nunca se inició y es de un día anterior */}
+        {isMissedPast && (
+          <Can do="production:manage">
+          <div className="rounded-xl border border-brand-500/40 bg-brand-500/10 p-3 flex flex-col gap-2">
+            <p className="text-xs text-brand-300">
+              Este turno nunca se inició. Puedes registrarlo ahora con su fecha original
+              ({fmtDay(parseDateOnly(shift.scheduled_date))}); luego {shift.operator_name} (o tú)
+              captura la producción en la pantalla de Captura y al final lo validas.
+              No afecta el turno activo de hoy.
+            </p>
+            <button
+              onClick={() => {
+                if (window.confirm(`¿Iniciar el turno atrasado de ${shift.operator_name} del ${fmtDay(parseDateOnly(shift.scheduled_date))}? Se creará con esa fecha, sin tocar el turno de hoy.`)) {
+                  startMissedMutation.mutate()
+                }
+              }}
+              disabled={startMissedMutation.isPending}
+              className="btn-primary btn-sm self-start"
+            >
+              {startMissedMutation.isPending ? <Spinner size="sm" /> : '▶ Iniciar turno atrasado'}
+            </button>
+          </div>
+          </Can>
+        )}
 
         {error && <p className="field-error">{error}</p>}
 
@@ -1089,15 +1130,17 @@ function GridCell({ shift, isToday, isPast, onEdit, onEditActive, onNew, shiftNu
   return (
     <button
       onClick={() => {
-        if (isPast) return
+        // Programado (incluye días pasados) → abre el modal: si es pasado y nunca
+        // se inició, ahí aparece "Iniciar turno atrasado".
         if (shift.status === 'scheduled') onEdit(shift)
-        else if (shift.status === 'active' || shift.status === 'pending_handover') onEditActive?.(shift)
+        else if (!isPast && (shift.status === 'active' || shift.status === 'pending_handover')) onEditActive?.(shift)
       }}
       className={clsx(
         'h-20 rounded-xl border-2 p-2 text-left transition-all w-full',
         shift.status === 'active'     && 'border-status-success/40 bg-status-success/10',
         shift.status === 'scheduled'  && !isPast && 'border-status-info/40 bg-status-info/10 hover:border-brand-500/40 cursor-pointer',
-        shift.status === 'scheduled'  && isPast  && 'border-line-subtle bg-surface-elevated/40 cursor-default',
+        // Pasado sin iniciar: resaltado ámbar (requiere atención) y clickeable.
+        shift.status === 'scheduled'  && isPast  && 'border-status-warning/40 bg-status-warning/10 hover:border-status-warning/60 cursor-pointer',
         shift.status === 'completed'  && 'border-line-subtle bg-surface-elevated/40 cursor-default',
         shift.status === 'cancelled'  && 'border-status-danger/40 bg-status-danger/10/50 cursor-default opacity-60',
         isAbsence && 'border-status-danger/40',
@@ -1449,10 +1492,10 @@ export default function ProduccionProgramacion() {
                               </p>
                               {s.notes && <p className="text-xs text-blue-500 mt-0.5 break-words">📝 {s.notes}</p>}
                             </div>
-                            {!isPast && s.status === 'scheduled' && (
+                            {s.status === 'scheduled' && (
                               <button onClick={() => setEditing(s)}
                                 className="btn-ghost btn-sm text-ink-muted hover:text-brand-300 shrink-0">
-                                Editar
+                                {isPast ? 'Registrar' : 'Editar'}
                               </button>
                             )}
                           </>

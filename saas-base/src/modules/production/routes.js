@@ -712,6 +712,19 @@ router.post('/scheduled-shifts/:id/confirm', async (req,res,next) => {
   catch(err){next(err)}
 })
 
+// Iniciar un turno ATRASADO que nunca se confirmó (relleno histórico de admin).
+// Crea el turno de captura con la FECHA ORIGINAL, sin disparar el relevo, y solo
+// para turnos programados de días anteriores. Gateado con production:manage (el
+// mismo permiso de la programación de turnos → no requiere re-login).
+router.post('/scheduled-shifts/:id/start-missed', checkPermission('production','manage'), async (req,res,next) => {
+  try {
+    res.json(await svcSched.startMissedShift({
+      tenantId:tid(req), scheduledShiftId:req.params.id,
+      userId:uid(req), ipAddress:ip(req), userAgent:ua(req),
+    }))
+  } catch(err){next(err)}
+})
+
 // ─── Selección de orden activa por el operador del turno ──────────────────────
 // Persiste production_order_id en production_shifts. El operador puede elegir
 // orden al iniciar el turno o cambiarla durante (multi-orden por turno).

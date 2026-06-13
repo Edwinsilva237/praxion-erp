@@ -77,6 +77,9 @@ export const productionApi = {
   scheduleShift:        (body)   => api.post(`${BASE}/scheduled-shifts`, body).then(r => r.data),
   updateScheduledShift: (id, body) => api.patch(`${BASE}/scheduled-shifts/${id}`, body).then(r => r.data),
   confirmPresence:      (id)     => api.post(`${BASE}/scheduled-shifts/${id}/confirm`).then(r => r.data),
+  // Admin: iniciar un turno atrasado que nunca se confirmó (relleno histórico,
+  // con la fecha original, sin disparar el relevo del turno de hoy).
+  startMissedShift:     (id)     => api.post(`${BASE}/scheduled-shifts/${id}/start-missed`).then(r => r.data),
   // Micro pyme: iniciar turno directo sin programación (requiere flag).
   selfStartShift:       ()       => api.post(`${BASE}/shifts/self-start`).then(r => r.data),
   // Micro pyme: inicio rápido — crea orden (producto+cantidad) + inicia turno + la deja activa.
