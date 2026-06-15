@@ -575,6 +575,13 @@ function PartnerModal({ partner: partnerStub, onClose, onSaved }) {
                 value={watch('type')}
                 onChange={(v) => setValue('type', v)}
               />
+              <p className="text-[10px] text-ink-muted mt-1 leading-snug">
+                {watch('type') === 'both'
+                  ? 'Aparece en ventas (pedidos, facturas, precios por cliente) y en compras (órdenes de compra, recepciones, precios por proveedor). Verás abajo las secciones de cliente y de proveedor.'
+                  : watch('type') === 'supplier'
+                    ? 'Aparece en compras (órdenes de compra, recepciones, CXP, precios por proveedor). Si también le vendes, elige «Ambos».'
+                    : 'Aparece en ventas (pedidos, facturas, CXC, precios por cliente). Si también le compras, elige «Ambos».'}
+              </p>
               {errors.type && <p className="field-error">{errors.type.message}</p>}
             </div>
 
@@ -753,7 +760,7 @@ function PartnerModal({ partner: partnerStub, onClose, onSaved }) {
           <Section
             title="Datos del proveedor"
             badge="proveedor"
-            defaultOpen={watch('type') === 'supplier'}
+            defaultOpen={['supplier','both'].includes(watch('type'))}
             icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1"/></svg>}
           >
             <p className="text-[11px] text-ink-muted -mt-1">
