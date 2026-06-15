@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTableSort } from '@/hooks/useTableSort'
 import { SortableHeader } from '@/components/ui/SortableHeader'
@@ -225,10 +225,229 @@ function GastoModal({ categories, onClose, onSaved }) {
   )
 }
 
+// ── Modal: detalle + editar + cancelar ──────────────────────────────────────
+function GastoDetalleModal({ id, categories, onClose, onSaved }) {
+  const { data: exp, isLoading } = useQuery({
+    queryKey: ['expense', id],
+    queryFn:  () => purchasesApi.getExpense(id),
+  })
+  const { data: suppliersResp } = useQuery({
+    queryKey: ['partners', 'suppliers'],
+    queryFn:  () => partnersApi.list({ role: 'supplier' }),
+    staleTime: 5 * 60 * 1000,
+  })
+  const suppliers = suppliersResp?.data || suppliersResp || []
+
+  const [form, setForm] = useState(null)
+  const [error, setError] = useState(null)
+  const [askCancel, setAskCancel] = useState(false)
+  const [cancelReason, setCancelReason] = useState('')
+
+  useEffect(() => {
+    if (exp && !form) {
+      setForm({
+        supplierId:        exp.partner_id || '',
+        expenseCategoryId: exp.expense_category_id || '',
+        invoiceDate:       (exp.invoice_date || '').slice(0, 10),
+        documentNumber:    exp.invoice_number || '',
+        hasCfdi:           !!exp.uuid_sat,
+        uuid:              exp.uuid_sat || '',
+        subtotal:          exp.subtotal ?? '',
+        tax:               exp.tax ?? '',
+        notes:             exp.notes || '',
+      })
+    }
+  }, [exp, form])
+
+  const isCancelled = exp?.status === 'cancelled'
+  // El backend bloquea editar monto / cancelar cuando hay pago aplicado.
+  const isPaid = ['paid', 'partial'].includes(exp?.ap_status)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const save = useMutation({
+    mutationFn: () => {
+      const body = {
+        supplierId:        form.supplierId || undefined,
+        expenseCategoryId: form.expenseCategoryId || undefined,
+        invoiceDate:       form.invoiceDate || undefined,
+        documentNumber:    form.documentNumber.trim() || undefined,
+        uuidSat:           form.hasCfdi ? (form.uuid.trim() || undefined) : '',
+        notes:             form.notes.trim(),
+      }
+      // Montos solo si NO está pagado (el backend igual lo rechazaría con 409).
+      if (!isPaid) {
+        body.subtotal = parseFloat(form.subtotal) || 0
+        body.tax      = parseFloat(form.tax) || 0
+      }
+      return purchasesApi.updateExpense(id, body)
+    },
+    onSuccess: () => { onSaved(); onClose() },
+    onError: (e) => setError(e.response?.data?.error || e.message),
+  })
+
+  const cancel = useMutation({
+    mutationFn: () => purchasesApi.cancelExpense(id, cancelReason.trim() || undefined),
+    onSuccess: () => { onSaved(); onClose() },
+    onError: (e) => setError(e.response?.data?.error || e.message),
+  })
+
+  const sub = parseFloat(form?.subtotal) || 0
+  const iva = parseFloat(form?.tax) || 0
+  const total = +(sub + iva).toFixed(2)
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">
+      <div className="card w-full max-w-lg p-6 flex flex-col gap-4 max-h-[92vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-ink-primary">Detalle del gasto</h2>
+          <button type="button" onClick={onClose} className="btn-ghost btn-icon text-ink-muted">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        {isLoading || !form ? (
+          <div className="flex justify-center py-12"><Spinner /></div>
+        ) : (
+          <>
+            {/* Estado (semáforos) */}
+            <div className="flex flex-wrap gap-2">
+              <CfdiBadge has={exp.has_cfdi} />
+              <PagoBadge status={exp.ap_status || exp.status} />
+              {exp.is_overdue && <span className="badge-red">Vencido</span>}
+              {isCancelled && <span className="badge-gray">Cancelado</span>}
+            </div>
+
+            {isCancelled && (
+              <div className="alert-warning text-xs">Este gasto está cancelado (solo lectura).</div>
+            )}
+            {isPaid && !isCancelled && (
+              <div className="bg-surface-elevated/40 rounded-lg px-3 py-2 text-xs text-ink-secondary">
+                Gasto con pago aplicado: el monto no se puede editar. Reversa el pago primero (desde Cuentas por pagar).
+              </div>
+            )}
+
+            <fieldset disabled={isCancelled} className="flex flex-col gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Proveedor</label>
+                  <select className="select" value={form.supplierId} onChange={e => set('supplierId', e.target.value)}>
+                    <option value="">— Selecciona —</option>
+                    {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Categoría</label>
+                  <select className="select" value={form.expenseCategoryId} onChange={e => set('expenseCategoryId', e.target.value)}>
+                    <option value="">— Selecciona —</option>
+                    {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" className="w-4 h-4 accent-brand-600"
+                  checked={form.hasCfdi} onChange={e => set('hasCfdi', e.target.checked)} />
+                <span className="text-ink-secondary">Tengo la factura (CFDI)</span>
+              </label>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">{form.hasCfdi ? 'Folio / Núm. factura' : 'Referencia'}</label>
+                  <input className="input" value={form.documentNumber} onChange={e => set('documentNumber', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Fecha</label>
+                  <input type="date" className="input" value={form.invoiceDate} onChange={e => set('invoiceDate', e.target.value)} />
+                </div>
+              </div>
+
+              {form.hasCfdi && (
+                <div>
+                  <label className="label">UUID (folio fiscal)</label>
+                  <input className="input font-mono text-xs" value={form.uuid} onChange={e => set('uuid', e.target.value)}
+                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Subtotal</label>
+                  <input type="number" step="0.01" min="0" className="input" inputMode="decimal" disabled={isPaid}
+                    value={form.subtotal} onChange={e => set('subtotal', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">IVA</label>
+                  <input type="number" step="0.01" min="0" className="input" inputMode="decimal" disabled={isPaid}
+                    value={form.tax} onChange={e => set('tax', e.target.value)} />
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <div className="bg-brand-500/10 border border-brand-100 rounded-xl px-4 py-2 flex items-center gap-3">
+                  <span className="text-sm text-ink-muted">Total</span>
+                  <span className="text-base font-bold text-brand-300 tabular-nums">{fmtMXN(total)}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="label">Notas</label>
+                <input className="input" value={form.notes} onChange={e => set('notes', e.target.value)} />
+              </div>
+            </fieldset>
+
+            {error && <p className="field-error">{error}</p>}
+
+            {/* Confirmación de cancelación */}
+            {askCancel && (
+              <div className="bg-status-danger/10 border border-status-danger/40 rounded-lg p-3 flex flex-col gap-2">
+                <p className="text-xs text-ink-secondary">
+                  Se cancelará el gasto y su cuenta por pagar. No se borra (queda como “Cancelado”).
+                </p>
+                <input className="input" placeholder="Motivo (opcional)" value={cancelReason}
+                  onChange={e => setCancelReason(e.target.value)} />
+                <div className="flex gap-2">
+                  <button className="btn-secondary flex-1" onClick={() => setAskCancel(false)}>No</button>
+                  <button className="btn-danger flex-1" disabled={cancel.isPending}
+                    onClick={() => { setError(null); cancel.mutate() }}>
+                    {cancel.isPending ? <Spinner size="sm" /> : 'Sí, cancelar gasto'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!isCancelled && !askCancel && (
+              <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                <Can do="expenses:create">
+                  <button className="btn-ghost text-status-danger sm:mr-auto" disabled={isPaid}
+                    title={isPaid ? 'Reversa el pago antes de cancelar' : undefined}
+                    onClick={() => setAskCancel(true)}>
+                    Cancelar gasto
+                  </button>
+                </Can>
+                <button className="btn-secondary" onClick={onClose}>Cerrar</button>
+                <Can do="expenses:create">
+                  <button className="btn-primary" disabled={save.isPending}
+                    onClick={() => { setError(null); save.mutate() }}>
+                    {save.isPending ? <Spinner size="sm" /> : 'Guardar cambios'}
+                  </button>
+                </Can>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 // ── Página ─────────────────────────────────────────────────────────────────
 export default function Gastos() {
   const qc = useQueryClient()
   const [showModal, setShowModal] = useState(false)
+  const [detailId, setDetailId]   = useState(null)
   const [filterCat, setFilterCat] = useState('')
   const [filterCfdi, setFilterCfdi] = useState('')
   const [msg, setMsg] = useState(null)
@@ -252,8 +471,9 @@ export default function Gastos() {
 
   function handleSaved() {
     qc.invalidateQueries({ queryKey: ['expenses'] })
+    qc.invalidateQueries({ queryKey: ['expense'] })
     qc.invalidateQueries({ queryKey: ['cxp'] })
-    setMsg('Gasto registrado.'); setTimeout(() => setMsg(null), 2500)
+    setMsg('Gasto guardado.'); setTimeout(() => setMsg(null), 2500)
   }
 
   return (
@@ -305,7 +525,8 @@ export default function Gastos() {
           {/* Móvil: tarjetas */}
           <div className="flex flex-col gap-3 md:hidden">
             {expenses.map(e => (
-              <div key={e.id} className="card p-4 flex flex-col gap-2">
+              <div key={e.id} onClick={() => setDetailId(e.id)}
+                className="card p-4 flex flex-col gap-2 cursor-pointer active:bg-surface-elevated/40">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-ink-primary break-words">{e.partner_name || e.generic_supplier || '—'}</p>
@@ -338,7 +559,8 @@ export default function Gastos() {
               </thead>
               <tbody>
                 {expenses.map(e => (
-                  <tr key={e.id}>
+                  <tr key={e.id} onClick={() => setDetailId(e.id)}
+                    className="cursor-pointer hover:bg-surface-elevated/40">
                     <td className="font-medium text-ink-primary">{e.partner_name || e.generic_supplier || '—'}</td>
                     <td className="text-ink-secondary">{e.expense_category_name || '—'}</td>
                     <td className="text-ink-secondary">{fmtDateOnly(e.invoice_date)}</td>
@@ -363,6 +585,10 @@ export default function Gastos() {
 
       {showModal && (
         <GastoModal categories={categories} onClose={() => setShowModal(false)} onSaved={handleSaved} />
+      )}
+      {detailId && (
+        <GastoDetalleModal id={detailId} categories={categories}
+          onClose={() => setDetailId(null)} onSaved={handleSaved} />
       )}
     </div>
   )

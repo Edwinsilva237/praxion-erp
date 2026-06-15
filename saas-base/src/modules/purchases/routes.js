@@ -745,6 +745,55 @@ router.post('/expenses', checkPermission('expenses', 'create'), async (req, res,
 })
 
 /**
+ * GET /api/purchases/expenses/:id
+ * Detalle de un gasto (con categoría, proveedor y los dos semáforos).
+ */
+router.get('/expenses/:id', checkPermission('expenses', 'read'), async (req, res, next) => {
+  try {
+    const expense = await supplierInvoiceService.getExpense({
+      tenantId: req.tenant.id, id: req.params.id,
+    })
+    if (!expense) return res.status(404).json({ error: 'Gasto no encontrado.' })
+    res.json(expense)
+  } catch (err) { next(err) }
+})
+
+/**
+ * PATCH /api/purchases/expenses/:id
+ * Edita un gasto. Body (todos opcionales): { expenseCategoryId, supplierId,
+ * invoiceDate, subtotal, tax, paymentMethod, documentNumber, uuidSat, notes }.
+ * Los montos solo se editan si el gasto NO tiene pago aplicado.
+ */
+router.patch('/expenses/:id', checkPermission('expenses', 'create'), async (req, res, next) => {
+  try {
+    const updated = await supplierInvoiceService.updateExpense({
+      tenantId: req.tenant.id, id: req.params.id, ...req.body,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(updated)
+  } catch (err) {
+    if (err.code === '23505' && err.constraint?.includes('uuid_sat')) {
+      return res.status(409).json({ error: 'Ya existe una factura registrada con ese UUID SAT.' })
+    }
+    next(err)
+  }
+})
+
+/**
+ * POST /api/purchases/expenses/:id/cancel
+ * Cancela un gasto + su CXP (bloqueado si ya tiene pago aplicado). Body: { reason? }.
+ */
+router.post('/expenses/:id/cancel', checkPermission('expenses', 'create'), async (req, res, next) => {
+  try {
+    const result = await supplierInvoiceService.cancelExpense({
+      tenantId: req.tenant.id, id: req.params.id, reason: req.body?.reason,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
  * GET /api/purchases/invoices
  * Query: type, status, supplierId, from, to, page, limit
  */

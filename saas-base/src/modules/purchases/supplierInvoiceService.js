@@ -745,6 +745,216 @@ async function listExpenses({ tenantId, categoryId, status, hasCfdi, from, to, s
   return { data: rows, total: parseInt(countRows[0].count, 10), page, limit }
 }
 
+/**
+ * Detalle de UN gasto (supplier_invoice is_expense=true): todos los campos +
+ * categoría + proveedor + los dos semáforos (CFDI por uuid_sat, pago por el CXP).
+ */
+async function getExpense({ tenantId, id }) {
+  const { rows } = await query(
+    `SELECT si.id, si.partner_id, si.invoice_number, si.type, si.status,
+            si.uuid_sat, si.invoice_date, si.due_date,
+            si.currency, si.exchange_rate_value,
+            si.subtotal, si.tax, si.total, si.total_mxn,
+            si.generic_supplier, si.notes, si.is_expense,
+            si.expense_category_id, si.payment_method,
+            ec.name AS expense_category_name,
+            bp.name AS partner_name, bp.rfc AS partner_rfc,
+            ap.id AS ap_id, ap.status AS ap_status,
+            ap.amount_paid AS ap_amount_paid, ap.amount_pending AS ap_amount_pending,
+            (si.uuid_sat IS NOT NULL) AS has_cfdi,
+            CASE WHEN ap.due_date < CURRENT_DATE AND ap.status NOT IN ('paid','cancelled')
+                 THEN true ELSE false END AS is_overdue
+       FROM supplier_invoices si
+       LEFT JOIN business_partners bp ON bp.id = si.partner_id
+       LEFT JOIN tenant_expense_categories ec ON ec.id = si.expense_category_id
+       LEFT JOIN accounts_payable ap ON ap.document_id = si.id AND ap.tenant_id = si.tenant_id
+      WHERE si.id = $1 AND si.tenant_id = $2 AND si.is_expense = true`,
+    [id, tenantId]
+  )
+  return rows[0] || null
+}
+
+/**
+ * Edita un GASTO (supplier_invoice is_expense=true). Mantiene en sync su CXP.
+ *
+ * Reglas de seguridad:
+ *   - No se edita un gasto cancelado.
+ *   - Campos NO monetarios (categoría, proveedor, fecha, forma de pago, folio,
+ *     UUID, notas) se editan siempre.
+ *   - subtotal/tax (→ total) SOLO si el CXP no tiene pagos (amount_paid = 0),
+ *     para no romper un CXP ya pagado (CHECK amount_paid <= amount_total).
+ *   - UUID nuevo pasa por el anti-duplicado (uuid_sat es único).
+ */
+async function updateExpense({
+  tenantId, id, userId,
+  expenseCategoryId, supplierId, invoiceDate,
+  subtotal, tax, paymentMethod, documentNumber, uuidSat, notes,
+  ipAddress, userAgent,
+}) {
+  return withTransaction(async (client) => {
+    const { rows: invRows } = await client.query(
+      `SELECT si.*, ap.id AS ap_id, ap.amount_paid AS ap_amount_paid
+         FROM supplier_invoices si
+         LEFT JOIN accounts_payable ap ON ap.document_id = si.id AND ap.tenant_id = si.tenant_id
+        WHERE si.id = $1 AND si.tenant_id = $2 AND si.is_expense = true
+        FOR UPDATE OF si`,
+      [id, tenantId]
+    )
+    if (!invRows.length) throw createError(404, 'Gasto no encontrado.')
+    const inv = invRows[0]
+    if (inv.status === 'cancelled') throw createError(409, 'No se puede editar un gasto cancelado.')
+
+    const amountPaid = parseFloat(inv.ap_amount_paid || 0)
+    const wantsAmountChange = subtotal !== undefined || tax !== undefined
+    if (wantsAmountChange && amountPaid > 0) {
+      throw createError(409, 'No se puede cambiar el monto de un gasto con un pago aplicado. Reversa el pago primero.')
+    }
+
+    if (paymentMethod && !['transfer', 'cash', 'check'].includes(paymentMethod)) {
+      throw createError(400, 'paymentMethod inválido (transfer | cash | check).')
+    }
+    if (expenseCategoryId) {
+      const { rows } = await client.query(
+        `SELECT 1 FROM tenant_expense_categories WHERE id = $1 AND tenant_id = $2`,
+        [expenseCategoryId, tenantId])
+      if (!rows.length) throw createError(400, 'La categoría de gasto no existe en este tenant.')
+    }
+    if (supplierId) {
+      const { rows } = await client.query(
+        `SELECT 1 FROM business_partners WHERE id = $1 AND tenant_id = $2`,
+        [supplierId, tenantId])
+      if (!rows.length) throw createError(400, 'El proveedor no existe en este tenant.')
+    }
+
+    // UUID nuevo → anti-duplicado (excluye este mismo gasto)
+    const newUuid = uuidSat !== undefined ? (uuidSat ? String(uuidSat).trim() : null) : undefined
+    if (newUuid) {
+      const { rows: dup } = await client.query(
+        `SELECT id FROM supplier_invoices WHERE uuid_sat = $1 AND id <> $2`,
+        [newUuid, id])
+      if (dup.length) throw createError(409, `Ya existe una factura registrada con UUID ${newUuid}.`)
+    }
+
+    // Recalcular montos (preserva el TC ya guardado; gasto típico es MXN, rate=1)
+    let newSubtotal = parseFloat(inv.subtotal || 0)
+    let newTax      = parseFloat(inv.tax || 0)
+    if (subtotal !== undefined) newSubtotal = parseFloat(subtotal) || 0
+    if (tax !== undefined)      newTax      = parseFloat(tax) || 0
+    const newTotal = parseFloat((newSubtotal + newTax).toFixed(2))
+    if (wantsAmountChange && newTotal <= 0) throw createError(400, 'El total del gasto debe ser mayor a cero.')
+    const rate = inv.currency === 'USD' ? parseFloat(inv.exchange_rate_value || 1) : 1
+    const newTotalMxn = parseFloat((newTotal * rate).toFixed(2))
+
+    // Fecha + vencimiento (preserva la ventana de crédito original)
+    let newIssue = inv.invoice_date
+    let newDue   = inv.due_date
+    if (invoiceDate !== undefined && invoiceDate) {
+      const oldIssue = new Date(inv.invoice_date)
+      const oldDue   = inv.due_date ? new Date(inv.due_date) : oldIssue
+      const creditMs = oldDue.getTime() - oldIssue.getTime()
+      newIssue = invoiceDate
+      const d = new Date(invoiceDate); d.setTime(d.getTime() + creditMs)
+      newDue = d.toISOString().split('T')[0]
+    }
+
+    const set = []; const p = []; let i = 1
+    if (expenseCategoryId !== undefined) { set.push(`expense_category_id = $${i++}`); p.push(expenseCategoryId || null) }
+    if (supplierId !== undefined)        { set.push(`partner_id = $${i++}`);          p.push(supplierId || null) }
+    if (paymentMethod !== undefined)     { set.push(`payment_method = $${i++}`);      p.push(paymentMethod || null) }
+    if (documentNumber !== undefined)    { set.push(`invoice_number = $${i++}`);      p.push(documentNumber || inv.invoice_number) }
+    if (newUuid !== undefined)           { set.push(`uuid_sat = $${i}::uuid`, `xml_uuid = $${i}::varchar`); i++; p.push(newUuid) }
+    if (notes !== undefined)             { set.push(`notes = $${i++}`);               p.push(notes || null) }
+    if (invoiceDate !== undefined) {
+      set.push(`invoice_date = $${i++}::date`); p.push(newIssue)
+      set.push(`due_date = $${i++}::date`);     p.push(newDue)
+    }
+    if (wantsAmountChange) {
+      set.push(`subtotal = $${i++}`);  p.push(newSubtotal)
+      set.push(`tax = $${i++}`);       p.push(newTax)
+      set.push(`total = $${i++}`);     p.push(newTotal)
+      set.push(`total_mxn = $${i++}`); p.push(newTotalMxn)
+      set.push(`balance = $${i++}`);   p.push(newTotalMxn)   // sin pagos → balance = total
+    }
+    if (set.length === 0) throw createError(400, 'No hay campos para actualizar.')
+    set.push(`updated_at = NOW()`)
+    p.push(id, tenantId)
+    const { rows: upd } = await client.query(
+      `UPDATE supplier_invoices SET ${set.join(', ')} WHERE id = $${i++} AND tenant_id = $${i} RETURNING *`,
+      p
+    )
+
+    // Sync del CXP (monto, proveedor, folio, fechas)
+    if (inv.ap_id) {
+      const apSet = []; const ap = []; let j = 1
+      if (wantsAmountChange)            { apSet.push(`amount_total = $${j++}`);    ap.push(newTotalMxn) }
+      if (supplierId !== undefined)     { apSet.push(`partner_id = $${j++}`);      ap.push(supplierId || null) }
+      if (documentNumber !== undefined) { apSet.push(`document_number = $${j++}`); ap.push(documentNumber || inv.invoice_number) }
+      if (invoiceDate !== undefined) {
+        apSet.push(`issue_date = $${j++}::date`); ap.push(newIssue)
+        apSet.push(`due_date = $${j++}::date`);   ap.push(newDue)
+      }
+      if (apSet.length) {
+        ap.push(inv.ap_id, tenantId)
+        await client.query(
+          `UPDATE accounts_payable SET ${apSet.join(', ')} WHERE id = $${j++} AND tenant_id = $${j}`, ap)
+      }
+    }
+
+    await audit({
+      tenantId, userId, action: 'supplier_expense.updated',
+      resource: 'supplier_invoices', resourceId: id,
+      payload: { wantsAmountChange, newTotal }, ipAddress, userAgent,
+    })
+    return upd[0]
+  })
+}
+
+/**
+ * Cancela un GASTO (supplier_invoice is_expense=true) + su CXP. NO se permite si
+ * ya tiene un pago aplicado (orfandaría el pago — la reversa de pago de proveedor
+ * es una pieza aparte aún no construida). No borra el registro (status=cancelled);
+ * el listado y el saldo de CXP ya excluyen los cancelados.
+ */
+async function cancelExpense({ tenantId, id, userId, reason, ipAddress, userAgent }) {
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT si.id, si.status, si.invoice_number,
+              ap.id AS ap_id, ap.amount_paid AS ap_amount_paid
+         FROM supplier_invoices si
+         LEFT JOIN accounts_payable ap ON ap.document_id = si.id AND ap.tenant_id = si.tenant_id
+        WHERE si.id = $1 AND si.tenant_id = $2 AND si.is_expense = true
+        FOR UPDATE OF si`,
+      [id, tenantId]
+    )
+    if (!rows.length) throw createError(404, 'Gasto no encontrado.')
+    const inv = rows[0]
+    if (inv.status === 'cancelled') return { ...inv, status: 'cancelled' } // idempotente
+    if (parseFloat(inv.ap_amount_paid || 0) > 0) {
+      throw createError(409, 'El gasto tiene un pago aplicado. Reversa el pago antes de cancelar.')
+    }
+
+    await client.query(
+      `UPDATE supplier_invoices
+          SET status = 'cancelled', updated_at = NOW(),
+              notes = COALESCE(notes, '') || $3
+        WHERE id = $1 AND tenant_id = $2`,
+      [id, tenantId, reason ? `\n[Cancelado] ${reason}` : '\n[Cancelado]']
+    )
+    if (inv.ap_id) {
+      await client.query(
+        `UPDATE accounts_payable SET status = 'cancelled' WHERE id = $1 AND tenant_id = $2`,
+        [inv.ap_id, tenantId])
+    }
+
+    await audit({
+      tenantId, userId, action: 'supplier_expense.cancelled',
+      resource: 'supplier_invoices', resourceId: id,
+      payload: { reason: reason || null }, ipAddress, userAgent,
+    })
+    return { ...inv, status: 'cancelled' }
+  })
+}
+
 function createError(status, message) {
   const err = new Error(message)
   err.status = status
@@ -753,5 +963,6 @@ function createError(status, message) {
 
 module.exports = {
   registerInvoice, generateReceiptRemission, listInvoices, getInvoice, listExpenses,
+  getExpense, updateExpense, cancelExpense,
   registerPayment, getSupplierStatement,
 }
