@@ -836,6 +836,20 @@ router.post('/expenses/:id/cancel', checkPermission('expenses', 'create'), async
 })
 
 /**
+ * POST /api/purchases/expenses/:id/request-invoice
+ * Solicita al proveedor (por correo) la factura de un gasto sin CFDI.
+ */
+router.post('/expenses/:id/request-invoice', checkPermission('expenses', 'create'), async (req, res, next) => {
+  try {
+    const result = await supplierInvoiceService.requestExpenseInvoice({
+      tenantId: req.tenant.id, id: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
  * GET /api/purchases/invoices
  * Query: type, status, supplierId, from, to, page, limit
  */

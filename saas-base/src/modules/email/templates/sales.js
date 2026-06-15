@@ -175,4 +175,36 @@ function quotationEmail({ tenantName, brandColor, partnerName, docNumber, total,
   })
 }
 
-module.exports = { remisionEmail, invoiceEmail, quotationEmail }
+/**
+ * Email para SOLICITAR la factura (CFDI) a un proveedor por un gasto registrado
+ * sin comprobante. Lo manda el módulo de Gastos.
+ */
+function expenseInvoiceRequestEmail({ tenantName, brandColor, supplierName, concept, folio, total, currency, expenseDate }) {
+  const summaryRows = []
+  if (concept)     summaryRows.push(['Concepto', concept])
+  if (expenseDate) summaryRows.push(['Fecha del gasto', fmtDate(expenseDate)])
+  if (folio)       summaryRows.push(['Nuestra referencia', folio])
+
+  const rowsHTML = summaryRows.map(([k, v]) =>
+    `<div class="row"><span>${k}</span><strong>${escapeHTML(v)}</strong></div>`
+  ).join('')
+
+  return shellHTML({
+    headerName: tenantName,
+    brandColor,
+    title:      'Solicitud de factura',
+    preheader:  `Le solicitamos la factura de un gasto por ${fmtCurrency(total, currency)}`,
+    body: `
+      <h2>Solicitud de factura (CFDI)</h2>
+      <p>Estimados <strong>${escapeHTML(supplierName || 'proveedor')}</strong>:</p>
+      <p>Les solicitamos amablemente la <strong>factura (CFDI)</strong> correspondiente al siguiente gasto, para poder registrarla en nuestra contabilidad:</p>
+      <div class="summary">
+        ${rowsHTML}
+        <div class="row total"><span>Total</span><span>${fmtCurrency(total, currency)}</span></div>
+      </div>
+      <p style="font-size:13px;color:#6b7280;">Pueden responder a este correo con el XML y el PDF del comprobante. ¡Gracias!</p>
+    `,
+  })
+}
+
+module.exports = { remisionEmail, invoiceEmail, quotationEmail, expenseInvoiceRequestEmail }

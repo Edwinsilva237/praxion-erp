@@ -296,6 +296,7 @@ function GastoModal({ categories, onClose, onSaved }) {
 
 // ── Modal: detalle + editar + cancelar ──────────────────────────────────────
 function GastoDetalleModal({ id, categories, onClose, onSaved }) {
+  const qc = useQueryClient()
   const { data: exp, isLoading } = useQuery({
     queryKey: ['expense', id],
     queryFn:  () => purchasesApi.getExpense(id),
@@ -311,6 +312,7 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const [error, setError] = useState(null)
   const [askCancel, setAskCancel] = useState(false)
   const [cancelReason, setCancelReason] = useState('')
+  const [requestMsg, setRequestMsg] = useState(null)
 
   useEffect(() => {
     if (exp && !form) {
@@ -360,6 +362,15 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
     onError: (e) => setError(e.response?.data?.error || e.message),
   })
 
+  const requestInv = useMutation({
+    mutationFn: () => purchasesApi.requestExpenseInvoice(id),
+    onSuccess: (r) => {
+      setRequestMsg(`Solicitud enviada a ${(r.sentTo || []).join(', ') || 'el proveedor'}.`)
+      qc.invalidateQueries({ queryKey: ['expense', id] })
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message),
+  })
+
   const sub = parseFloat(form?.subtotal) || 0
   const iva = parseFloat(form?.tax) || 0
   const total = +(sub + iva).toFixed(2)
@@ -394,6 +405,30 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
             {isPaid && !isCancelled && (
               <div className="bg-surface-elevated/40 rounded-lg px-3 py-2 text-xs text-ink-secondary">
                 Gasto con pago aplicado: el monto no se puede editar. Reversa el pago primero (desde Cuentas por pagar).
+              </div>
+            )}
+
+            {/* Solicitar factura al proveedor (gasto sin CFDI) */}
+            {!isCancelled && !exp.has_cfdi && exp.partner_id && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 flex flex-col gap-2">
+                <p className="text-xs text-ink-secondary">
+                  {exp.invoice_requested_at
+                    ? `Factura solicitada al proveedor el ${fmtDateOnly(exp.invoice_requested_at)}.`
+                    : 'Este gasto no tiene factura. Pídesela al proveedor por correo.'}
+                </p>
+                {requestMsg
+                  ? <p className="text-xs text-brand-300">{requestMsg}</p>
+                  : (
+                    <Can do="expenses:create">
+                      <button type="button" className="btn-secondary text-xs self-start"
+                        disabled={requestInv.isPending}
+                        onClick={() => { setError(null); requestInv.mutate() }}>
+                        {requestInv.isPending
+                          ? <Spinner size="sm" />
+                          : (exp.invoice_requested_at ? 'Volver a solicitar' : 'Solicitar factura')}
+                      </button>
+                    </Can>
+                  )}
               </div>
             )}
 
@@ -520,7 +555,9 @@ export default function Gastos() {
   const [filterCat, setFilterCat] = useState('')
   const [filterCfdi, setFilterCfdi] = useState('')
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7))
+  const [page, setPage] = useState(1)
   const [msg, setMsg] = useState(null)
+  const PAGE = 20
 
   const { from, to } = monthRange(month)
 
@@ -531,16 +568,21 @@ export default function Gastos() {
 
   const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')
 
+  // Cualquier cambio de filtro/orden vuelve a la página 1.
+  useEffect(() => { setPage(1) }, [filterCat, filterCfdi, month, sortBy, sortDir])
+
   const { data: resp, isLoading } = useQuery({
-    queryKey: ['expenses', filterCat, filterCfdi, from, to, sortBy, sortDir],
+    queryKey: ['expenses', filterCat, filterCfdi, from, to, sortBy, sortDir, page],
     queryFn:  () => purchasesApi.listExpenses({
       categoryId: filterCat || undefined,
       hasCfdi: filterCfdi || undefined,
       from, to,
       sortBy, sortDir,
+      page, limit: PAGE,
     }),
   })
   const expenses = resp?.data || []
+  const total = resp?.total || 0
 
   const { data: summary } = useQuery({
     queryKey: ['expenses-summary', filterCat, filterCfdi, from, to],
@@ -700,6 +742,21 @@ export default function Gastos() {
               </tbody>
             </table>
           </div>
+
+          {/* Paginación */}
+          {total > PAGE && (
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-ink-muted">
+                Mostrando {(page - 1) * PAGE + 1}–{Math.min(page * PAGE, total)} de {total}
+              </p>
+              <div className="flex gap-2">
+                <button disabled={page === 1} onClick={() => setPage(p => p - 1)}
+                  className="btn-secondary btn-sm disabled:opacity-40">← Anterior</button>
+                <button disabled={page * PAGE >= total} onClick={() => setPage(p => p + 1)}
+                  className="btn-secondary btn-sm disabled:opacity-40">Siguiente →</button>
+              </div>
+            </div>
+          )}
         </>
       )}
 

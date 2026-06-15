@@ -82,6 +82,7 @@ export const purchasesApi = {
   getExpense:    (id) => api.get(`${B}/expenses/${id}`).then(r => r.data),
   updateExpense: (id, body) => api.patch(`${B}/expenses/${id}`, body).then(r => r.data),
   cancelExpense: (id, reason) => api.post(`${B}/expenses/${id}/cancel`, { reason }).then(r => r.data),
+  requestExpenseInvoice: (id) => api.post(`${B}/expenses/${id}/request-invoice`).then(r => r.data),
 
   // ── Devoluciones a proveedor (Fase 1) ──────────────────────────────────
   listReturnReasons: (includeInactive = false) =>

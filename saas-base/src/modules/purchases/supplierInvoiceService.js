@@ -4,6 +4,8 @@ const { query, withTransaction } = require('../../db')
 const { audit }                  = require('../../utils/audit')
 const { buildOrderBy }           = require('../../utils/sortOrder')
 const { getRateForDate }         = require('../exchange-rates/exchangeRateService')
+const { enqueueEmail }           = require('../../queues/emailQueue')
+const { expenseInvoiceRequestEmail } = require('../email/templates/sales')
 
 /**
  * Registra una factura o remisión de proveedor y genera CXP automáticamente.
@@ -811,7 +813,7 @@ async function getExpense({ tenantId, id }) {
             si.currency, si.exchange_rate_value,
             si.subtotal, si.tax, si.total, si.total_mxn,
             si.generic_supplier, si.notes, si.is_expense,
-            si.expense_category_id, si.payment_method,
+            si.expense_category_id, si.payment_method, si.invoice_requested_at,
             ec.name AS expense_category_name,
             bp.name AS partner_name, bp.rfc AS partner_rfc,
             ap.id AS ap_id, ap.status AS ap_status,
@@ -1010,6 +1012,83 @@ async function cancelExpense({ tenantId, id, userId, reason, ipAddress, userAgen
   })
 }
 
+/**
+ * Solicita al proveedor (por correo) la factura de un gasto registrado SIN CFDI.
+ * Manda un correo a los contactos del proveedor con email y marca
+ * invoice_requested_at. Reusa enqueueEmail + el template de Gastos.
+ */
+async function requestExpenseInvoice({ tenantId, id, userId, ipAddress, userAgent }) {
+  const { rows } = await query(
+    `SELECT si.id, si.status, si.uuid_sat, si.partner_id, si.invoice_number,
+            si.total, si.currency, si.invoice_date, si.notes, si.is_expense,
+            bp.name AS partner_name, bp.tax_name AS partner_tax_name,
+            ec.name AS category_name,
+            t.name AS tenant_name, t.brand_color_primary, t.notification_email
+       FROM supplier_invoices si
+       LEFT JOIN business_partners bp ON bp.id = si.partner_id
+       LEFT JOIN tenant_expense_categories ec ON ec.id = si.expense_category_id
+       LEFT JOIN tenants t ON t.id = si.tenant_id
+      WHERE si.id = $1 AND si.tenant_id = $2 AND si.is_expense = true`,
+    [id, tenantId]
+  )
+  if (!rows.length) throw createError(404, 'Gasto no encontrado.')
+  const exp = rows[0]
+  if (exp.status === 'cancelled') throw createError(409, 'El gasto está cancelado.')
+  if (exp.uuid_sat) throw createError(400, 'Este gasto ya tiene factura (CFDI).')
+  if (!exp.partner_id) throw createError(400, 'El gasto no tiene un proveedor del catálogo a quien solicitarle la factura.')
+
+  // Correos del proveedor (contactos con email; primario primero)
+  const { rows: contacts } = await query(
+    `SELECT email FROM business_partner_contacts
+      WHERE business_partner_id = $1 AND email IS NOT NULL AND email <> ''
+      ORDER BY is_primary DESC NULLS LAST, id ASC`,
+    [exp.partner_id]
+  )
+  const recipients = contacts.map(c => c.email).filter(Boolean)
+  if (!recipients.length) {
+    throw createError(400, 'El proveedor no tiene contactos con correo. Captura uno en Socios para poder solicitar la factura.')
+  }
+
+  // Copia/responder-a: notification_email del tenant, o el correo del usuario.
+  let senderEmail = exp.notification_email || null
+  if (!senderEmail && userId) {
+    const { rows: u } = await query(`SELECT email FROM users WHERE id = $1 AND tenant_id = $2`, [userId, tenantId])
+    senderEmail = u[0]?.email || null
+  }
+  if (senderEmail && recipients.includes(senderEmail)) senderEmail = null
+
+  const tenantName = exp.tenant_name || 'Emisor'
+  const html = expenseInvoiceRequestEmail({
+    tenantName, brandColor: exp.brand_color_primary || null,
+    supplierName: exp.partner_tax_name || exp.partner_name || '',
+    concept: exp.category_name || exp.notes || 'Gasto',
+    folio: exp.invoice_number,
+    total: exp.total, currency: exp.currency || 'MXN',
+    expenseDate: exp.invoice_date,
+  })
+
+  await enqueueEmail({
+    tenantId, to: recipients,
+    bcc: senderEmail || undefined, replyTo: senderEmail || undefined,
+    subject: `Solicitud de factura — ${tenantName}`,
+    html, fromName: tenantName,
+  })
+
+  const { rows: upd } = await query(
+    `UPDATE supplier_invoices SET invoice_requested_at = NOW(), updated_at = NOW()
+      WHERE id = $1 AND tenant_id = $2 RETURNING invoice_requested_at`,
+    [id, tenantId]
+  )
+
+  await audit({
+    tenantId, userId, action: 'supplier_expense.invoice_requested',
+    resource: 'supplier_invoices', resourceId: id,
+    payload: { sentTo: recipients }, ipAddress, userAgent,
+  })
+
+  return { requested_at: upd[0].invoice_requested_at, sentTo: recipients }
+}
+
 function createError(status, message) {
   const err = new Error(message)
   err.status = status
@@ -1018,6 +1097,6 @@ function createError(status, message) {
 
 module.exports = {
   registerInvoice, generateReceiptRemission, listInvoices, getInvoice, listExpenses,
-  listExpensesSummary, getExpense, updateExpense, cancelExpense,
+  listExpensesSummary, getExpense, updateExpense, cancelExpense, requestExpenseInvoice,
   registerPayment, getSupplierStatement,
 }
