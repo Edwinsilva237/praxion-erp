@@ -15,6 +15,18 @@ const { pool, query, withBypass } = require('../../src/db')
 const {
   registerInvoice, getExpense, updateExpense, cancelExpense, registerPayment,
 } = require('../../src/modules/purchases/supplierInvoiceService')
+const { parseSupplierDocument } = require('../../src/modules/purchases/documentParserService')
+
+function cfdiXml({ rfc, uuid, subtotal = 1000, total = 1160 }) {
+  return `<?xml version="1.0" encoding="UTF-8"?>` +
+    `<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0" ` +
+    `Serie="A" Folio="123" Fecha="2026-06-15T10:00:00" SubTotal="${subtotal}" Total="${total}" Moneda="MXN">` +
+    `<cfdi:Emisor Rfc="${rfc}" Nombre="PROVEEDOR XML SA" RegimenFiscal="601"/>` +
+    `<cfdi:Receptor Rfc="XAXX010101000" Nombre="MI EMPRESA"/>` +
+    `<cfdi:Complemento><tfd:TimbreFiscalDigital ` +
+    `xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" UUID="${uuid}"/></cfdi:Complemento>` +
+    `</cfdi:Comprobante>`
+}
 
 let tenantId, userId, supplierId, categoryId, categoryId2
 
@@ -115,5 +127,39 @@ describe('Gastos — detalle, edición y cancelación', () => {
     expect(ap.status).toBe('cancelled')
     await expect(updateExpense({ tenantId, id: exp.id, userId, notes: 'x' }))
       .rejects.toMatchObject({ status: 409 })
+  })
+
+  // ── Fase 2: alta de gasto desde CFDI XML ──────────────────────────────────
+  test('parsear un CFDI XML y crear el gasto desde sus datos + respaldo + anti-dup', async () => {
+    const uuid = crypto.randomUUID()
+    const xml  = cfdiXml({ rfc: 'PXM010101AB1', uuid })
+
+    // El parser extrae los datos del CFDI
+    const parsed = await parseSupplierDocument(Buffer.from(xml), 'application/xml', 'cfdi.xml')
+    expect(parsed.uuid).toBe(uuid)
+    expect(parsed.subtotal).toBeCloseTo(1000)
+    expect(parsed.tax).toBeCloseTo(160)
+    expect(parsed.emisor.rfc).toBe('PXM010101AB1')
+
+    // Se crea el gasto con esos datos (reusa registerInvoice) + guarda el XML de respaldo
+    const exp = await registerInvoice({
+      tenantId, supplierId,
+      documentNumber: [parsed.serie, parsed.folio].filter(Boolean).join('-'),
+      subtotal: parsed.subtotal, tax: parsed.tax, total: parsed.total,
+      invoiceDate: parsed.invoiceDate, isExpense: true, expenseCategoryId: categoryId,
+      uuidSat: parsed.uuid, xmlContent: xml, userId,
+    })
+    const got = await getExpense({ tenantId, id: exp.id })
+    expect(got.has_cfdi).toBe(true)
+    expect(got.uuid_sat).toBe(uuid)
+    const { rows } = await withBypass(() => query(
+      `SELECT xml_content FROM supplier_invoices WHERE id = $1`, [exp.id]))
+    expect(rows[0].xml_content).toContain('Comprobante')   // respaldo guardado
+
+    // Anti-duplicado: el mismo UUID no se registra dos veces
+    await expect(registerInvoice({
+      tenantId, supplierId, documentNumber: 'DUP', subtotal: 1, tax: 0, total: 1,
+      isExpense: true, expenseCategoryId: categoryId, uuidSat: uuid, userId,
+    })).rejects.toMatchObject({ status: 409 })
   })
 })

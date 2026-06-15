@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTableSort } from '@/hooks/useTableSort'
 import { SortableHeader } from '@/components/ui/SortableHeader'
@@ -53,6 +53,37 @@ function GastoModal({ categories, onClose, onSaved }) {
   const [paymentReference, setPaymentReference] = useState('')
   const [notes, setNotes]             = useState('')
   const [error, setError]             = useState(null)
+  // Fase 2: carga de CFDI/PDF
+  const [parsing, setParsing]         = useState(false)
+  const [parsedFrom, setParsedFrom]   = useState(null)   // { name, rfc, matched, method }
+  const [xmlContent, setXmlContent]   = useState(null)
+  const [currency, setCurrency]       = useState('MXN')
+  const fileRef = useRef(null)
+
+  async function handleFile(file) {
+    if (!file) return
+    setParsing(true); setError(null)
+    try {
+      const fd = new FormData(); fd.append('file', file)
+      const r = await purchasesApi.parseExpenseDocument(fd)
+      if (r.subtotal != null) setSubtotal(String(r.subtotal))
+      if (r.tax != null)      setTax(String(r.tax))
+      if (r.uuid)             { setUuid(r.uuid); setHasCfdi(true) }
+      const folio = [r.serie, r.folio].filter(Boolean).join('-')
+      if (folio)              setDocNumber(folio)
+      if (r.invoiceDate)      setInvoiceDate(r.invoiceDate)
+      if (r.currency)         setCurrency(r.currency)
+      if (r.matchedPartner)   setSupplierId(r.matchedPartner.id)
+      setParsedFrom({ name: r.emisor?.name, rfc: r.emisor?.rfc, matched: !!r.matchedPartner, method: r.method })
+      // Respaldo del XML (solo si el archivo es XML)
+      setXmlContent((file.name || '').toLowerCase().endsWith('.xml') ? await file.text() : null)
+    } catch (e) {
+      setError(e.response?.data?.error || 'No se pudo leer el archivo. Captura los datos a mano.')
+    } finally {
+      setParsing(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
 
   const { data: suppliersResp } = useQuery({
     queryKey: ['partners', 'suppliers'],
@@ -79,7 +110,9 @@ function GastoModal({ categories, onClose, onSaved }) {
         documentNumber: docNumber.trim() || undefined,
         uuidSat: hasCfdi ? (uuid.trim() || undefined) : undefined,
         invoiceDate,
+        currency,
         subtotal: sub, tax: iva, total,
+        xmlContent: xmlContent || undefined,
         paymentMethod,
         markPaid,
         paymentReference: markPaid ? (paymentReference.trim() || undefined) : undefined,
@@ -101,6 +134,30 @@ function GastoModal({ categories, onClose, onSaved }) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
             </svg>
           </button>
+        </div>
+
+        {/* Fase 2: cargar el CFDI/PDF y llenar el form solo */}
+        <div className="border border-dashed border-line-strong rounded-xl p-3 flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-ink-muted">¿Tienes el CFDI? Cárgalo y se llena solo.</span>
+            <button type="button" onClick={() => fileRef.current?.click()} disabled={parsing}
+              className="btn-secondary text-xs whitespace-nowrap">
+              {parsing ? <Spinner size="sm" /> : 'Cargar XML / PDF'}
+            </button>
+            <input ref={fileRef} type="file" accept=".xml,application/xml,text/xml,application/pdf"
+              className="hidden" onChange={e => handleFile(e.target.files?.[0])} />
+          </div>
+          {parsedFrom && (
+            <p className="text-[11px] text-ink-secondary leading-snug">
+              {parsedFrom.method === 'ai' ? 'Leído del PDF con IA'
+                : parsedFrom.method === 'text' ? 'Leído del PDF' : 'Leído del CFDI'}
+              {' · Emisor: '}<strong>{parsedFrom.name || parsedFrom.rfc || '—'}</strong>
+              {parsedFrom.rfc ? ` (${parsedFrom.rfc})` : ''}{' · '}
+              {parsedFrom.matched
+                ? 'proveedor encontrado'
+                : <span className="text-amber-500">no está en tu catálogo — selecciónalo o créalo</span>}
+            </p>
+          )}
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

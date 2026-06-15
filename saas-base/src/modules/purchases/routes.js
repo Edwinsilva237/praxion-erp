@@ -745,6 +745,33 @@ router.post('/expenses', checkPermission('expenses', 'create'), async (req, res,
 })
 
 /**
+ * POST /api/purchases/expenses/parse
+ * Parsea un XML (CFDI) o PDF de gasto y precarga los datos para el form (espejo
+ * de /parse-document pero gateado por `expenses`). Empareja al proveedor por RFC
+ * del emisor. NO guarda nada — el alta es con POST /expenses (anti-dup por UUID).
+ */
+router.post('/expenses/parse',
+  checkPermission('expenses', 'create'),
+  uploadDoc.single('file'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'Se requiere un archivo XML o PDF.' })
+      const result = await documentParserService.parseSupplierDocument(
+        req.file.buffer, req.file.mimetype, req.file.originalname)
+      let matchedPartner = null
+      if (result?.emisor?.rfc) {
+        const { rows } = await require('../../db').query(
+          `SELECT id, name, rfc FROM business_partners
+            WHERE tenant_id = $1 AND rfc = $2 AND is_active = true LIMIT 1`,
+          [req.tenant.id, result.emisor.rfc])
+        if (rows[0]) matchedPartner = rows[0]
+      }
+      res.json({ ...result, matchedPartner })
+    } catch (err) { next(err) }
+  }
+)
+
+/**
  * GET /api/purchases/expenses/:id
  * Detalle de un gasto (con categoría, proveedor y los dos semáforos).
  */
