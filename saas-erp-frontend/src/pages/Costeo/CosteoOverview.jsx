@@ -70,7 +70,7 @@ export default function CosteoOverview() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatusCard
-          title="Gastos en catálogo"
+          title="Costos en catálogo"
           value={activeItems.length}
           subtitle={`${items.length - activeItems.length} inactivo(s)`}
           to="/costeo/gastos-indirectos"
@@ -134,7 +134,7 @@ export default function CosteoOverview() {
 // ─── Diagrama de flujo ────────────────────────────────────────────────────────
 function FlowDiagram() {
   const steps = [
-    { num: 1, label: 'Define tus gastos',     desc: 'Renta, luz, sueldos…' },
+    { num: 1, label: 'Define tus costos',     desc: 'Renta, luz, sueldos…' },
     { num: 2, label: 'Estima cada mes',       desc: 'Cuánto vas a gastar' },
     { num: 3, label: 'Produce normalmente',   desc: 'Cada turno se prorratea' },
     { num: 4, label: 'Cierra con los reales', desc: 'Recoste de órdenes' },
@@ -143,7 +143,7 @@ function FlowDiagram() {
     <section className="card">
       <h2 className="text-sm font-semibold text-ink-primary mb-1">¿Cómo funciona el costeo?</h2>
       <p className="text-xs text-ink-secondary mb-4 leading-relaxed">
-        El sistema reparte (<em>prorratea</em>) los gastos fijos del mes (renta, luz, sueldos administrativos…) entre los turnos
+        El sistema reparte (<em>prorratea</em>) los costos fijos del mes (renta, luz, sueldos administrativos…) entre los turnos
         producidos, para que cada orden cargue su parte justa. Tú das un <strong>estimado</strong> a inicio de mes; al cerrar
         capturas los <strong>reales</strong> y el sistema <strong>recostea</strong> automáticamente las órdenes del período.
       </p>
@@ -213,7 +213,7 @@ function buildChecklist({ activeItems, periods, periodsWithEstimate, periodsMiss
   const list = []
   // Paso 1
   list.push({
-    title: 'Define tus gastos fijos en el catálogo',
+    title: 'Define tus costos fijos en el catálogo',
     description: 'Renta, energía, mantenimiento, sueldos administrativos, etc.',
     done: activeItems.length > 0,
     cta: 'Ir al catálogo',
@@ -222,14 +222,14 @@ function buildChecklist({ activeItems, periods, periodsWithEstimate, periodsMiss
   // Paso 2
   list.push({
     title: `Genera los períodos de ${monthLabel}`,
-    description: 'Cada gasto activo genera un renglón mensual donde defines tu estimado.',
+    description: 'Cada costo activo genera un renglón mensual donde defines tu estimado.',
     done: activeItems.length > 0 && periods.length > 0,
     cta: periods.length === 0 && activeItems.length > 0 ? 'Generar períodos' : 'Ver períodos',
     to: '/costeo/periodos',
   })
   // Paso 3
   list.push({
-    title: `Captura el monto estimado de cada gasto del mes`,
+    title: `Captura el monto estimado de cada costo del mes`,
     description: periodsMissingEstimate.length > 0
       ? `Faltan ${periodsMissingEstimate.length} de ${periods.length}. El estimado se prorratea entre los turnos producidos.`
       : 'Listo — cada turno está absorbiendo su parte del estimado.',
@@ -269,7 +269,7 @@ function ConceptosClave() {
       {open && (
         <div className="mt-4 pt-4 border-t border-line-subtle space-y-4 text-sm text-ink-secondary leading-relaxed">
           <Concept
-            term="Gasto indirecto"
+            term="Costo indirecto"
             short="Costo que no es materia prima."
             detail="Renta, energía, sueldos administrativos, mantenimiento… No se carga a una orden específica; se reparte entre todos los turnos del período."
           />
@@ -288,7 +288,7 @@ function ConceptosClave() {
           <Concept
             term="Frecuencia"
             short="Cada cuánto se captura el monto."
-            detail="Mensual es lo normal (renta, luz). Quincenal para nóminas quincenales. Anual para gastos como impuestos prediales. Por evento cuando es esporádico (reparación grande)."
+            detail="Mensual es lo normal (renta, luz). Quincenal para nóminas quincenales. Anual para costos como impuestos prediales. Por evento cuando es esporádico (reparación grande)."
           />
           <Concept
             term="Estimado vs Real"

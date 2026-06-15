@@ -98,7 +98,7 @@ export const NAV_SECTIONS = [
     label: 'Costeo',
     items: [
       { label: 'Resumen',           to: '/costeo',                   iconKey: 'card',     permission: 'overhead:read',   module: 'production', end: true },
-      { label: 'Gastos indirectos', to: '/costeo/gastos-indirectos', iconKey: 'coins',    permission: 'overhead:read',   module: 'production' },
+      { label: 'Costos indirectos', to: '/costeo/gastos-indirectos', iconKey: 'coins',    permission: 'overhead:read',   module: 'production' },
       { label: 'Períodos del mes',  to: '/costeo/periodos',          iconKey: 'calendar', permission: 'overhead:read',   module: 'production' },
       { label: 'Cierre de mes',     to: '/costeo/cierre',            iconKey: 'receipt',  permission: 'overhead:update', module: 'production' },
       { label: 'Reporte varianza',  to: '/costeo/varianza',          iconKey: 'chartBar', permission: 'overhead:read',   module: 'production' },

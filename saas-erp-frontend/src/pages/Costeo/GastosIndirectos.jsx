@@ -44,12 +44,12 @@ const HELP_FREQ = {
     { label: 'Quincenal',  value: 'Nómina pagada cada 15 días' },
     { label: 'Mensual',    value: 'Renta, luz, sueldos (lo más común)' },
     { label: 'Anual',      value: 'Predial, seguro, licencias' },
-    { label: 'Por evento', value: 'Reparación grande, gasto esporádico' },
+    { label: 'Por evento', value: 'Reparación grande, costo esporádico' },
   ],
 }
 const HELP_CODIGO = {
   title: 'Código',
-  body: 'Identificador corto en minúsculas y sin espacios. Sirve para referirse al gasto en reportes (no cambia después de crear).',
+  body: 'Identificador corto en minúsculas y sin espacios. Sirve para referirse al costo en reportes (no cambia después de crear).',
   examples: [
     { label: 'Bueno',  value: 'renta, energia_electrica, mantenimiento' },
     { label: 'Evitar', value: '"Renta del local 2026" (muy largo)' },
@@ -96,7 +96,7 @@ function ItemModal({ item, onClose, onSaved }) {
       <div className="bg-surface-primary rounded-2xl shadow-xl w-full max-w-lg border border-line-subtle flex flex-col max-h-[92vh]">
         <div className="flex items-center justify-between px-5 py-4 border-b border-line-subtle shrink-0">
           <h3 className="text-sm font-semibold text-ink-primary">
-            {isNew ? 'Nuevo gasto indirecto' : `Editar · ${item.name}`}
+            {isNew ? 'Nuevo costo indirecto' : `Editar · ${item.name}`}
           </h3>
           <button onClick={onClose} className="text-ink-muted hover:text-ink-primary">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -244,7 +244,7 @@ export default function GastosIndirectos() {
     <div className="page-enter flex flex-col gap-6">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Gastos indirectos</h1>
+          <h1 className="page-title">Costos indirectos</h1>
           <p className="page-subtitle">Catálogo de costos fijos a prorratear entre turnos</p>
         </div>
         {canManage && (
@@ -252,14 +252,14 @@ export default function GastosIndirectos() {
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/>
             </svg>
-            Nuevo gasto
+            Nuevo costo
           </button>
         )}
       </div>
 
       <CollapsibleHelp title="¿Qué es esto?">
         <p className="leading-relaxed">
-          Catálogo de tus <strong>gastos fijos</strong> (renta, luz, sueldos administrativos…). Cada gasto genera un
+          Catálogo de tus <strong>costos fijos</strong> (renta, luz, sueldos administrativos…). Cada costo genera un
           renglón por mes en "Períodos del mes". Al cerrar el mes capturas los montos reales y el sistema recostea
           automáticamente cada orden producida.
         </p>
@@ -290,9 +290,9 @@ export default function GastosIndirectos() {
         <div className="flex justify-center py-16"><Spinner /></div>
       ) : items.length === 0 ? (
         <div className="empty-state">
-          <p className="font-medium text-ink-secondary">Sin gastos indirectos configurados</p>
+          <p className="font-medium text-ink-secondary">Sin costos indirectos configurados</p>
           <p className="text-sm text-ink-muted mt-1 max-w-md mx-auto">
-            Agrega los gastos fijos que quieres prorratear entre turnos: renta, energía eléctrica, sueldos, etc.
+            Agrega los costos fijos que quieres prorratear entre turnos: renta, energía eléctrica, sueldos, etc.
           </p>
           {canManage && (
             <div className="flex items-center justify-center gap-2 mt-3">
