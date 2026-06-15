@@ -211,30 +211,49 @@ async function generatePurchaseOrderPDF({ tenantId, orderId }) {
        .text('LÍNEAS A SURTIR', 40, y)
 
     y += 14
-    doc.rect(40, y, W, 16).fill(azul)
-    doc.fillColor('white').fontSize(7.5).font('Helvetica-Bold')
     // Suma = 525 (W=532). Cant. con padding derecho para no pegarse a Unidad.
     const cw = { clave: 60, desc: 175, alm: 70, cant: 50, unidad: 45, precio: 55, importe: 70 }
     let cx = 45
-    doc.text('Clave',       cx, y + 4, { width: cw.clave });    cx += cw.clave
-    doc.text('Descripción', cx, y + 4, { width: cw.desc });     cx += cw.desc
-    doc.text('Almacén',     cx, y + 4, { width: cw.alm });      cx += cw.alm
-    doc.text('Cant.',       cx, y + 4, { width: cw.cant - 6, align: 'right' }); cx += cw.cant
-    doc.text('Unidad',      cx, y + 4, { width: cw.unidad });   cx += cw.unidad
-    doc.text('P. Unit.',    cx, y + 4, { width: cw.precio, align: 'right' }); cx += cw.precio
-    doc.text('Importe',     cx, y + 4, { width: cw.importe,align: 'right' })
+    // Cabecera de la tabla — extraída para poder repetirla al saltar de página.
+    const drawLinesHeader = () => {
+      doc.rect(40, y, W, 16).fill(azul)
+      doc.fillColor('white').fontSize(7.5).font('Helvetica-Bold')
+      let hx = 45
+      doc.text('Clave',       hx, y + 4, { width: cw.clave });    hx += cw.clave
+      doc.text('Descripción', hx, y + 4, { width: cw.desc });     hx += cw.desc
+      doc.text('Almacén',     hx, y + 4, { width: cw.alm });      hx += cw.alm
+      doc.text('Cant.',       hx, y + 4, { width: cw.cant - 6, align: 'right' }); hx += cw.cant
+      doc.text('Unidad',      hx, y + 4, { width: cw.unidad });   hx += cw.unidad
+      doc.text('P. Unit.',    hx, y + 4, { width: cw.precio, align: 'right' }); hx += cw.precio
+      doc.text('Importe',     hx, y + 4, { width: cw.importe, align: 'right' })
+      y += 16
+    }
+    drawLinesHeader()
 
-    y += 16
+    const bottomLimit = doc.page.height - 70
     lines.forEach((line, i) => {
-      const rowH = 22
+      const desc = line.item_name || line.description || ''
+      // La descripción AHORA envuelve a varias líneas — antes se truncaba con
+      // ellipsis y cortaba los nombres largos. La altura de la fila se ajusta
+      // a la descripción (que es la columna más alta).
+      doc.fontSize(7.5).font('Helvetica')
+      const descH = doc.heightOfString(desc, { width: cw.desc - 5 })
+      const rowH  = Math.max(22, descH + 12)
+
+      // Salto de página: una fila alta puede no caber antes del pie.
+      if (y + rowH > bottomLimit) {
+        doc.addPage()
+        y = 40
+        drawLinesHeader()
+      }
+
       doc.rect(40, y, W, rowH).fill(i % 2 === 0 ? 'white' : gris)
       doc.fillColor(negro).fontSize(7.5).font('Helvetica')
       cx = 45
       doc.text(line.item_sku || line.sat_product_code || '', cx, y + 7,
                { width: cw.clave, ellipsis: true, height: 10, lineBreak: false })
       cx += cw.clave
-      doc.text(line.item_name || line.description || '', cx, y + 7,
-               { width: cw.desc - 5, ellipsis: true, height: 10, lineBreak: false })
+      doc.text(desc, cx, y + 7, { width: cw.desc - 5 })
       cx += cw.desc
       doc.text(line.warehouse_name || '—', cx, y + 7,
                { width: cw.alm - 3, ellipsis: true, height: 10, lineBreak: false })

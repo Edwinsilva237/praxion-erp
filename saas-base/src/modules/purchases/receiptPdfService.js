@@ -162,30 +162,50 @@ async function generateReceiptPDF({ tenantId, receiptId }) {
        .text('MATERIAL RECIBIDO', 40, y)
 
     y += 14
-    doc.rect(40, y, W, 16).fill(azul)
-    doc.fillColor('white').fontSize(7.5).font('Helvetica-Bold')
     const cw = { desc: 232, oc: 78, rec: 78, precio: 66, importe: 68 }
     let cx = 45
-    doc.text('Artículo', cx, y + 4); cx += cw.desc
-    doc.text('OC pend.', cx, y + 4, { width: cw.oc, align: 'right' }); cx += cw.oc
-    doc.text('Recibido', cx, y + 4, { width: cw.rec, align: 'right' }); cx += cw.rec
-    doc.text('P. Unit.', cx, y + 4, { width: cw.precio, align: 'right' }); cx += cw.precio
-    doc.text('Importe', cx, y + 4, { width: cw.importe, align: 'right' })
+    // Cabecera de la tabla — extraída para poder repetirla al saltar de página.
+    const drawLinesHeader = () => {
+      doc.rect(40, y, W, 16).fill(azul)
+      doc.fillColor('white').fontSize(7.5).font('Helvetica-Bold')
+      let hx = 45
+      doc.text('Artículo', hx, y + 4); hx += cw.desc
+      doc.text('OC pend.', hx, y + 4, { width: cw.oc, align: 'right' }); hx += cw.oc
+      doc.text('Recibido', hx, y + 4, { width: cw.rec, align: 'right' }); hx += cw.rec
+      doc.text('P. Unit.', hx, y + 4, { width: cw.precio, align: 'right' }); hx += cw.precio
+      doc.text('Importe', hx, y + 4, { width: cw.importe, align: 'right' })
+      y += 16
+    }
+    drawLinesHeader()
 
-    y += 16
+    const bottomLimit = doc.page.height - 70
     let total = 0
     lines.forEach((line, i) => {
-      const rowH = 20
       const recibido = parseFloat(line.quantity_received || 0)
       const precio   = parseFloat(line.unit_price || 0)
       const importe  = recibido * precio
       total += importe
       const unit = line.item_unit || line.unit || ''
+      const desc = line.item_name || line.description || '—'
+
+      // Altura de fila dinámica: la descripción envuelve a varias líneas y la
+      // fila crece con ella — antes rowH fija (20) hacía que un nombre largo se
+      // encimara con la fila de abajo.
+      doc.fontSize(7.5).font('Helvetica')
+      const descH = doc.heightOfString(desc, { width: cw.desc - 5 })
+      const rowH  = Math.max(20, descH + 10)
+
+      // Salto de página: una fila alta puede no caber antes del pie.
+      if (y + rowH > bottomLimit) {
+        doc.addPage()
+        y = 40
+        drawLinesHeader()
+      }
 
       doc.rect(40, y, W, rowH).fill(i % 2 === 0 ? 'white' : gris)
       doc.fillColor(negro).fontSize(7.5).font('Helvetica')
       cx = 45
-      doc.text(line.item_name || line.description || '—', cx, y + 6, { width: cw.desc - 5 }); cx += cw.desc
+      doc.text(desc, cx, y + 6, { width: cw.desc - 5 }); cx += cw.desc
       doc.text(line.ordered_qty != null ? `${fmtNum(line.ordered_qty)} ${unit}` : '—', cx, y + 6, { width: cw.oc, align: 'right' }); cx += cw.oc
       doc.text(`${fmtNum(recibido)} ${unit}`, cx, y + 6, { width: cw.rec, align: 'right' }); cx += cw.rec
       doc.text(fmt(precio), cx, y + 6, { width: cw.precio, align: 'right' }); cx += cw.precio
