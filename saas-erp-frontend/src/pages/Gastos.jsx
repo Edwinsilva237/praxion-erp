@@ -38,6 +38,18 @@ const METHOD_OPTS = [
 ]
 const methodLabel = (m) => (METHOD_OPTS.find(([v]) => v === m)?.[1]) || null
 
+// Rango de fechas (from/to) y etiqueta legible a partir de un mes 'YYYY-MM'.
+function monthRange(m) {
+  if (!m) return { from: undefined, to: undefined }
+  const [y, mo] = m.split('-').map(Number)
+  const last = new Date(y, mo, 0).getDate()
+  return { from: `${m}-01`, to: `${m}-${String(last).padStart(2, '0')}` }
+}
+function monthLabel(m) {
+  if (!m) return 'histórico'
+  return new Date(`${m}-01T00:00:00`).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })
+}
+
 // ── Modal: registrar gasto ─────────────────────────────────────────────────
 function GastoModal({ categories, onClose, onSaved }) {
   const [supplierId, setSupplierId]   = useState('')
@@ -507,7 +519,10 @@ export default function Gastos() {
   const [detailId, setDetailId]   = useState(null)
   const [filterCat, setFilterCat] = useState('')
   const [filterCfdi, setFilterCfdi] = useState('')
+  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7))
   const [msg, setMsg] = useState(null)
+
+  const { from, to } = monthRange(month)
 
   const { data: categories = [] } = useQuery({
     queryKey: ['expense-categories', 'active'],
@@ -517,17 +532,28 @@ export default function Gastos() {
   const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')
 
   const { data: resp, isLoading } = useQuery({
-    queryKey: ['expenses', filterCat, filterCfdi, sortBy, sortDir],
+    queryKey: ['expenses', filterCat, filterCfdi, from, to, sortBy, sortDir],
     queryFn:  () => purchasesApi.listExpenses({
       categoryId: filterCat || undefined,
       hasCfdi: filterCfdi || undefined,
+      from, to,
       sortBy, sortDir,
     }),
   })
   const expenses = resp?.data || []
 
+  const { data: summary } = useQuery({
+    queryKey: ['expenses-summary', filterCat, filterCfdi, from, to],
+    queryFn:  () => purchasesApi.expensesSummary({
+      categoryId: filterCat || undefined,
+      hasCfdi: filterCfdi || undefined,
+      from, to,
+    }),
+  })
+
   function handleSaved() {
     qc.invalidateQueries({ queryKey: ['expenses'] })
+    qc.invalidateQueries({ queryKey: ['expenses-summary'] })
     qc.invalidateQueries({ queryKey: ['expense'] })
     qc.invalidateQueries({ queryKey: ['cxp'] })
     setMsg('Gasto guardado.'); setTimeout(() => setMsg(null), 2500)
@@ -553,6 +579,10 @@ export default function Gastos() {
 
       {/* Filtros */}
       <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 sm:items-end">
+        <div className="min-w-[9rem]">
+          <label className="label">Mes</label>
+          <input type="month" className="input w-full" value={month} onChange={e => setMonth(e.target.value)} />
+        </div>
         <div className="flex-1 min-w-[10rem]">
           <label className="label">Categoría</label>
           <select className="select w-full" value={filterCat} onChange={e => setFilterCat(e.target.value)}>
@@ -569,6 +599,39 @@ export default function Gastos() {
           </select>
         </div>
       </div>
+
+      {/* Resumen: ¿en qué se va el dinero? */}
+      {summary && summary.count > 0 && (
+        <div className="card p-4 flex flex-col gap-3">
+          <div className="flex items-end justify-between gap-3 flex-wrap">
+            <div>
+              <p className="text-xs text-ink-muted capitalize">Total · {monthLabel(month)}</p>
+              <p className="text-2xl font-bold text-ink-primary tabular-nums">{fmtMXN(summary.total_mxn)}</p>
+              <p className="text-[11px] text-ink-muted">{summary.count} gasto(s){!month && ' · todo el historial'}</p>
+            </div>
+            {summary.sin_cfdi_mxn > 0 && (
+              <span className="badge-amber">Sin factura: {fmtMXN(summary.sin_cfdi_mxn)}</span>
+            )}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {summary.by_category.map(c => {
+              const pct = summary.total_mxn > 0 ? (c.total_mxn / summary.total_mxn) * 100 : 0
+              return (
+                <button key={c.category_id || 'none'} type="button"
+                  onClick={() => setFilterCat(c.category_id || '')}
+                  className="flex items-center gap-2 text-left hover:bg-surface-elevated/40 rounded px-1 -mx-1">
+                  <span className="text-xs text-ink-secondary w-36 sm:w-44 truncate shrink-0">{c.category_name}</span>
+                  <div className="flex-1 h-2 bg-surface-elevated/60 rounded-full overflow-hidden">
+                    <div className="h-full bg-brand-500/60 rounded-full" style={{ width: `${pct}%` }} />
+                  </div>
+                  <span className="text-xs font-mono tabular-nums text-ink-primary w-20 sm:w-24 text-right shrink-0">{fmtMXN(c.total_mxn)}</span>
+                  <span className="text-[10px] text-ink-muted w-8 text-right shrink-0">{pct.toFixed(0)}%</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Lista */}
       {isLoading ? (

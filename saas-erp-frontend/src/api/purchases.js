@@ -72,6 +72,7 @@ export const purchasesApi = {
 
   // ── Gastos (módulo de Gastos, Fase 1) ──────────────────────────────────
   listExpenses:  (p) => api.get(`${B}/expenses`, { params: p }).then(r => r.data),
+  expensesSummary: (p) => api.get(`${B}/expenses/summary`, { params: p }).then(r => r.data),
   createExpense: (body) => api.post(`${B}/expenses`, body).then(r => r.data),
   // Fase 2: parsea XML/PDF de un gasto y precarga el form (match por RFC).
   parseExpenseDocument: (formData) =>

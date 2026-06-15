@@ -746,6 +746,61 @@ async function listExpenses({ tenantId, categoryId, status, hasCfdi, from, to, s
 }
 
 /**
+ * Resumen de GASTOS por categoría para "¿en qué se va el dinero?" — agrupa por
+ * categoría (total_mxn desc) + total del período + total sin CFDI (lo deducible
+ * pendiente). EXCLUYE cancelados (= gasto real). Respeta los mismos filtros que
+ * el listado (categoría, CFDI, from/to por invoice_date, search).
+ */
+async function listExpensesSummary({ tenantId, categoryId, hasCfdi, from, to, search }) {
+  const params = [tenantId]
+  const filters = ['si.is_expense = true', `si.status <> 'cancelled'`]
+  if (categoryId) { params.push(categoryId); filters.push(`si.expense_category_id = $${params.length}`) }
+  if (hasCfdi === 'yes') filters.push(`si.uuid_sat IS NOT NULL`)
+  if (hasCfdi === 'no')  filters.push(`si.uuid_sat IS NULL`)
+  if (from)       { params.push(from);       filters.push(`si.invoice_date >= $${params.length}`) }
+  if (to)         { params.push(to);         filters.push(`si.invoice_date <= $${params.length}`) }
+  if (search) {
+    params.push(`%${search}%`); const s = params.length
+    filters.push(`(si.invoice_number ILIKE $${s} OR bp.name ILIKE $${s} OR si.generic_supplier ILIKE $${s})`)
+  }
+  const where = `WHERE si.tenant_id = $1 AND ${filters.join(' AND ')}`
+
+  const { rows: cats } = await query(
+    `SELECT si.expense_category_id AS category_id,
+            COALESCE(ec.name, 'Sin categoría') AS category_name,
+            COUNT(*)::int AS count,
+            COALESCE(SUM(si.total_mxn), 0)::numeric AS total_mxn
+       FROM supplier_invoices si
+       LEFT JOIN business_partners bp ON bp.id = si.partner_id
+       LEFT JOIN tenant_expense_categories ec ON ec.id = si.expense_category_id
+       ${where}
+       GROUP BY si.expense_category_id, ec.name
+       ORDER BY total_mxn DESC`,
+    params
+  )
+  const { rows: tot } = await query(
+    `SELECT COALESCE(SUM(si.total_mxn), 0)::numeric AS total_mxn,
+            COUNT(*)::int AS count,
+            COALESCE(SUM(si.total_mxn) FILTER (WHERE si.uuid_sat IS NULL), 0)::numeric AS sin_cfdi_mxn
+       FROM supplier_invoices si
+       LEFT JOIN business_partners bp ON bp.id = si.partner_id
+       ${where}`,
+    params
+  )
+  return {
+    total_mxn:    parseFloat(tot[0].total_mxn),
+    count:        tot[0].count,
+    sin_cfdi_mxn: parseFloat(tot[0].sin_cfdi_mxn),
+    by_category:  cats.map(c => ({
+      category_id:   c.category_id,
+      category_name: c.category_name,
+      count:         c.count,
+      total_mxn:     parseFloat(c.total_mxn),
+    })),
+  }
+}
+
+/**
  * Detalle de UN gasto (supplier_invoice is_expense=true): todos los campos +
  * categoría + proveedor + los dos semáforos (CFDI por uuid_sat, pago por el CXP).
  */
@@ -963,6 +1018,6 @@ function createError(status, message) {
 
 module.exports = {
   registerInvoice, generateReceiptRemission, listInvoices, getInvoice, listExpenses,
-  getExpense, updateExpense, cancelExpense,
+  listExpensesSummary, getExpense, updateExpense, cancelExpense,
   registerPayment, getSupplierStatement,
 }

@@ -14,6 +14,7 @@ const { createTenant, cleanupTestTenants } = require('../helpers/factory')
 const { pool, query, withBypass } = require('../../src/db')
 const {
   registerInvoice, getExpense, updateExpense, cancelExpense, registerPayment,
+  listExpensesSummary,
 } = require('../../src/modules/purchases/supplierInvoiceService')
 const { parseSupplierDocument } = require('../../src/modules/purchases/documentParserService')
 
@@ -161,5 +162,29 @@ describe('Gastos — detalle, edición y cancelación', () => {
       tenantId, supplierId, documentNumber: 'DUP', subtotal: 1, tax: 0, total: 1,
       isExpense: true, expenseCategoryId: categoryId, uuidSat: uuid, userId,
     })).rejects.toMatchObject({ status: 409 })
+  })
+
+  // ── #1: resumen por categoría ─────────────────────────────────────────────
+  test('resumen por categoría agrupa, suma, calcula sin_cfdi y EXCLUYE cancelados', async () => {
+    const d = '2026-03-10'  // ventana propia, aislada de los demás tests (fecha de hoy)
+    const reg = (num, cat, total, uuidSat) => registerInvoice({
+      tenantId, supplierId, documentNumber: num, subtotal: total, tax: 0, total,
+      isExpense: true, expenseCategoryId: cat, invoiceDate: d, uuidSat, userId,
+    })
+    await reg('SUM-A1', categoryId,  1000, crypto.randomUUID())   // A con CFDI
+    await reg('SUM-A2', categoryId,   500, null)                  // A sin CFDI
+    await reg('SUM-B1', categoryId2,  300, crypto.randomUUID())   // B con CFDI
+    const cancelled = await reg('SUM-C1', categoryId, 9999, null) // se cancela → NO cuenta
+    await cancelExpense({ tenantId, id: cancelled.id, userId })
+
+    const sum = await listExpensesSummary({ tenantId, from: '2026-03-01', to: '2026-03-31' })
+    expect(sum.total_mxn).toBeCloseTo(1800)      // 1000+500+300 (sin el cancelado 9999)
+    expect(sum.count).toBe(3)
+    expect(sum.sin_cfdi_mxn).toBeCloseTo(500)    // solo A2
+    const a = sum.by_category.find(c => c.category_id === categoryId)
+    const b = sum.by_category.find(c => c.category_id === categoryId2)
+    expect(a.total_mxn).toBeCloseTo(1500)
+    expect(b.total_mxn).toBeCloseTo(300)
+    expect(sum.by_category[0].category_id).toBe(categoryId)  // orden desc por total
   })
 })

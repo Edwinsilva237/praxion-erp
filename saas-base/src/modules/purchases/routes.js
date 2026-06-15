@@ -772,6 +772,21 @@ router.post('/expenses/parse',
 )
 
 /**
+ * GET /api/purchases/expenses/summary
+ * Totales de gasto por categoría (¿en qué se va el dinero?) + total del período
+ * + total sin CFDI. Mismos filtros que el listado. Debe ir ANTES de /expenses/:id.
+ */
+router.get('/expenses/summary', checkPermission('expenses', 'read'), async (req, res, next) => {
+  try {
+    const { categoryId, hasCfdi, from, to, search } = req.query
+    const result = await supplierInvoiceService.listExpensesSummary({
+      tenantId: req.tenant.id, categoryId, hasCfdi, from, to, search,
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
  * GET /api/purchases/expenses/:id
  * Detalle de un gasto (con categoría, proveedor y los dos semáforos).
  */
