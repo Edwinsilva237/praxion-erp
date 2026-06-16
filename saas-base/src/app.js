@@ -74,6 +74,11 @@ app.use(rateLimit({
   message: { error: 'Too many requests, please try again later.' },
 }))
 
+// Ingesta de correo entrante (Cloudflare Email Worker → API). Server-to-server,
+// sin sesión de usuario: la protege un secret compartido. Va ANTES del express.json
+// global (1mb) porque un PDF adjunto en base64 puede superarlo; usa su propio parser.
+app.use('/api/inbound', express.json({ limit: '15mb' }), require('./modules/inbound/routes'))
+
 app.use(express.json({ limit: '1mb' }))
 app.use(express.urlencoded({ extended: false }))
 
