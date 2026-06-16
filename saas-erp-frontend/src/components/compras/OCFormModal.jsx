@@ -15,11 +15,11 @@ import clsx from 'clsx'
 // ── Constantes ─────────────────────────────────────────────────────────────
 const EMPTY_LINE_MP = () => ({
   item: null, quantity: '', unit: 'kg', unit_price: '', warehouse_id: '', is_estimated: true,
-  price_source: null,
+  price_source: null, supplier_sku: '', notes: '',
 })
 const EMPTY_LINE_PT = () => ({
   item: null, quantity: '', unit: 'pza', unit_price: '', warehouse_id: '', product_meta: null,
-  price_source: null,
+  price_source: null, supplier_sku: '', notes: '',
 })
 
 // Chip que indica de dónde salió el precio sugerido del proveedor (espejo del
@@ -330,6 +330,8 @@ function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
           unitPrice:   parseFloat(l.unit_price || 0),
           warehouseId: l.warehouse_id,
           isEstimated: true,
+          supplierSku: l.supplier_sku?.trim() || null,
+          notes:       l.notes?.trim() || null,
         })),
       })
     },
@@ -466,6 +468,21 @@ function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
                 <div className="input bg-surface-elevated/40 text-ink-muted font-mono text-sm cursor-default">
                   {fmtMXN(parseFloat(line.quantity || 0) * parseFloat(line.unit_price || 0), currency)}
                 </div>
+              </div>
+            </div>
+            {/* Clave del proveedor (se recuerda para la próxima OC) + nota de esta OC */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Clave del proveedor</label>
+                <input className="input" value={line.supplier_sku || ''}
+                  onChange={e => updateLine(idx, 'supplier_sku', e.target.value)}
+                  placeholder="Cómo lo identifica el proveedor (opcional)" />
+              </div>
+              <div>
+                <label className="label">Nota / detalle</label>
+                <input className="input" value={line.notes || ''}
+                  onChange={e => updateLine(idx, 'notes', e.target.value)}
+                  placeholder="Detalle extra de esta línea (opcional)" />
               </div>
             </div>
           </div>
@@ -610,6 +627,8 @@ function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
           unitPrice:   parseFloat(l.unit_price || 0),
           warehouseId: l.warehouse_id,
           isEstimated: false,
+          supplierSku: l.supplier_sku?.trim() || null,
+          notes:       l.notes?.trim() || null,
         })),
       })
     },
@@ -737,6 +756,21 @@ function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
                 <div className="input bg-surface-elevated/40 text-ink-muted font-mono text-sm cursor-default">
                   {fmtMXN(parseFloat(line.quantity || 0) * parseFloat(line.unit_price || 0), currency)}
                 </div>
+              </div>
+            </div>
+            {/* Clave del proveedor (se recuerda para la próxima OC) + nota de esta OC */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Clave del proveedor</label>
+                <input className="input" value={line.supplier_sku || ''}
+                  onChange={e => updateLine(idx, 'supplier_sku', e.target.value)}
+                  placeholder="Cómo lo identifica el proveedor (opcional)" />
+              </div>
+              <div>
+                <label className="label">Nota / detalle</label>
+                <input className="input" value={line.notes || ''}
+                  onChange={e => updateLine(idx, 'notes', e.target.value)}
+                  placeholder="Detalle extra de esta línea (opcional)" />
               </div>
             </div>
           </div>

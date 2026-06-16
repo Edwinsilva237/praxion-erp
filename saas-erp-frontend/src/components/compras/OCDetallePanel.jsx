@@ -193,6 +193,12 @@ function TabDetalle({ oc }) {
                   <tr key={i}>
                     <td>
                       <p className="font-medium text-ink-primary">{nombre}</p>
+                      {l.supplier_sku && (
+                        <p className="text-[11px] text-ink-muted">Clave prov.: <span className="font-mono">{l.supplier_sku}</span></p>
+                      )}
+                      {l.notes && (
+                        <p className="text-[11px] text-ink-muted italic">{l.notes}</p>
+                      )}
                       {l.is_estimated && (
                         <span className="text-[10px] text-amber-500 font-medium">~ estimada</span>
                       )}

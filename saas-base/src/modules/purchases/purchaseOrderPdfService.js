@@ -233,12 +233,22 @@ async function generatePurchaseOrderPDF({ tenantId, orderId }) {
     const bottomLimit = doc.page.height - 70
     lines.forEach((line, i) => {
       const desc = line.item_name || line.description || ''
+      // Clave del proveedor + nota de la línea: se imprimen DEBAJO de la
+      // descripción (gris, cursiva) para que el proveedor reconozca el producto.
+      const skuProv = (line.supplier_sku || '').trim()
+      const note    = (line.notes || '').trim()
+      const extras  = []
+      if (skuProv) extras.push(`Clave prov.: ${skuProv}`)
+      if (note)    extras.push(`Nota: ${note}`)
+
       // La descripción AHORA envuelve a varias líneas — antes se truncaba con
       // ellipsis y cortaba los nombres largos. La altura de la fila se ajusta
-      // a la descripción (que es la columna más alta).
+      // a la descripción (que es la columna más alta) + las líneas extra.
       doc.fontSize(7.5).font('Helvetica')
       const descH = doc.heightOfString(desc, { width: cw.desc - 5 })
-      const rowH  = Math.max(22, descH + 12)
+      doc.fontSize(6.5).font('Helvetica-Oblique')
+      const extraH = extras.reduce((h, t) => h + doc.heightOfString(t, { width: cw.desc - 5 }), 0)
+      const rowH  = Math.max(22, descH + (extras.length ? extraH + 3 : 0) + 12)
 
       // Salto de página: una fila alta puede no caber antes del pie.
       if (y + rowH > bottomLimit) {
@@ -254,6 +264,15 @@ async function generatePurchaseOrderPDF({ tenantId, orderId }) {
                { width: cw.clave, ellipsis: true, height: 10, lineBreak: false })
       cx += cw.clave
       doc.text(desc, cx, y + 7, { width: cw.desc - 5 })
+      if (extras.length) {
+        let ey = y + 7 + descH + 1
+        doc.fontSize(6.5).font('Helvetica-Oblique').fillColor(grisText)
+        for (const t of extras) {
+          doc.text(t, cx, ey, { width: cw.desc - 5 })
+          ey += doc.heightOfString(t, { width: cw.desc - 5 })
+        }
+        doc.fontSize(7.5).font('Helvetica').fillColor(negro)
+      }
       cx += cw.desc
       doc.text(line.warehouse_name || '—', cx, y + 7,
                { width: cw.alm - 3, ellipsis: true, height: 10, lineBreak: false })

@@ -95,22 +95,26 @@ async function getSuggestedSupplierPrice({ tenantId, supplierId, itemType, itemI
 }
 
 // ── Auto-aprendizaje (corre dentro de una transacción → recibe client) ─────
-async function recordLearnedSupplierPrice(client, { tenantId, supplierId, itemType, itemId, unitPrice, currency = 'MXN', source = 'po', userId = null }) {
+async function recordLearnedSupplierPrice(client, { tenantId, supplierId, itemType, itemId, unitPrice, currency = 'MXN', source = 'po', supplierSku = null, userId = null }) {
   if (!tenantId || !supplierId || !itemType || !itemId) return
   if (!['po', 'receipt'].includes(source)) return
   const price = parseFloat(unitPrice)
   if (!Number.isFinite(price) || price <= 0) return // no aprender 0 ni inválidos
 
+  // supplier_sku se RECUERDA: solo se pisa cuando llega un valor nuevo no nulo
+  // (COALESCE), así una OC posterior sin clave no borra la clave ya aprendida.
   await client.query(
     `INSERT INTO supplier_prices
        (tenant_id, business_partner_id, item_type, item_id, currency, unit_price,
-        valid_from, source, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6, CURRENT_DATE, $7, $8)
+        supplier_sku, valid_from, source, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7, CURRENT_DATE, $8, $9)
      ON CONFLICT (tenant_id, business_partner_id, item_type, item_id, valid_from, source)
-     DO UPDATE SET unit_price = EXCLUDED.unit_price,
-                   currency   = EXCLUDED.currency,
-                   updated_at = now()`,
-    [tenantId, supplierId, itemType, itemId, currency, price, source, userId]
+     DO UPDATE SET unit_price    = EXCLUDED.unit_price,
+                   currency      = EXCLUDED.currency,
+                   supplier_sku  = COALESCE(EXCLUDED.supplier_sku, supplier_prices.supplier_sku),
+                   updated_at    = now()`,
+    [tenantId, supplierId, itemType, itemId, currency, price,
+     (supplierSku && String(supplierSku).trim()) || null, source, userId]
   )
 }
 
@@ -123,7 +127,8 @@ async function learnFromLines(client, { tenantId, supplierId, currency, source, 
     await recordLearnedSupplierPrice(client, {
       tenantId, supplierId,
       itemType: l.itemType, itemId: l.itemId,
-      unitPrice: l.unitPrice, currency, source, userId,
+      unitPrice: l.unitPrice, currency, source,
+      supplierSku: l.supplierSku || null, userId,
     })
   }
 }
