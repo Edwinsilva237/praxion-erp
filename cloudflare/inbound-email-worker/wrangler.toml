@@ -1,0 +1,14 @@
+name = "praxion-inbound-email"
+main = "src/index.js"
+compatibility_date = "2026-06-01"
+
+# No necesita nodejs_compat: btoa / fetch / Response son nativos del runtime
+# de Workers, y postal-mime está pensado para correr ahí sin polyfills.
+#
+# El correo entrante NO se conecta con un binding en este archivo: se conecta
+# con una REGLA de Email Routing (catch-all del subdominio inbox.praxionops.com)
+# que apunta a este Worker. Ver README.md → paso 3.
+#
+# Los secrets NO van aquí (no se commitean). Se cargan con:
+#   wrangler secret put INGEST_URL
+#   wrangler secret put INGEST_SECRET
