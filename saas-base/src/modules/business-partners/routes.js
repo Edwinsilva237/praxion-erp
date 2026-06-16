@@ -95,6 +95,9 @@ router.post('/', checkPermission('business_partners', 'create'), async (req, res
 
 router.patch('/:id', checkPermission('business_partners', 'update'), async (req, res, next) => {
   try {
+    if (req.body.type !== undefined && !['customer', 'supplier', 'both'].includes(req.body.type)) {
+      return res.status(400).json({ error: 'type debe ser: customer, supplier o both.' })
+    }
     const partner = await partnerService.updatePartner({
       tenantId: req.tenant.id, partnerId: req.params.id, ...req.body,
       userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),

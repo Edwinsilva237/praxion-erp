@@ -167,7 +167,7 @@ async function createPartner({
 }
 
 async function updatePartner({
-  tenantId, partnerId, name, rfc, taxName, taxRegime, taxRegimeCode,
+  tenantId, partnerId, type, name, rfc, taxName, taxRegime, taxRegimeCode,
   creditType, creditDays, creditLimit, internalCode,
   address, neighborhood, city, state, zipCode, notes, isActive,
   // Preferencias fiscales / comerciales (migración 025 + 026)
@@ -184,6 +184,12 @@ async function updatePartner({
   userId, ipAddress, userAgent,
 }) {
   const resolvedPersonType = rfc ? (rfc.length === 13 ? 'fisica' : 'moral') : null
+
+  // Tipo (customer/supplier/both): el form de edición permite ampliar el rol
+  // (p. ej. cliente → ambos) o acotarlo. Solo aceptamos los 3 valores válidos;
+  // cualquier otra cosa queda en null → COALESCE no toca la columna. Sin esto
+  // updatePartner ignoraba `type` y el socio se quedaba pegado en su tipo viejo.
+  const normalizedType = ['customer', 'supplier', 'both'].includes(type) ? type : null
 
   // El frontend puede mandar string vacío en campos numéricos cuando el
   // partner es solo cliente y nunca tuvo datos de proveedor (Socios.jsx
@@ -231,9 +237,10 @@ async function updatePartner({
        supplier_clabe             = COALESCE($33, supplier_clabe),
        supplier_swift             = COALESCE($34, supplier_swift),
        website                    = COALESCE($35, website),
-       supplier_rating            = COALESCE($36, supplier_rating)
-     WHERE id = $37 AND tenant_id = $38
-     RETURNING id, name, rfc, person_type, is_active`,
+       supplier_rating            = COALESCE($36, supplier_rating),
+       type                       = COALESCE($37, type)
+     WHERE id = $38 AND tenant_id = $39
+     RETURNING id, type, name, rfc, person_type, is_active`,
     [name || null, rfc?.toUpperCase().trim() || null, resolvedPersonType,
      taxName || null, taxRegime || null, taxRegimeCode || null,
      creditType || null,
@@ -257,6 +264,7 @@ async function updatePartner({
      supplierSwift || null,
      website || null,
      numericOrNull(supplierRating),
+     normalizedType,
      partnerId, tenantId]
   )
   if (rows.length === 0) return null
