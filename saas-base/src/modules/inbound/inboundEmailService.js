@@ -15,6 +15,7 @@
  * NO requiere sesión de usuario — lo protege un secret compartido en la ruta.
  */
 
+const crypto = require('crypto')
 const { query } = require('../../db')
 const documentParserService = require('../purchases/documentParserService')
 const supplierInvoiceService = require('../purchases/supplierInvoiceService')
@@ -27,6 +28,53 @@ const INBOUND_DOMAIN = process.env.INBOUND_EMAIL_DOMAIN || 'inbox.praxionops.com
 
 /** Dirección de correo entrante de un tenant a partir de su token. */
 function addressForToken(token) { return `${token}@${INBOUND_DOMAIN}` }
+
+/** Token aleatorio de 16 hex (64 bits) — mismo formato que el DEFAULT de la mig 208. */
+function newToken() { return crypto.randomBytes(8).toString('hex') }
+
+/**
+ * Dirección de buzón del tenant (para mostrarla en Gastos → Config).
+ * `active` indica si el pipeline está habilitado en el servidor (hay secret).
+ */
+async function getInboxAddress(tenantId) {
+  const { rows } = await query(
+    `SELECT inbound_email_token FROM tenants WHERE id = $1`, [tenantId])
+  if (!rows.length) throw err(404, 'Tenant no encontrado.')
+  const token = rows[0].inbound_email_token
+  return {
+    token,
+    address: addressForToken(token),
+    domain: INBOUND_DOMAIN,
+    active: !!process.env.INBOUND_INGEST_SECRET,
+  }
+}
+
+/**
+ * Genera una dirección nueva (invalida la anterior). Reintenta ante el caso
+ * astronómicamente improbable de colisión con el índice UNIQUE.
+ */
+async function rotateInboxToken(tenantId) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const token = newToken()
+    try {
+      const { rows } = await query(
+        `UPDATE tenants SET inbound_email_token = $1 WHERE id = $2
+         RETURNING inbound_email_token`, [token, tenantId])
+      if (!rows.length) throw err(404, 'Tenant no encontrado.')
+      logger.info('inbound: dirección de buzón rotada', { tenantId })
+      return {
+        token: rows[0].inbound_email_token,
+        address: addressForToken(rows[0].inbound_email_token),
+        domain: INBOUND_DOMAIN,
+        active: !!process.env.INBOUND_INGEST_SECRET,
+      }
+    } catch (e) {
+      if (e.code === '23505') continue   // colisión de token: reintenta
+      throw e
+    }
+  }
+  throw err(500, 'No se pudo generar una dirección nueva, intenta de nuevo.')
+}
 
 /**
  * Procesa UN adjunto recibido por correo.
@@ -132,4 +180,4 @@ async function ingestInboundDocument({ token, filename, mimetype, contentBase64,
   }
 }
 
-module.exports = { ingestInboundDocument, addressForToken }
+module.exports = { ingestInboundDocument, addressForToken, getInboxAddress, rotateInboxToken }

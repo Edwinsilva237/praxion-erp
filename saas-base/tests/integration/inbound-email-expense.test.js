@@ -125,3 +125,32 @@ test('ruta POST /api/inbound/expense: sin secret → 401; con secret → 200', a
   expect(res.status).toBe(200)
   expect(res.body.results[0].status).toBe('created')
 })
+
+// ── Paso 2: ver y rotar la dirección del buzón ──────────────────────────────
+
+test('getInboxAddress: dirección = token@dominio y active=true (hay secret)', async () => {
+  const info = await inboundEmailService.getInboxAddress(tenantId)
+  expect(info.token).toBe(token)
+  expect(info.address).toBe(`${token}@${info.domain}`)
+  expect(info.active).toBe(true)   // INBOUND_INGEST_SECRET seteado al inicio del archivo
+})
+
+test('rotateInboxToken: cambia el token, el nuevo rutea y el viejo deja de funcionar', async () => {
+  const before  = await inboundEmailService.getInboxAddress(tenantId)
+  const rotated = await inboundEmailService.rotateInboxToken(tenantId)
+  expect(rotated.token).not.toBe(before.token)
+  expect(/^[0-9a-f]{16}$/.test(rotated.token)).toBe(true)
+
+  // El token viejo ya no rutea a ningún tenant → 404.
+  await expect(inboundEmailService.ingestInboundDocument({
+    token: before.token, filename: 'vieja.xml', mimetype: 'application/xml',
+    contentBase64: b64(cfdiXml({ uuid: '55555555-5555-5555-5555-555555555555', folio: '888' })),
+  })).rejects.toMatchObject({ status: 404 })
+
+  // El token nuevo SÍ rutea y crea el gasto.
+  const r = await inboundEmailService.ingestInboundDocument({
+    token: rotated.token, filename: 'nueva.xml', mimetype: 'application/xml',
+    contentBase64: b64(cfdiXml({ uuid: '66666666-6666-6666-6666-666666666666', folio: '889' })),
+  })
+  expect(r.status).toBe('created')
+})

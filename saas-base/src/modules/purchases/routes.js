@@ -15,6 +15,7 @@ const cxpService              = require('./cxpService')
 const apAdvanceService        = require('./apAdvanceService')
 const supplierPriceService    = require('./supplierPriceService')
 const supplierReturnService   = require('./supplierReturnService')
+const inboundEmailService     = require('../inbound/inboundEmailService')
 const attachmentService       = require('../attachments/attachmentService')
 const storage                 = require('../../utils/storage')
 const config                  = require('../../config')
@@ -783,6 +784,28 @@ router.get('/expenses/summary', checkPermission('expenses', 'read'), async (req,
       tenantId: req.tenant.id, categoryId, hasCfdi, from, to, search,
     })
     res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
+ * GET /api/purchases/expenses/inbox
+ * Dirección de correo entrante de facturas del tenant (para darla a proveedores).
+ * Debe ir ANTES de /expenses/:id.
+ */
+router.get('/expenses/inbox', checkPermission('expenses', 'read'), async (req, res, next) => {
+  try {
+    res.json(await inboundEmailService.getInboxAddress(req.tenant.id))
+  } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/expenses/inbox/rotate
+ * Genera una dirección nueva (invalida la anterior). Acción de configuración →
+ * gateada por settings:update (admin/owner), no por expenses.
+ */
+router.post('/expenses/inbox/rotate', checkPermission('settings', 'update'), async (req, res, next) => {
+  try {
+    res.json(await inboundEmailService.rotateInboxToken(req.tenant.id))
   } catch (err) { next(err) }
 })
 

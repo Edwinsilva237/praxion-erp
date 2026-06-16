@@ -576,9 +576,113 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
 }
 
 // ── Página ─────────────────────────────────────────────────────────────────
+// ── Modal: buzón de facturas (correo entrante) ──────────────────────────────
+function InboxModal({ onClose }) {
+  const qc = useQueryClient()
+  const [copied, setCopied] = useState(false)
+  const [askRotate, setAskRotate] = useState(false)
+  const [error, setError] = useState(null)
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['expense-inbox'],
+    queryFn:  () => purchasesApi.getExpenseInbox(),
+  })
+
+  const rotate = useMutation({
+    mutationFn: () => purchasesApi.rotateExpenseInbox(),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['expense-inbox'] }); setAskRotate(false) },
+    onError: (e) => setError(e.response?.data?.error || e.message),
+  })
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(data.address)
+      setCopied(true); setTimeout(() => setCopied(false), 2000)
+    } catch { /* clipboard bloqueado: el usuario puede seleccionar a mano */ }
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">
+      <div className="card w-full max-w-lg p-6 flex flex-col gap-4 max-h-[92vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-ink-primary">📧 Buzón de facturas</h2>
+          <button type="button" onClick={onClose} className="btn-ghost btn-icon text-ink-muted">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <p className="text-sm text-ink-secondary">
+          Pide a tus proveedores que envíen sus facturas (CFDI <strong>XML</strong> o <strong>PDF</strong>)
+          a esta dirección, o reenvíalas tú. Se registran como gastos automáticamente, emparejando al
+          proveedor por su RFC.
+        </p>
+
+        {isLoading ? <Spinner /> : data && (
+          <>
+            <div className="flex flex-col gap-2">
+              <label className="label">Tu dirección</label>
+              <div className="flex items-stretch gap-2">
+                <code className="input flex-1 font-mono text-sm flex items-center break-all">
+                  {data.address}
+                </code>
+                <button type="button" onClick={copy} className="btn-secondary whitespace-nowrap">
+                  {copied ? '✓ Copiado' : 'Copiar'}
+                </button>
+              </div>
+            </div>
+
+            {!data.active && (
+              <div className="alert-warning text-xs">
+                El buzón aún <strong>no está activo</strong>: falta terminar la configuración del
+                correo entrante en el servidor. La dirección ya es tuya, pero todavía no recibe correos.
+              </div>
+            )}
+
+            <div className="border-t border-line pt-3 flex flex-col gap-2">
+              <p className="text-xs text-ink-muted">
+                Si esta dirección recibe spam o se filtró, puedes generar una nueva.
+                <strong> La anterior dejará de funcionar.</strong>
+              </p>
+              <Can do="settings:update">
+                {!askRotate ? (
+                  <button type="button" onClick={() => { setError(null); setAskRotate(true) }}
+                    className="btn-ghost text-sm self-start text-danger">
+                    Generar dirección nueva
+                  </button>
+                ) : (
+                  <div className="flex flex-col gap-2 bg-surface-2 rounded-lg p-3">
+                    <p className="text-sm text-ink-primary">
+                      ¿Generar una dirección nueva? Tendrás que avisar a los proveedores que usaban la anterior.
+                    </p>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => rotate.mutate()} disabled={rotate.isPending}
+                        className="btn-danger text-sm">
+                        {rotate.isPending ? <Spinner size="sm" /> : 'Sí, generar nueva'}
+                      </button>
+                      <button type="button" onClick={() => setAskRotate(false)} className="btn-ghost text-sm">
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </Can>
+            </div>
+          </>
+        )}
+
+        {error && <div className="alert-error text-sm">{error}</div>}
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 export default function Gastos() {
   const qc = useQueryClient()
   const [showModal, setShowModal] = useState(false)
+  const [showInbox, setShowInbox] = useState(false)
   const [detailId, setDetailId]   = useState(null)
   const [filterCat, setFilterCat] = useState('')
   const [filterCfdi, setFilterCfdi] = useState('')
@@ -638,11 +742,18 @@ export default function Gastos() {
             Gastos de proveedor: fletes, servicios, luz, renta, combustible, etc. Su IVA cuenta como acreditable.
           </p>
         </div>
-        <Can do="expenses:create">
-          <button onClick={() => setShowModal(true)} className="btn-primary w-full sm:w-auto">
-            + Registrar gasto
-          </button>
-        </Can>
+        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+          <Can do="expenses:read">
+            <button onClick={() => setShowInbox(true)} className="btn-secondary w-full sm:w-auto">
+              📧 Buzón de facturas
+            </button>
+          </Can>
+          <Can do="expenses:create">
+            <button onClick={() => setShowModal(true)} className="btn-primary w-full sm:w-auto">
+              + Registrar gasto
+            </button>
+          </Can>
+        </div>
       </div>
 
       {msg && <div className="alert-success text-sm">{msg}</div>}
@@ -795,6 +906,7 @@ export default function Gastos() {
         <GastoDetalleModal id={detailId} categories={categories}
           onClose={() => setDetailId(null)} onSaved={handleSaved} />
       )}
+      {showInbox && <InboxModal onClose={() => setShowInbox(false)} />}
     </div>
   )
 }
