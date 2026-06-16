@@ -381,7 +381,15 @@ async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, 
          AND NOT EXISTS (
            SELECT 1 FROM invoice_lines il
             JOIN invoices iv ON iv.id = il.invoice_id
-            WHERE il.delivery_note_line_id = dnl.id AND iv.status <> 'cancelled'
+            WHERE iv.status <> 'cancelled'
+              AND ( il.delivery_note_line_id = dnl.id
+                    -- Línea ya cubierta por factura ANTICIPADA/directa del pedido
+                    -- (liga por sales_order_line_id; delivery_note_id NULL y NO
+                    -- consolidada). Sin esto la remisión de venta anticipada
+                    -- aparecía en "Listas para facturar" y en el modal de factura.
+                    OR ( il.sales_order_line_id = dnl.sales_order_line_id
+                         AND iv.delivery_note_id IS NULL
+                         AND NOT EXISTS (SELECT 1 FROM invoice_remissions ir WHERE ir.invoice_id = iv.id) ) )
          )
     )`)
     // Excluir las ya facturadas de forma CONSOLIDADA (sus líneas no tienen
@@ -417,16 +425,25 @@ async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, 
      FROM delivery_notes dn
      JOIN business_partners bp ON bp.id = dn.partner_id
      LEFT JOIN sales_orders so ON so.id = dn.sales_order_id
-     -- Factura activa de la remisión: liga directa (delivery_note_id) O consolidada
-     -- (invoice_remissions, donde delivery_note_id queda NULL). Sin la 2ª rama las
-     -- remisiones consolidadas se veían como NO facturadas (mig 190).
+     -- Factura activa de la remisión: liga directa (delivery_note_id), consolidada
+     -- (invoice_remissions, donde delivery_note_id queda NULL — mig 190) o
+     -- ANTICIPADA/directa del pedido (delivery_note_id NULL y NO consolidada,
+     -- cubre las líneas vía sales_order_line_id porque se facturó ANTES de entregar).
+     -- Sin la 3ª rama, las remisiones de una venta anticipada se veían "Listo para
+     -- facturar" y se podían re-facturar (la factura ya existe en el pedido).
      LEFT JOIN LATERAL (
        SELECT iv.id, iv.document_number, iv.status
          FROM invoices iv
         WHERE iv.status <> 'cancelled'
           AND ( iv.delivery_note_id = dn.id
                 OR EXISTS (SELECT 1 FROM invoice_remissions ir
-                            WHERE ir.invoice_id = iv.id AND ir.delivery_note_id = dn.id) )
+                            WHERE ir.invoice_id = iv.id AND ir.delivery_note_id = dn.id)
+                OR ( iv.delivery_note_id IS NULL
+                     AND NOT EXISTS (SELECT 1 FROM invoice_remissions ir2 WHERE ir2.invoice_id = iv.id)
+                     AND EXISTS (
+                       SELECT 1 FROM invoice_lines il
+                         JOIN delivery_note_lines dnl ON dnl.sales_order_line_id = il.sales_order_line_id
+                        WHERE il.invoice_id = iv.id AND dnl.delivery_note_id = dn.id) ) )
         ORDER BY iv.created_at DESC
         LIMIT 1
      ) inv ON true
@@ -550,6 +567,45 @@ async function getDeliveryNote({ tenantId, noteId }) {
           l.invoice_number = c.document_number
           l.invoice_status = c.status
           l.invoice_use_cfdi = c.use_cfdi
+        }
+      }
+    }
+  }
+
+  // Factura ANTICIPADA / directa del pedido: se emite ANTES de las entregas, con
+  // delivery_note_id NULL y NO consolidada; cubre las líneas vía sales_order_line_id.
+  // Sin esto la remisión de una venta anticipada se veía "Pendiente de facturar" y
+  // ofrecía re-facturarla. Marca solo las líneas cuyo sales_order_line_id sí está
+  // en la factura (split-aware: si la remisión mezcla un pedido facturado y otro no).
+  if (!note.invoice_id) {
+    const { rows: adv } = await query(
+      `SELECT iv.id, iv.document_number, iv.status, iv.use_cfdi, il.sales_order_line_id
+         FROM invoices iv
+         JOIN invoice_lines il ON il.invoice_id = iv.id
+        WHERE iv.tenant_id = $1
+          AND iv.status <> 'cancelled'
+          AND iv.delivery_note_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM invoice_remissions ir WHERE ir.invoice_id = iv.id)
+          AND il.sales_order_line_id IN (
+            SELECT sales_order_line_id FROM delivery_note_lines
+             WHERE delivery_note_id = $2 AND sales_order_line_id IS NOT NULL)
+        ORDER BY iv.created_at DESC`,
+      [tenantId, noteId]
+    )
+    if (adv.length) {
+      const bySol = new Map()
+      for (const r of adv) if (!bySol.has(r.sales_order_line_id)) bySol.set(r.sales_order_line_id, r)
+      const header = adv[0]
+      note.invoice_id = header.id
+      note.invoice_number = header.document_number
+      note.invoice_status = header.status
+      for (const l of lines) {
+        if (!l.invoice_id && l.sales_order_line_id && bySol.has(l.sales_order_line_id)) {
+          const r = bySol.get(l.sales_order_line_id)
+          l.invoice_id = r.id
+          l.invoice_number = r.document_number
+          l.invoice_status = r.status
+          l.invoice_use_cfdi = r.use_cfdi
         }
       }
     }
