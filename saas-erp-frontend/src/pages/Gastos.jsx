@@ -235,16 +235,49 @@ function GastoModal({ categories, onClose, onSaved }) {
           </div>
         </div>
 
-        {/* ── Forma de pago + liquidación inmediata ── */}
+        {/* ── Estado del pago + liquidación inmediata ── */}
         <div className="border-t border-line-subtle pt-3 flex flex-col gap-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="label">Forma de pago</label>
-              <select className="select" value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
-                {METHOD_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
+          <div>
+            <label className="label">Estado del pago</label>
+            {/* Toggle Por pagar / Pagado — mismo vocabulario y colores que el semáforo de la lista */}
+            <div role="group" aria-label="Estado del pago"
+              className="inline-flex rounded-lg border border-line-strong overflow-hidden">
+              <button type="button" onClick={() => setMarkPaid(false)} aria-pressed={!markPaid}
+                className={clsx(
+                  'flex items-center gap-1.5 px-4 py-2 text-sm transition-colors',
+                  !markPaid
+                    ? 'bg-status-warning/15 text-status-warning font-medium'
+                    : 'text-ink-muted hover:bg-surface-elevated/50'
+                )}>
+                <span className="w-1.5 h-1.5 rounded-full bg-status-warning" />
+                Por pagar
+              </button>
+              <button type="button" onClick={() => setMarkPaid(true)} aria-pressed={markPaid}
+                className={clsx(
+                  'flex items-center gap-1.5 px-4 py-2 text-sm border-l border-line-strong transition-colors',
+                  markPaid
+                    ? 'bg-status-success/15 text-status-success font-medium'
+                    : 'text-ink-muted hover:bg-surface-elevated/50'
+                )}>
+                <span className="w-1.5 h-1.5 rounded-full bg-status-success" />
+                Pagado
+              </button>
             </div>
-            {markPaid && (
+            <p className="text-xs text-ink-muted mt-1.5">
+              {markPaid
+                ? 'Se liquida en el momento; no queda como “Por pagar”.'
+                : 'Queda como cuenta por pagar pendiente de liquidar.'}
+            </p>
+          </div>
+
+          {markPaid && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Forma de pago</label>
+                <select className="select" value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
+                  {METHOD_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </div>
               <div>
                 <label className="label">
                   Referencia
@@ -255,13 +288,8 @@ function GastoModal({ categories, onClose, onSaved }) {
                 <input className="input" value={paymentReference} onChange={e => setPaymentReference(e.target.value)}
                   placeholder={paymentMethod === 'transfer' ? 'SPEI / folio' : paymentMethod === 'check' ? '# cheque' : 'Opcional'} />
               </div>
-            )}
-          </div>
-          <label className="flex items-center gap-2 text-sm cursor-pointer">
-            <input type="checkbox" className="w-4 h-4 accent-brand-600"
-              checked={markPaid} onChange={e => setMarkPaid(e.target.checked)} />
-            <span className="text-ink-secondary">Ya lo pagué — liquidar de inmediato (no queda como “Por pagar”)</span>
-          </label>
+            </div>
+          )}
         </div>
 
         <div>
