@@ -1149,6 +1149,61 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, userId, ip
   })
 }
 
+// Tolerancia de monto para SUGERIR que un gasto cuadra con una recepción (±2%).
+const RECEIPT_SUGGEST_TOLERANCE = 0.02
+
+/**
+ * SUGIERE (no liga) la recepción pendiente de factura que corresponde a un gasto
+ * de mercancía. Reemplaza al auto-link de la 5A: como vincular es IRREVERSIBLE y
+ * toca CXP/inventario, no se hace solo — se sugiere y el humano confirma con
+ * `linkExpenseToReceipt`. Mismo criterio: mismo proveedor + MXN + subtotal dentro
+ * de ±2% del saldo por facturar + recibida en ventana [fecha −90d, +7d]. Devuelve
+ * la recepción SOLO si hay EXACTAMENTE una coincidencia (0/varias → sin sugerencia).
+ */
+async function suggestReceiptForExpense({ tenantId, expenseId }) {
+  const { rows: exp } = await query(
+    `SELECT si.partner_id, si.currency, si.subtotal, si.invoice_date, si.is_expense, si.status,
+            ap.amount_paid AS ap_amount_paid
+       FROM supplier_invoices si
+       LEFT JOIN accounts_payable ap ON ap.document_id = si.id AND ap.tenant_id = si.tenant_id
+      WHERE si.id = $1 AND si.tenant_id = $2`,
+    [expenseId, tenantId])
+  if (!exp.length) throw createError(404, 'Gasto no encontrado.')
+  const e = exp[0]
+  const subtotal = parseFloat(e.subtotal || 0)
+  // Solo para gastos vivos, sin pago, MXN, con proveedor y subtotal > 0.
+  if (!e.is_expense || e.status === 'cancelled' || parseFloat(e.ap_amount_paid || 0) > 0
+      || e.currency !== 'MXN' || !e.partner_id || !(subtotal > 0)) {
+    return { suggestion: null, candidateCount: 0 }
+  }
+  const { rows } = await query(
+    `SELECT sr.id, sr.receipt_number, sr.received_date,
+            COALESCE((
+              SELECT SUM(srl.subtotal) FROM supplier_receipt_lines srl
+                LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+               WHERE srl.supplier_receipt_id = sr.id
+                 AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled' OR ci.type = 'remission')
+            ), 0)::numeric AS total_mxn
+       FROM supplier_receipts sr
+       LEFT JOIN purchase_orders po ON po.id = sr.purchase_order_id
+      WHERE sr.tenant_id = $1
+        AND sr.partner_id = $2
+        AND sr.status = 'confirmed'
+        AND COALESCE(po.currency, 'MXN') = 'MXN'
+        AND sr.received_date >= (COALESCE($3::date, CURRENT_DATE) - INTERVAL '90 days')
+        AND sr.received_date <= (COALESCE($3::date, CURRENT_DATE) + INTERVAL '7 days')
+        AND EXISTS (
+          SELECT 1 FROM supplier_receipt_lines srl
+            LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+           WHERE srl.supplier_receipt_id = sr.id
+             AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled' OR ci.type = 'remission')
+        )`,
+    [tenantId, e.partner_id, e.invoice_date])
+  const tol = subtotal * RECEIPT_SUGGEST_TOLERANCE
+  const close = rows.filter(r => Math.abs(parseFloat(r.total_mxn) - subtotal) <= tol)
+  return { suggestion: close.length === 1 ? close[0] : null, candidateCount: close.length }
+}
+
 /**
  * Solicita al proveedor (por correo) la factura de un gasto registrado SIN CFDI.
  * Manda un correo a los contactos del proveedor con email y marca
@@ -1235,5 +1290,5 @@ function createError(status, message) {
 module.exports = {
   registerInvoice, generateReceiptRemission, listInvoices, getInvoice, listExpenses,
   listExpensesSummary, getExpense, updateExpense, cancelExpense, linkExpenseToReceipt,
-  requestExpenseInvoice, registerPayment, getSupplierStatement,
+  suggestReceiptForExpense, requestExpenseInvoice, registerPayment, getSupplierStatement,
 }

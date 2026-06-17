@@ -86,6 +86,7 @@ export const purchasesApi = {
   getExpenseInbox:    () => api.get(`${B}/expenses/inbox`).then(r => r.data),
   rotateExpenseInbox: () => api.post(`${B}/expenses/inbox/rotate`).then(r => r.data),
   linkExpenseToReceipt: (id, receiptId) => api.post(`${B}/expenses/${id}/link-receipt`, { receiptId }).then(r => r.data),
+  expenseReceiptSuggestion: (id) => api.get(`${B}/expenses/${id}/receipt-suggestion`).then(r => r.data),
 
   // ── Devoluciones a proveedor (Fase 1) ──────────────────────────────────
   listReturnReasons: (includeInactive = false) =>

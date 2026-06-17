@@ -873,6 +873,18 @@ router.post('/expenses/:id/request-invoice', checkPermission('expenses', 'create
 })
 
 /**
+ * GET /api/purchases/expenses/:id/receipt-suggestion
+ * Sugiere (no liga) la recepción pendiente que cuadra con este gasto de mercancía.
+ */
+router.get('/expenses/:id/receipt-suggestion', checkPermission('expenses', 'read'), async (req, res, next) => {
+  try {
+    res.json(await supplierInvoiceService.suggestReceiptForExpense({
+      tenantId: req.tenant.id, expenseId: req.params.id,
+    }))
+  } catch (err) { next(err) }
+})
+
+/**
  * POST /api/purchases/expenses/:id/link-receipt
  * Vincula un gasto a una recepción → lo reclasifica como factura de compra ligada
  * (mitad manual de la Fase 5A). Body: { receiptId }.

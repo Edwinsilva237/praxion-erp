@@ -401,7 +401,17 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
     onError: (e) => setError(e.response?.data?.error || e.message),
   })
 
-  // Recepciones pendientes de factura del proveedor (para vincular este gasto).
+  const canLink = exp && exp.is_expense !== false && exp.status !== 'cancelled'
+    && !['paid', 'partial'].includes(exp.ap_status) && !!exp.partner_id
+
+  // Sugerencia: ¿este gasto cuadra con una recepción pendiente? (no liga sola).
+  const { data: suggestion } = useQuery({
+    queryKey: ['expense-receipt-suggestion', id],
+    queryFn:  () => purchasesApi.expenseReceiptSuggestion(id),
+    enabled:  !!canLink,
+  })
+
+  // Recepciones pendientes de factura del proveedor (para elegir manualmente).
   const { data: pendingReceipts } = useQuery({
     queryKey: ['pending-invoice-receipts', exp?.partner_id],
     queryFn:  () => purchasesApi.listPendingInvoiceReceipts(exp.partner_id),
@@ -409,7 +419,7 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   })
 
   const linkReceipt = useMutation({
-    mutationFn: () => purchasesApi.linkExpenseToReceipt(id, linkReceiptId),
+    mutationFn: (receiptId) => purchasesApi.linkExpenseToReceipt(id, receiptId),
     onSuccess: () => {
       // El gasto se volvió factura de compra → sale del listado de Gastos.
       qc.invalidateQueries({ queryKey: ['expenses'] })
@@ -481,47 +491,70 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
               </div>
             )}
 
-            {/* Vincular a una recepción → reclasificar a factura de compra (mercancía) */}
-            {!isCancelled && !isPaid && exp.partner_id && (
+            {/* Vincular a una recepción → reclasificar a factura de compra (mercancía).
+                NO se liga sola (es irreversible): se SUGIERE y el usuario confirma. */}
+            {canLink && (
               <Can do="expenses:create">
                 <div className="bg-brand-500/10 border border-brand-100 rounded-lg p-3 flex flex-col gap-2">
-                  <p className="text-xs text-ink-secondary">
-                    ¿Es una factura de <strong>mercancía</strong>? Vincúlala a su recepción → se vuelve
-                    factura de compra (toca inventario vía la recepción y evita doble cuenta por pagar).
-                  </p>
-                  {!linkOpen ? (
-                    <button type="button" className="btn-secondary text-xs self-start"
-                      onClick={() => { setError(null); setLinkOpen(true) }}>
-                      Vincular a recepción
-                    </button>
-                  ) : pendingReceipts === undefined ? (
-                    <Spinner size="sm" />
-                  ) : pendingReceipts.length === 0 ? (
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-xs text-ink-muted">Este proveedor no tiene recepciones pendientes de factura.</p>
-                      <button type="button" className="btn-ghost text-xs" onClick={() => setLinkOpen(false)}>Cerrar</button>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-2">
-                      <select className="select text-sm" value={linkReceiptId}
-                        onChange={e => setLinkReceiptId(e.target.value)}>
-                        <option value="">— Elige la recepción —</option>
-                        {pendingReceipts.map(r => (
-                          <option key={r.id} value={r.id}>
-                            {r.receipt_number} · {fmtDateOnly(r.received_date)} · {fmtMXN(r.total_mxn)}
-                          </option>
-                        ))}
-                      </select>
-                      <div className="flex gap-2">
-                        <button type="button" className="btn-ghost text-xs"
-                          onClick={() => { setLinkOpen(false); setLinkReceiptId('') }}>Cancelar</button>
-                        <button type="button" className="btn-primary text-xs"
-                          disabled={!linkReceiptId || linkReceipt.isPending}
-                          onClick={() => { setError(null); linkReceipt.mutate() }}>
-                          {linkReceipt.isPending ? <Spinner size="sm" /> : 'Vincular'}
+                  {/* Sugerencia proactiva (1 clic) — cuando hay UNA recepción que cuadra */}
+                  {suggestion?.suggestion && !linkOpen ? (
+                    <>
+                      <p className="text-xs text-ink-secondary">
+                        Parece la factura de la recepción <strong>{suggestion.suggestion.receipt_number}</strong>
+                        {' '}({fmtMXN(suggestion.suggestion.total_mxn)} · {fmtDateOnly(suggestion.suggestion.received_date)}).
+                        Si es de <strong>mercancía</strong>, vincúlala → se vuelve factura de compra (toca inventario, evita doble CXP).
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <button type="button" className="btn-primary text-xs" disabled={linkReceipt.isPending}
+                          onClick={() => { setError(null); linkReceipt.mutate(suggestion.suggestion.id) }}>
+                          {linkReceipt.isPending ? <Spinner size="sm" /> : `Vincular a ${suggestion.suggestion.receipt_number}`}
+                        </button>
+                        <button type="button" className="btn-ghost text-xs" onClick={() => { setError(null); setLinkOpen(true) }}>
+                          Elegir otra
                         </button>
                       </div>
-                    </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs text-ink-secondary">
+                        ¿Es una factura de <strong>mercancía</strong>? Vincúlala a su recepción → factura de compra
+                        (toca inventario vía la recepción y evita doble cuenta por pagar).
+                      </p>
+                      {!linkOpen ? (
+                        <button type="button" className="btn-secondary text-xs self-start"
+                          onClick={() => { setError(null); setLinkOpen(true) }}>
+                          Vincular a recepción
+                        </button>
+                      ) : pendingReceipts === undefined ? (
+                        <Spinner size="sm" />
+                      ) : pendingReceipts.length === 0 ? (
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs text-ink-muted">Este proveedor no tiene recepciones pendientes de factura.</p>
+                          <button type="button" className="btn-ghost text-xs" onClick={() => setLinkOpen(false)}>Cerrar</button>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-2">
+                          <select className="select text-sm" value={linkReceiptId}
+                            onChange={e => setLinkReceiptId(e.target.value)}>
+                            <option value="">— Elige la recepción —</option>
+                            {pendingReceipts.map(r => (
+                              <option key={r.id} value={r.id}>
+                                {r.receipt_number} · {fmtDateOnly(r.received_date)} · {fmtMXN(r.total_mxn)}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="flex gap-2">
+                            <button type="button" className="btn-ghost text-xs"
+                              onClick={() => { setLinkOpen(false); setLinkReceiptId('') }}>Cancelar</button>
+                            <button type="button" className="btn-primary text-xs"
+                              disabled={!linkReceiptId || linkReceipt.isPending}
+                              onClick={() => { setError(null); linkReceipt.mutate(linkReceiptId) }}>
+                              {linkReceipt.isPending ? <Spinner size="sm" /> : 'Vincular'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </Can>
