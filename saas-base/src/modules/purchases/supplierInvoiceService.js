@@ -1022,7 +1022,7 @@ async function cancelExpense({ tenantId, id, userId, reason, ipAddress, userAgen
  * fuente de verdad) pero aplicado a una supplier_invoice que YA existe (no crea
  * una nueva → no choca con el anti-dup por UUID). Si las dos divergen, cuadrarlas.
  */
-async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, userId, ipAddress, userAgent }) {
+async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLineIds = [], userId, ipAddress, userAgent }) {
   return withTransaction(async (client) => {
     // 1. El gasto: existe, no cancelado, sin pago aplicado, con proveedor.
     const { rows: exp } = await client.query(
@@ -1055,16 +1055,38 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, userId, ip
     if (rc[0].status !== 'confirmed') throw createError(409, 'La recepción no está confirmada.')
     if (rc[0].partner_id !== e.partner_id) throw createError(400, 'La recepción es de otro proveedor.')
 
-    // 3. Líneas pendientes de la recepción (mismo criterio que registerInvoice:
-    //    sin factura real activa = NULL / cancelada / cubierta por remisión).
-    const { rows: lines } = await client.query(
-      `SELECT srl.id, srl.subtotal
-         FROM supplier_receipt_lines srl
-         LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
-        WHERE srl.supplier_receipt_id = $1
-          AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled' OR ci.type = 'remission')`,
-      [receiptId]
-    )
+    // 3. Líneas a cubrir: las SELECCIONADAS (facturación parcial, mismo concepto
+    //    que registerInvoice/mig 202) o TODAS las pendientes si no se mandó nada.
+    //    Pendiente = sin factura real activa (NULL / cancelada / cubierta por remisión).
+    let lines
+    if (Array.isArray(receiptLineIds) && receiptLineIds.length > 0) {
+      const { rows } = await client.query(
+        `SELECT srl.id, srl.subtotal, ci.type AS cover_type, ci.status AS cover_status
+           FROM supplier_receipt_lines srl
+           LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+          WHERE srl.supplier_receipt_id = $1 AND srl.id = ANY($2::uuid[])`,
+        [receiptId, receiptLineIds]
+      )
+      if (rows.length !== receiptLineIds.length) {
+        throw createError(400, 'Alguna línea seleccionada no pertenece a esta recepción.')
+      }
+      for (const l of rows) {
+        if (l.cover_type === 'invoice' && l.cover_status !== 'cancelled') {
+          throw createError(409, 'Alguna línea seleccionada ya está cubierta por otra factura activa.')
+        }
+      }
+      lines = rows
+    } else {
+      const { rows } = await client.query(
+        `SELECT srl.id, srl.subtotal
+           FROM supplier_receipt_lines srl
+           LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+          WHERE srl.supplier_receipt_id = $1
+            AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled' OR ci.type = 'remission')`,
+        [receiptId]
+      )
+      lines = rows
+    }
     if (!lines.length) throw createError(409, 'La recepción ya está facturada (no tiene líneas pendientes).')
     const coverageSubtotal = parseFloat(lines.reduce((s, l) => s + parseFloat(l.subtotal || 0), 0).toFixed(2))
 

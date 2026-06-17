@@ -893,10 +893,11 @@ router.post('/expenses/:id/link-receipt',
   checkAnyPermission([['expenses', 'create'], ['purchases', 'create']]),
   async (req, res, next) => {
     try {
-      const { receiptId } = req.body || {}
+      const { receiptId, receiptLineIds } = req.body || {}
       if (!receiptId) return res.status(400).json({ error: 'receiptId es requerido.' })
       const result = await supplierInvoiceService.linkExpenseToReceipt({
         tenantId: req.tenant.id, expenseId: req.params.id, receiptId,
+        receiptLineIds: Array.isArray(receiptLineIds) ? receiptLineIds : [],
         userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
       })
       res.json(result)

@@ -85,7 +85,8 @@ export const purchasesApi = {
   requestExpenseInvoice: (id) => api.post(`${B}/expenses/${id}/request-invoice`).then(r => r.data),
   getExpenseInbox:    () => api.get(`${B}/expenses/inbox`).then(r => r.data),
   rotateExpenseInbox: () => api.post(`${B}/expenses/inbox/rotate`).then(r => r.data),
-  linkExpenseToReceipt: (id, receiptId) => api.post(`${B}/expenses/${id}/link-receipt`, { receiptId }).then(r => r.data),
+  linkExpenseToReceipt: (id, receiptId, receiptLineIds) =>
+    api.post(`${B}/expenses/${id}/link-receipt`, { receiptId, receiptLineIds }).then(r => r.data),
   expenseReceiptSuggestion: (id) => api.get(`${B}/expenses/${id}/receipt-suggestion`).then(r => r.data),
 
   // ── Devoluciones a proveedor (Fase 1) ──────────────────────────────────

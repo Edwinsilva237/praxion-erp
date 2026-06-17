@@ -342,7 +342,9 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const [cancelReason, setCancelReason] = useState('')
   const [requestMsg, setRequestMsg] = useState(null)
   const [linkOpen, setLinkOpen] = useState(false)
-  const [linkReceiptId, setLinkReceiptId] = useState('')
+  const [pickReceiptId, setPickReceiptId] = useState('')   // selección del dropdown (paso 1 manual)
+  const [linkReceiptId, setLinkReceiptId] = useState('')   // recepción confirmada → paso 2 (líneas)
+  const [checkedLines, setCheckedLines] = useState({})     // { lineId: bool }
 
   useEffect(() => {
     if (exp && !form) {
@@ -418,8 +420,23 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
     enabled:  linkOpen && !!exp?.partner_id,
   })
 
+  // Paso 2: detalle de la recepción elegida (sus líneas) para conciliar.
+  const { data: receiptDetail } = useQuery({
+    queryKey: ['receipt-detail', linkReceiptId],
+    queryFn:  () => purchasesApi.getReceipt(linkReceiptId),
+    enabled:  !!linkReceiptId,
+  })
+  // Pre-marca todas las líneas pendientes al cargar la recepción.
+  useEffect(() => {
+    if (receiptDetail?.lines) {
+      const init = {}
+      for (const ln of receiptDetail.lines) if (ln.invoice_pending) init[ln.id] = true
+      setCheckedLines(init)
+    }
+  }, [receiptDetail])
+
   const linkReceipt = useMutation({
-    mutationFn: (receiptId) => purchasesApi.linkExpenseToReceipt(id, receiptId),
+    mutationFn: ({ receiptId, lineIds }) => purchasesApi.linkExpenseToReceipt(id, receiptId, lineIds),
     onSuccess: () => {
       // El gasto se volvió factura de compra → sale del listado de Gastos.
       qc.invalidateQueries({ queryKey: ['expenses'] })
@@ -433,6 +450,15 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const sub = parseFloat(form?.subtotal) || 0
   const iva = parseFloat(form?.tax) || 0
   const total = +(sub + iva).toFixed(2)
+
+  // Conciliación del paso 2: subtotal del gasto vs líneas marcadas de la recepción.
+  const expSubtotal = parseFloat(exp?.subtotal || 0)
+  const coveredSubtotal = +(receiptDetail?.lines || [])
+    .filter(l => checkedLines[l.id]).reduce((s, l) => s + parseFloat(l.subtotal || 0), 0).toFixed(2)
+  const reconDiff = +(expSubtotal - coveredSubtotal).toFixed(2)
+  const reconOk = Math.abs(reconDiff) < 0.01
+  const checkedCount = Object.values(checkedLines).filter(Boolean).length
+  const resetLink = () => { setLinkOpen(false); setLinkReceiptId(''); setPickReceiptId(''); setCheckedLines({}) }
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">
@@ -491,70 +517,116 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
               </div>
             )}
 
-            {/* Vincular a una recepción → reclasificar a factura de compra (mercancía).
-                NO se liga sola (es irreversible): se SUGIERE y el usuario confirma. */}
+            {/* Vincular a una recepción → factura de compra (mercancía). NO se liga
+                sola (irreversible): se SUGIERE, eliges líneas, concilias y confirmas. */}
             {canLink && (
               <Can do="expenses:create">
                 <div className="bg-brand-500/10 border border-brand-100 rounded-lg p-3 flex flex-col gap-2">
-                  {/* Sugerencia proactiva (1 clic) — cuando hay UNA recepción que cuadra */}
-                  {suggestion?.suggestion && !linkOpen ? (
-                    <>
+                  {!linkReceiptId ? (
+                    /* ── Paso 1: elegir la recepción ── */
+                    suggestion?.suggestion && !linkOpen ? (
+                      <>
+                        <p className="text-xs text-ink-secondary">
+                          Parece la factura de la recepción <strong>{suggestion.suggestion.receipt_number}</strong>
+                          {' '}({fmtMXN(suggestion.suggestion.total_mxn)} · {fmtDateOnly(suggestion.suggestion.received_date)}).
+                          Si es de <strong>mercancía</strong>, vincúlala → factura de compra (toca inventario, evita doble CXP).
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" className="btn-primary text-xs"
+                            onClick={() => { setError(null); setLinkReceiptId(suggestion.suggestion.id) }}>
+                            Revisar y vincular a {suggestion.suggestion.receipt_number}
+                          </button>
+                          <button type="button" className="btn-ghost text-xs" onClick={() => setLinkOpen(true)}>
+                            Elegir otra
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-xs text-ink-secondary">
+                          ¿Es una factura de <strong>mercancía</strong>? Vincúlala a su recepción → factura de compra
+                          (toca inventario vía la recepción y evita doble cuenta por pagar).
+                        </p>
+                        {!linkOpen ? (
+                          <button type="button" className="btn-secondary text-xs self-start"
+                            onClick={() => { setError(null); setLinkOpen(true) }}>
+                            Vincular a recepción
+                          </button>
+                        ) : pendingReceipts === undefined ? (
+                          <Spinner size="sm" />
+                        ) : pendingReceipts.length === 0 ? (
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs text-ink-muted">Este proveedor no tiene recepciones pendientes de factura.</p>
+                            <button type="button" className="btn-ghost text-xs" onClick={resetLink}>Cerrar</button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-2">
+                            <select className="select text-sm" value={pickReceiptId}
+                              onChange={e => setPickReceiptId(e.target.value)}>
+                              <option value="">— Elige la recepción —</option>
+                              {pendingReceipts.map(r => (
+                                <option key={r.id} value={r.id}>
+                                  {r.receipt_number} · {fmtDateOnly(r.received_date)} · {fmtMXN(r.total_mxn)}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="flex gap-2">
+                              <button type="button" className="btn-ghost text-xs" onClick={resetLink}>Cancelar</button>
+                              <button type="button" className="btn-primary text-xs" disabled={!pickReceiptId}
+                                onClick={() => { setError(null); setLinkReceiptId(pickReceiptId) }}>
+                                Continuar
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )
+                  ) : receiptDetail === undefined ? (
+                    <Spinner size="sm" />
+                  ) : (
+                    /* ── Paso 2: elegir líneas + conciliar + confirmar ── */
+                    <div className="flex flex-col gap-2">
                       <p className="text-xs text-ink-secondary">
-                        Parece la factura de la recepción <strong>{suggestion.suggestion.receipt_number}</strong>
-                        {' '}({fmtMXN(suggestion.suggestion.total_mxn)} · {fmtDateOnly(suggestion.suggestion.received_date)}).
-                        Si es de <strong>mercancía</strong>, vincúlala → se vuelve factura de compra (toca inventario, evita doble CXP).
+                        Marca qué líneas de <strong>{receiptDetail.receipt_number}</strong> cubre esta factura:
                       </p>
-                      <div className="flex flex-wrap gap-2">
-                        <button type="button" className="btn-primary text-xs" disabled={linkReceipt.isPending}
-                          onClick={() => { setError(null); linkReceipt.mutate(suggestion.suggestion.id) }}>
-                          {linkReceipt.isPending ? <Spinner size="sm" /> : `Vincular a ${suggestion.suggestion.receipt_number}`}
-                        </button>
-                        <button type="button" className="btn-ghost text-xs" onClick={() => { setError(null); setLinkOpen(true) }}>
-                          Elegir otra
+                      <div className="flex flex-col gap-1 max-h-44 overflow-y-auto">
+                        {receiptDetail.lines.map(ln => ln.invoice_pending ? (
+                          <label key={ln.id} className="flex items-center gap-2 text-xs cursor-pointer">
+                            <input type="checkbox" className="w-4 h-4 accent-brand-600"
+                              checked={!!checkedLines[ln.id]}
+                              onChange={e => setCheckedLines(c => ({ ...c, [ln.id]: e.target.checked }))} />
+                            <span className="flex-1 text-ink-secondary truncate">
+                              {ln.item_name || ln.description || 'Línea'} · {ln.quantity_received} {ln.item_unit || ln.unit || ''}
+                            </span>
+                            <span className="tabular-nums text-ink-primary">{fmtMXN(ln.subtotal)}</span>
+                          </label>
+                        ) : (
+                          <div key={ln.id} className="flex items-center gap-2 text-xs text-ink-muted opacity-60">
+                            <span className="w-4 text-center">—</span>
+                            <span className="flex-1 truncate">{ln.item_name || ln.description || 'Línea'}</span>
+                            <span className="whitespace-nowrap">Ya facturada{ln.invoiced_number ? ` · ${ln.invoiced_number}` : ''}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Conciliación: subtotal de la factura vs líneas marcadas */}
+                      <div className={`rounded-lg px-3 py-2 text-xs flex flex-col gap-0.5 ${reconOk ? 'bg-status-success/10' : 'bg-amber-500/10'}`}>
+                        <div className="flex justify-between"><span className="text-ink-muted">Factura (subtotal)</span><span className="tabular-nums">{fmtMXN(expSubtotal)}</span></div>
+                        <div className="flex justify-between"><span className="text-ink-muted">Líneas marcadas</span><span className="tabular-nums">{fmtMXN(coveredSubtotal)}</span></div>
+                        <div className="flex justify-between font-medium">
+                          <span>{reconOk ? '✓ Cuadra' : 'Diferencia'}</span>
+                          <span className={`tabular-nums ${reconOk ? 'text-status-success' : 'text-amber-400'}`}>{fmtMXN(reconDiff)}</span>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button type="button" className="btn-ghost text-xs"
+                          onClick={() => { setLinkReceiptId(''); setCheckedLines({}) }}>Atrás</button>
+                        <button type="button" className="btn-primary text-xs"
+                          disabled={checkedCount === 0 || linkReceipt.isPending}
+                          onClick={() => { setError(null); linkReceipt.mutate({ receiptId: linkReceiptId, lineIds: Object.keys(checkedLines).filter(k => checkedLines[k]) }) }}>
+                          {linkReceipt.isPending ? <Spinner size="sm" /> : 'Confirmar vínculo'}
                         </button>
                       </div>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-xs text-ink-secondary">
-                        ¿Es una factura de <strong>mercancía</strong>? Vincúlala a su recepción → factura de compra
-                        (toca inventario vía la recepción y evita doble cuenta por pagar).
-                      </p>
-                      {!linkOpen ? (
-                        <button type="button" className="btn-secondary text-xs self-start"
-                          onClick={() => { setError(null); setLinkOpen(true) }}>
-                          Vincular a recepción
-                        </button>
-                      ) : pendingReceipts === undefined ? (
-                        <Spinner size="sm" />
-                      ) : pendingReceipts.length === 0 ? (
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-xs text-ink-muted">Este proveedor no tiene recepciones pendientes de factura.</p>
-                          <button type="button" className="btn-ghost text-xs" onClick={() => setLinkOpen(false)}>Cerrar</button>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col gap-2">
-                          <select className="select text-sm" value={linkReceiptId}
-                            onChange={e => setLinkReceiptId(e.target.value)}>
-                            <option value="">— Elige la recepción —</option>
-                            {pendingReceipts.map(r => (
-                              <option key={r.id} value={r.id}>
-                                {r.receipt_number} · {fmtDateOnly(r.received_date)} · {fmtMXN(r.total_mxn)}
-                              </option>
-                            ))}
-                          </select>
-                          <div className="flex gap-2">
-                            <button type="button" className="btn-ghost text-xs"
-                              onClick={() => { setLinkOpen(false); setLinkReceiptId('') }}>Cancelar</button>
-                            <button type="button" className="btn-primary text-xs"
-                              disabled={!linkReceiptId || linkReceipt.isPending}
-                              onClick={() => { setError(null); linkReceipt.mutate(linkReceiptId) }}>
-                              {linkReceipt.isPending ? <Spinner size="sm" /> : 'Vincular'}
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </>
+                    </div>
                   )}
                 </div>
               </Can>

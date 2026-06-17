@@ -42,6 +42,23 @@ async function makeExpense({ supplierId, subtotal = 1000, tax = 160 }) {
   })
 }
 
+// Recepción CONFIRMADA con N líneas; devuelve { id, lineIds[] }.
+async function makeReceiptMultiline({ partnerId, lines }) {
+  const { rows } = await withBypass(() => query(
+    `INSERT INTO supplier_receipts (tenant_id, receipt_number, partner_id, warehouse_id, status, confirmed_at)
+     VALUES ($1,$2,$3,$4,'confirmed',NOW()) RETURNING id`,
+    [tenantId, rnum('RCP'), partnerId, warehouseId]))
+  const lineIds = []
+  for (let i = 0; i < lines.length; i++) {
+    const { rows: l } = await withBypass(() => query(
+      `INSERT INTO supplier_receipt_lines (supplier_receipt_id, quantity_received, unit, unit_price, line_number)
+       VALUES ($1,$2,'pza',$3,$4) RETURNING id`,
+      [rows[0].id, lines[i].qty, lines[i].unitPrice, i + 1]))
+    lineIds.push(l[0].id)
+  }
+  return { id: rows[0].id, lineIds }
+}
+
 beforeAll(async () => {
   const info = await createTenant({ label: 'explink', planSlug: 'owner' })
   tenantId = info.tenant.id
@@ -108,6 +125,27 @@ test('gasto con pago aplicado → 409', async () => {
   })
   await expect(linkExpenseToReceipt({ tenantId, expenseId: gasto.id, receiptId: rid, userId }))
     .rejects.toMatchObject({ status: 409 })
+})
+
+test('facturación PARCIAL: cubrir solo una línea → la otra queda pendiente', async () => {
+  const sid = await makeSupplier()
+  const { id: rid, lineIds } = await makeReceiptMultiline({
+    partnerId: sid, lines: [{ qty: 10, unitPrice: 100 }, { qty: 5, unitPrice: 100 }],   // 1000 y 500
+  })
+  const gasto = await makeExpense({ supplierId: sid, subtotal: 1000, tax: 160 })
+
+  // Vincular cubriendo SOLO la primera línea (1000).
+  await linkExpenseToReceipt({ tenantId, expenseId: gasto.id, receiptId: rid, receiptLineIds: [lineIds[0]], userId })
+
+  const { rows: covered } = await withBypass(() => query(
+    `SELECT invoiced_by_invoice_id FROM supplier_receipt_lines WHERE id = $1`, [lineIds[0]]))
+  expect(covered[0].invoiced_by_invoice_id).toBe(gasto.id)
+  const { rows: pending } = await withBypass(() => query(
+    `SELECT invoiced_by_invoice_id FROM supplier_receipt_lines WHERE id = $1`, [lineIds[1]]))
+  expect(pending[0].invoiced_by_invoice_id).toBeNull()           // la 2ª sigue pendiente
+  const { rows: rc } = await withBypass(() => query(
+    `SELECT invoiced_at FROM supplier_receipts WHERE id = $1`, [rid]))
+  expect(rc[0].invoiced_at).toBeNull()                           // recepción NO totalmente facturada
 })
 
 test('recepción de OTRO proveedor → 400', async () => {
