@@ -212,10 +212,52 @@ async function extractPDFByText(buffer) {
   const folioMatch = text.match(/\bfolio(?!\s*fiscal)[:\s]*([A-Z0-9-]{1,40})\b/i)
   const folio = folioMatch ? folioMatch[1].trim() : null
 
-  // Nombre / razón social del emisor (best-effort). Buscamos una línea con un
-  // sufijo societario típico (SA de CV, S de RL, etc.) que no sea el receptor.
-  const nameMatch = text.match(/^([^\n]{3,80}?\bS(?:\.?\s?A\.?|\.?\s?DE\s?R\.?L\.?)[^\n]{0,20})$/im)
-  const emisorName = nameMatch ? nameMatch[1].replace(/\s+/g, ' ').trim() : null
+  // Nombre / razón social del emisor (best-effort, en orden de confiabilidad):
+  //   1) ETIQUETA explícita del emisor ("Nombre del Emisor:", "Razón Social:") →
+  //      funciona para persona FÍSICA y MORAL (la física no trae sufijo societario).
+  //   2) una línea con SUFIJO societario (SA de CV, S de RL, SAPI, SC, SAS…) que
+  //      CIERRE la línea → atrapa MORALES cuando el PDF no rotula al emisor.
+  // En ambos casos se descarta el boilerplate fiscal del CFDI impreso. Antes un
+  // regex laxo tomaba "…del SAT" como razón social (la "SA" de "SAT" + cola de 20
+  // chars): ahora el sufijo debe CERRAR la línea (en "SAT" la "T" lo impide) y se
+  // saltan las líneas de boilerplate. El guarda de "sello" es específico para NO
+  // excluir razones sociales legítimas como "… SELLOS METÁLICOS SA DE CV".
+  const BOILERPLATE = /cadena\s+original|sello\s+(?:digital|del)|certificaci[oó]n|complemento|timbre|folio\s+fiscal|\bSAT\b|r[eé]gimen|uso\s+cfdi|m[eé]todo\s+de\s+pago|forma\s+de\s+pago|representaci[oó]n\s+impresa/i
+  // Limpia un valor capturado: corta colas (RFC/Régimen/CP que la etiqueta arrastró
+  // en la misma línea), normaliza espacios y rechaza boilerplate / valores no-nombre.
+  const cleanName = (v) => {
+    if (!v) return null
+    let s = String(v).replace(/^\s*[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}\s*/i, '')           // RFC al inicio
+                     .split(/\s+(?:R\.?F\.?C\.?|R[EÉ]GIMEN|R[EÉ]G\.?|C\.?P\.?|TEL)\b/i)[0]
+    s = s.replace(/\s+/g, ' ').trim().replace(/[:\-\s]+$/, '')
+    if (s.length < 3 || s.length > 80) return null
+    if (!/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(s)) return null
+    if (BOILERPLATE.test(s)) return null
+    return s
+  }
+
+  // 1) Por etiqueta del emisor (campos de NOMBRE/razón social → no traen RFC).
+  const LABELED = [
+    /nombre\s*(?:o\s*raz[oó]n\s*social)?\s*del?\s*emisor\s*[:\-]\s*([^\n]{3,90})/i,
+    /raz[oó]n\s*social\s*del?\s*emisor\s*[:\-]\s*([^\n]{3,90})/i,
+    /raz[oó]n\s*social\s*[:\-]\s*([^\n]{3,90})/i,
+  ]
+  let emisorName = null
+  for (const re of LABELED) {
+    const cand = cleanName(text.match(re)?.[1])
+    if (cand) { emisorName = cand; break }
+  }
+
+  // 2) Por sufijo societario (morales sin etiqueta).
+  if (!emisorName) {
+    const SOC_SUFFIX = /\bS(?:\.?\s*A\.?\s*P\.?\s*I\.?|\.?\s*A\.?\s*S\.?|\.?\s*A\.?|\.?\s*C\.?|\.?\s*DE\s*R\.?\s*L\.?)(?:\s*DE\s*C\.?\s*V\.?)?\.?\s*$/i
+    for (const raw of text.split('\n')) {
+      const line = raw.replace(/\s+/g, ' ').trim()
+      if (line.length < 3 || line.length > 80) continue
+      if (BOILERPLATE.test(line)) continue
+      if (SOC_SUFFIX.test(line)) { emisorName = line; break }
+    }
+  }
 
   // Moneda: por defecto MXN, pero si el texto menciona USD/dólares lo marcamos.
   const currency = /\b(USD|d[oó]lares?|dolar)\b/i.test(text) ? 'USD' : 'MXN'

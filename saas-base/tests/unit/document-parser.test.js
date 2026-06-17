@@ -98,6 +98,93 @@ describe('documentParserService — PDF digital (capa de texto)', () => {
     expect(r.currency).toBe('USD')
     expect(r.emisor.name).toBe('PROVEEDOR DEMO SA DE CV')
   })
+
+  test('NO toma "Cadena Original … del SAT" como razón social (bug reportado)', async () => {
+    delete process.env.ANTHROPIC_API_KEY
+    mockGetText = jest.fn().mockResolvedValue({
+      text: [
+        'PROVEEDOR REAL SA DE CV',
+        'RFC: AAA010101AAA',
+        'Subtotal: 100.00', 'IVA: 16.00', 'Total: 116.00',
+        'Sello Digital del CFDI: abc123==',
+        'Cadena Original del Complemento de Certificación Digital del SAT',
+        'Sello del SAT: xyz789==',
+      ].join('\n'),
+    })
+    const r = await parseSupplierDocument(Buffer.from('pdf'), 'application/pdf', 'f.pdf')
+    expect(r.emisor.name).toBe('PROVEEDOR REAL SA DE CV')   // NO la línea del SAT
+  })
+
+  test('sin línea de razón social válida → emisor.name es null (no toma boilerplate)', async () => {
+    delete process.env.ANTHROPIC_API_KEY
+    mockGetText = jest.fn().mockResolvedValue({
+      text: [
+        'FACTURA',
+        'RFC: AAA010101AAA',
+        'Total: 116.00',
+        'Cadena Original del Complemento de Certificación Digital del SAT',
+      ].join('\n'),
+    })
+    const r = await parseSupplierDocument(Buffer.from('pdf'), 'application/pdf', 'f.pdf')
+    expect(r.emisor.name).toBeNull()
+    expect(r.emisor.rfc).toBe('AAA010101AAA')   // el RFC sí se recupera
+  })
+
+  test('razón social con "SELLOS" NO se confunde con boilerplate de sello', async () => {
+    delete process.env.ANTHROPIC_API_KEY
+    mockGetText = jest.fn().mockResolvedValue({
+      text: [
+        'SIDOR SELLOS METALICOS SA DE CV',
+        'RFC: SID010101AB2',
+        'Total: 100.00',
+        'Cadena Original del Complemento de Certificación Digital del SAT',
+      ].join('\n'),
+    })
+    const r = await parseSupplierDocument(Buffer.from('pdf'), 'application/pdf', 'f.pdf')
+    expect(r.emisor.name).toBe('SIDOR SELLOS METALICOS SA DE CV')
+  })
+
+  test('persona FÍSICA por etiqueta: toma el nombre aunque no tenga sufijo societario', async () => {
+    delete process.env.ANTHROPIC_API_KEY
+    mockGetText = jest.fn().mockResolvedValue({
+      text: [
+        'FACTURA',
+        'Nombre del Emisor: JUAN PEREZ LOPEZ',
+        'RFC: PELJ800101XYZ',         // 13 chars = persona física
+        'Total: 116.00',
+        'Cadena Original del Complemento de Certificación Digital del SAT',
+      ].join('\n'),
+    })
+    const r = await parseSupplierDocument(Buffer.from('pdf'), 'application/pdf', 'f.pdf')
+    expect(r.emisor.name).toBe('JUAN PEREZ LOPEZ')
+    expect(r.emisor.rfc).toBe('PELJ800101XYZ')
+  })
+
+  test('etiqueta "Razón Social:" con RFC pegado en la misma línea → recorta el RFC', async () => {
+    delete process.env.ANTHROPIC_API_KEY
+    mockGetText = jest.fn().mockResolvedValue({
+      text: [
+        'Razón Social: MARIA GARCIA HERNANDEZ   RFC: GAHM900202AB1',
+        'Total: 50.00',
+      ].join('\n'),
+    })
+    const r = await parseSupplierDocument(Buffer.from('pdf'), 'application/pdf', 'f.pdf')
+    expect(r.emisor.name).toBe('MARIA GARCIA HERNANDEZ')   // sin el "RFC: ..."
+  })
+
+  test('la etiqueta del emisor gana sobre el sufijo societario de otra línea', async () => {
+    delete process.env.ANTHROPIC_API_KEY
+    mockGetText = jest.fn().mockResolvedValue({
+      text: [
+        'Nombre del Emisor: PEDRO RAMIREZ SOLIS',
+        'Cliente: OTRA EMPRESA SA DE CV',     // no debe ganar (es otra línea con sufijo)
+        'RFC: RASP750505QQ0',
+        'Total: 80.00',
+      ].join('\n'),
+    })
+    const r = await parseSupplierDocument(Buffer.from('pdf'), 'application/pdf', 'f.pdf')
+    expect(r.emisor.name).toBe('PEDRO RAMIREZ SOLIS')
+  })
 })
 
 describe('documentParserService — PDF escaneado (imagen, sin texto)', () => {
