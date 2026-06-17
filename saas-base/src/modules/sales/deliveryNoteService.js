@@ -809,35 +809,42 @@ async function recordDelivery({
 
 /**
  * Cancela una remisión:
- *   - status → 'cancelled'
- *   - recalcula status del pedido
+ *   - Si NO se entregó (issued/sent_by_email): solo cambia status → 'cancelled'.
+ *   - Si YA se entregó (delivered/partially_delivered/invoiced): REVIERTE todo en
+ *     la misma transacción → regresa inventario (adjustment_in por línea, mismo
+ *     almacén) + restaura saldo/estado de lotes + libera la CXC de la remisión
+ *     (sin cobros) → status 'cancelled'. (Esta vía la gatea la ruta con el
+ *     permiso `sales:reverse_delivery`; ver mig 210.)
+ *   - Recalcula el status de TODOS los pedidos cubiertos (reabre lo remisionado).
  *
- * Solo permitido cuando la remisión todavía NO se entregó y NO tiene factura
- * activa. Para revertir una remisión entregada hay que cancelar primero la
- * factura (si tiene) y manejar inventario por movimientos manuales — la
- * cancelación automática con reverso quedó deprecada por riesgo operativo.
+ * Guardas (no se puede cancelar si):
+ *   - tiene FACTURA activa (directa o consolidada) → cancela la factura primero;
+ *   - su CXC ya tiene un COBRO aplicado → reversa el cobro primero (CXC).
  */
 async function cancelDelivery({ tenantId, noteId, reason, userId, ipAddress, userAgent }) {
   return withTransaction(async (client) => {
     const { rows: noteRows } = await client.query(
       `SELECT id, document_number, status, sales_order_id, partner_id
          FROM delivery_notes
-        WHERE id = $1 AND tenant_id = $2`,
+        WHERE id = $1 AND tenant_id = $2
+        FOR UPDATE`,
       [noteId, tenantId]
     )
     if (!noteRows.length) throw createError(404, 'Remisión no encontrada.')
     const note = noteRows[0]
     if (note.status === 'cancelled') throw createError(409, 'La remisión ya está cancelada.')
-    if (note.status === 'delivered' || note.status === 'invoiced') {
-      throw createError(409,
-        'No se puede cancelar una remisión que ya fue entregada. Si necesitas revertirla, ajusta el inventario manualmente.')
-    }
 
-    // Si tiene factura activa, bloquear (la cancelación de la factura debe ir
-    // primero — al cancelar la factura el AR vuelve a la remisión).
+    // 1. Bloquear si tiene factura activa (directa o consolidada): al cancelar la
+    //    factura el AR vuelve a la remisión, así que esa va primero.
     const { rows: invRows } = await client.query(
-      `SELECT id, document_number, status FROM invoices
-        WHERE tenant_id = $1 AND delivery_note_id = $2 AND status <> 'cancelled'`,
+      `SELECT iv.document_number FROM invoices iv
+        WHERE iv.tenant_id = $1 AND iv.delivery_note_id = $2 AND iv.status <> 'cancelled'
+        UNION
+       SELECT iv.document_number FROM invoice_lines il
+         JOIN delivery_note_lines dnl ON dnl.id = il.delivery_note_line_id
+         JOIN invoices iv ON iv.id = il.invoice_id
+        WHERE dnl.delivery_note_id = $2 AND iv.tenant_id = $1 AND iv.status <> 'cancelled'
+        LIMIT 1`,
       [tenantId, noteId]
     )
     if (invRows.length) {
@@ -845,7 +852,78 @@ async function cancelDelivery({ tenantId, noteId, reason, userId, ipAddress, use
         `Esta remisión tiene la factura ${invRows[0].document_number} activa. Cancela primero la factura.`)
     }
 
-    // Marcar como cancelada
+    // 2. Bloquear si la CXC de la remisión ya tiene un cobro aplicado: reversar el
+    //    cobro (en Cuentas por cobrar) debe ir primero para no orfanar el pago.
+    const { rows: arRows } = await client.query(
+      `SELECT COALESCE(SUM(amount_paid), 0) AS paid
+         FROM accounts_receivable
+        WHERE tenant_id = $1 AND document_type = 'remission' AND document_id = $2`,
+      [tenantId, noteId]
+    )
+    if (parseFloat(arRows[0]?.paid || 0) > 0) {
+      throw createError(409,
+        'Esta remisión tiene un cobro aplicado. Reversa el cobro (en Cuentas por cobrar) antes de cancelarla.')
+    }
+
+    // 3. Si YA movió inventario, REVERTIRLO: regresar el stock + restaurar lotes.
+    //    (Espejo de recordDelivery: misma resolución de almacén y quantity_base.)
+    const movedInventory = ['delivered', 'partially_delivered', 'invoiced'].includes(note.status)
+    if (movedInventory) {
+      const { rows: cfgRows } = await client.query(
+        `SELECT allow_negative_stock FROM tenant_process_config WHERE tenant_id = $1`, [tenantId])
+      const allowNegative = cfgRows[0]?.allow_negative_stock === true
+
+      const { rows: linesForStock } = await client.query(
+        `SELECT dnl.id, dnl.product_id, dnl.quantity_base, dnl.warehouse_id,
+                dnl.product_lot_id, p.type AS product_type, p.base_unit
+           FROM delivery_note_lines dnl
+           JOIN products p ON p.id = dnl.product_id
+          WHERE dnl.delivery_note_id = $1`,
+        [noteId]
+      )
+      for (const line of linesForStock) {
+        const qtyBase = parseFloat(line.quantity_base || 0)
+        if (qtyBase <= 0) continue
+        const warehouseId = await resolveWarehouseForLine(
+          client, tenantId, line.warehouse_id, line.product_type
+        )
+        await recordMovement(client, {
+          tenantId, warehouseId,
+          itemType:      'product',
+          itemId:         line.product_id,
+          movementType:  'adjustment_in',   // reversa de la salida por venta
+          quantity:       qtyBase,           // positivo: regresa al almacén
+          unit:           line.base_unit || 'unidad',
+          referenceType: 'delivery_note',
+          referenceId:    noteId,
+          notes:         `Reversa por cancelación de remisión ${note.document_number}`,
+          createdBy:      userId,
+          validateStock: false,
+          allowNegative,
+        })
+
+        // Restaurar el saldo del lote (y reactivarlo si había quedado agotado).
+        if (line.product_lot_id) {
+          await client.query(
+            `UPDATE product_lots
+                SET quantity_remaining = quantity_remaining + $1,
+                    status = CASE WHEN status = 'depleted' AND quantity_remaining + $1 > 0
+                                  THEN 'active' ELSE status END
+              WHERE id = $2 AND tenant_id = $3`,
+            [qtyBase, line.product_lot_id, tenantId]
+          )
+        }
+      }
+    }
+
+    // 4. Liberar la CXC de la remisión (auto-generada, sin cobros → se elimina).
+    await client.query(
+      `DELETE FROM accounts_receivable
+        WHERE tenant_id = $1 AND document_type = 'remission' AND document_id = $2 AND amount_paid = 0`,
+      [tenantId, noteId]
+    )
+
+    // 5. Marcar como cancelada
     await client.query(
       `UPDATE delivery_notes SET status = 'cancelled'
         WHERE id = $1 AND tenant_id = $2`,
@@ -858,7 +936,7 @@ async function cancelDelivery({ tenantId, noteId, reason, userId, ipAddress, use
          (tenant_id, entity_type, entity_id, from_status, to_status, changed_by, metadata)
        VALUES ($1, 'delivery_note', $2, $3, 'cancelled', $4, $5)`,
       [tenantId, noteId, note.status, userId,
-       JSON.stringify({ reason: reason || null })]
+       JSON.stringify({ reason: reason || null, revertedInventory: movedInventory })]
     )
 
     // Recalcular status de TODOS los pedidos cubiertos (consolidada incluida).
@@ -867,11 +945,11 @@ async function cancelDelivery({ tenantId, noteId, reason, userId, ipAddress, use
     await audit({
       tenantId, userId, action: 'delivery_note.cancelled',
       resource: 'delivery_notes', resourceId: noteId,
-      payload: { reason },
+      payload: { reason, previousStatus: note.status, revertedInventory: movedInventory },
       ipAddress, userAgent,
     })
 
-    return { id: noteId, status: 'cancelled' }
+    return { id: noteId, status: 'cancelled', revertedInventory: movedInventory }
   })
 }
 

@@ -7,6 +7,7 @@ const { tenantResolver }  = require('../../middleware/tenantResolver')
 const { authGuard }       = require('../../middleware/authGuard')
 const { requireActiveTenant } = require('../../middleware/requireActiveTenant')
 const { checkPermission, checkAnyPermission } = require('../../middleware/checkPermission')
+const { hasPermission }   = require('../roles/permissionService')
 const requireModule       = require('../../middleware/requireModule')
 const { query }           = require('../../db')
 const orderService        = require('./orderService')
@@ -529,22 +530,40 @@ router.post('/delivery-notes/:id/adjust-prices', checkPermission('sales', 'adjus
 
 /**
  * POST /api/sales/delivery-notes/:id/cancel
- * Cancela una remisión revirtiendo inventario y AR.
- * Body: { reason }
+ * Cancela una remisión. Si NO se entregó basta con `sales:update`; si YA movió
+ * inventario (delivered/partially_delivered/invoiced) la reversa exige el
+ * permiso dedicado `sales:reverse_delivery` (mig 210) — regresa inventario,
+ * lotes y libera la CXC. Body: { reason }
  */
-router.post('/delivery-notes/:id/cancel', checkPermission('sales', 'update'), async (req, res, next) => {
-  try {
-    const result = await deliveryNoteService.cancelDelivery({
-      tenantId:  req.tenant.id,
-      noteId:    req.params.id,
-      reason:    req.body?.reason || null,
-      userId:    req.auth.userId,
-      ipAddress: req.ip,
-      userAgent: req.get('user-agent'),
-    })
-    res.json(result)
-  } catch (err) { next(err) }
-})
+router.post('/delivery-notes/:id/cancel',
+  checkAnyPermission([['sales', 'update'], ['sales', 'reverse_delivery']]),
+  async (req, res, next) => {
+    try {
+      // Las remisiones que ya movieron inventario requieren el permiso dedicado.
+      const { rows } = await query(
+        `SELECT status FROM delivery_notes WHERE id = $1 AND tenant_id = $2`,
+        [req.params.id, req.tenant.id]
+      )
+      const st = rows[0]?.status
+      if (['delivered', 'partially_delivered', 'invoiced'].includes(st)) {
+        const ok = await hasPermission(req.auth.userId, 'sales', 'reverse_delivery')
+        if (!ok) {
+          return res.status(403).json({
+            error: 'Necesitas el permiso "sales:reverse_delivery" para cancelar una remisión ya entregada (revierte inventario).',
+          })
+        }
+      }
+      const result = await deliveryNoteService.cancelDelivery({
+        tenantId:  req.tenant.id,
+        noteId:    req.params.id,
+        reason:    req.body?.reason || null,
+        userId:    req.auth.userId,
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent'),
+      })
+      res.json(result)
+    } catch (err) { next(err) }
+  })
 
 // Eliminar de raíz una remisión sin movimientos asociados (solo admin).
 router.delete('/delivery-notes/:id', checkPermission('sales', 'delete'), async (req, res, next) => {

@@ -333,13 +333,26 @@ function AccionesRemision({ note, onSendEmail, onDeliver, onCancel, canceling, o
           Entrega completa registrada. El pago pendiente del cliente se generó automáticamente.
         </p>
       </div>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <button onClick={onSendEmail} className="btn-secondary btn-sm">
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
           </svg>
           Enviar por correo
         </button>
+        {/* Cancelar una remisión entregada REVIERTE inventario/lotes/CXC y reabre el
+            pedido — acción sensible, gateada por sales:reverse_delivery (mig 210). */}
+        <Can do="sales:reverse_delivery">
+          <button onClick={onCancel} disabled={canceling}
+            className="btn-ghost btn-sm text-status-danger hover:bg-status-danger/10 sm:ml-auto">
+            {canceling ? <Spinner size="sm" /> : (
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            )}
+            Cancelar (revierte inventario)
+          </button>
+        </Can>
       </div>
     </div>
   )
@@ -743,11 +756,16 @@ export function RemisionDetallePanel({ noteId, onClose }) {
       qc.invalidateQueries({ queryKey: ['delivery-notes'] })
       qc.invalidateQueries({ queryKey: ['sales-order', note?.sales_order_id] })
       qc.invalidateQueries({ queryKey: ['sales-orders'] })
+      qc.invalidateQueries({ queryKey: ['inventory'] })   // el stock cambió al revertir
     },
     onError: (e) => setError(e.response?.data?.error || e.message || 'Error al cancelar la remisión'),
   })
 
   function handleCancel() {
+    // Si ya movió inventario, la cancelación lo REVIERTE → confirmación reforzada.
+    const moved = ['delivered', 'partially_delivered', 'invoiced'].includes(note?.status)
+    if (moved && !window.confirm(
+      `Cancelar la remisión ${note.document_number} REGRESARÁ al inventario lo entregado y liberará su cuenta por cobrar. ¿Continuar?`)) return
     const reason = prompt('Cancelar esta remisión. Motivo (opcional):')
     if (reason === null) return // canceló el prompt
     cancelMutation.mutate(reason.trim() || null)
