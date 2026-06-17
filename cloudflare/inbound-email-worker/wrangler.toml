@@ -2,6 +2,11 @@ name = "praxion-inbound-email"
 main = "src/index.js"
 compatibility_date = "2026-06-01"
 
+# Worker SOLO de correo: no se invoca por HTTP → no registres URL workers.dev
+# (evita el prompt de "crear un subdominio de Workers" al desplegar). El trigger
+# es la regla de Email Routing (catch-all del subdominio), no una ruta HTTP.
+workers_dev = false
+
 # No necesita nodejs_compat: btoa / fetch / Response son nativos del runtime
 # de Workers, y postal-mime está pensado para correr ahí sin polyfills.
 #
