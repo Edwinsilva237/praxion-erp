@@ -1,8 +1,10 @@
 /**
  * Email Worker — buzón de facturas entrantes de Praxion ERP.
  *
- * Cloudflare Email Routing entrega aquí, vía una regla CATCH-ALL del subdominio
- * `inbox.praxionops.com`, TODO correo dirigido a `<token>@inbox.praxionops.com`.
+ * Cloudflare Email Routing entrega aquí, vía el CATCH-ALL del dominio RAÍZ
+ * `praxionops.com` (que también atrapa el subdominio `inbox.praxionops.com` —
+ * CF no permite catch-all por subdominio, pero el del raíz cubre toda la zona),
+ * TODO correo dirigido a `<token>@inbox.praxionops.com`.
  * El token es per-tenant (lo genera la mig 208 y se ve/rota en Gastos → Buzón).
  *
  * Flujo:
