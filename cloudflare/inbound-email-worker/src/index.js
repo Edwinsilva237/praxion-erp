@@ -25,12 +25,16 @@
 
 import PostalMime from 'postal-mime'
 
-// Solo nos interesan facturas: CFDI XML o PDF.
-const WANTED_MIME = ['application/xml', 'text/xml', 'application/pdf']
+// Solo nos interesan facturas: CFDI XML o PDF, o un .zip que los contenga (los
+// CFDI suelen llegar comprimidos). El .zip se reenvía tal cual y la API lo
+// descomprime y procesa el XML/PDF de adentro (ver inboundEmailService.expandAttachments).
+const WANTED_MIME = ['application/xml', 'text/xml', 'application/pdf',
+                     'application/zip', 'application/x-zip-compressed']
 function isWanted(att) {
   const mt = (att.mimeType || '').toLowerCase()
   const name = (att.filename || '').toLowerCase()
-  return WANTED_MIME.includes(mt) || name.endsWith('.xml') || name.endsWith('.pdf')
+  return WANTED_MIME.includes(mt)
+    || name.endsWith('.xml') || name.endsWith('.pdf') || name.endsWith('.zip')
 }
 
 // ArrayBuffer/Uint8Array → base64, sin Buffer y en chunks (no revienta el stack).

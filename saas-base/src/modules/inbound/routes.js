@@ -43,8 +43,14 @@ router.post('/expense', async (req, res, next) => {
     const usable = attachments.filter(a => a && a.contentBase64)
     if (!usable.length) return res.status(400).json({ error: 'Sin adjuntos procesables.' })
 
+    // Expande los .zip → XML/PDF de adentro (los CFDI suelen llegar comprimidos).
+    const expanded = inboundEmailService.expandAttachments(usable)
+    if (!expanded.length) {
+      return res.status(422).json({ error: 'El adjunto no contenía un XML/PDF de factura (¿zip vacío o sin CFDI?).' })
+    }
+
     const results = []
-    for (const a of usable) {
+    for (const a of expanded) {
       try {
         const r = await inboundEmailService.ingestInboundDocument({
           token, from, filename: a.filename, mimetype: a.mimetype, contentBase64: a.contentBase64,

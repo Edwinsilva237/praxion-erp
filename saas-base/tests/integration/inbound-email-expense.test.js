@@ -157,3 +157,83 @@ test('rotateInboxToken: cambia el token, el nuevo rutea y el viejo deja de funci
   })
   expect(r.status).toBe('created')
 })
+
+// ── Adjuntos comprimidos (.zip): los CFDI suelen llegar zippeados ───────────
+const { zipSync, strToU8 } = require('fflate')
+const zipB64 = (files) => {
+  const entries = {}
+  for (const [name, content] of Object.entries(files)) entries[name] = strToU8(content)
+  return Buffer.from(zipSync(entries)).toString('base64')
+}
+
+describe('adjuntos comprimidos (.zip)', () => {
+  let curToken
+  beforeAll(async () => {
+    // El test de rotación dejó el token global obsoleto → leer el vigente.
+    const { rows } = await withBypass(() => query(
+      `SELECT inbound_email_token FROM tenants WHERE id = $1`, [tenantId]))
+    curToken = rows[0].inbound_email_token
+  })
+
+  test('expandAttachments: zip con XML+PDF → solo el XML (ignora el PDF redundante)', () => {
+    const zb64 = zipB64({
+      'factura.xml': cfdiXml({ uuid: 'aaaaaaaa-0000-0000-0000-000000000001', folio: 'Z1' }),
+      'factura.pdf': '%PDF-1.4 contenido falso',
+    })
+    const out = inboundEmailService.expandAttachments([
+      { filename: 'cfdi.zip', mimetype: 'application/zip', contentBase64: zb64 },
+    ])
+    expect(out).toHaveLength(1)
+    expect(out[0].filename).toBe('factura.xml')
+    expect(out[0].mimetype).toBe('application/xml')
+  })
+
+  test('expandAttachments: zip con dos XML → ambos; basura de macOS y no-CFDI se ignoran', () => {
+    const zb64 = zipB64({
+      'a.xml': '<x/>', 'b.xml': '<y/>',
+      'logo.png': 'PNG', '__MACOSX/._a.xml': 'junk',
+    })
+    const out = inboundEmailService.expandAttachments([
+      { filename: 'lote.zip', mimetype: 'application/octet-stream', contentBase64: zb64 },
+    ])
+    expect(out).toHaveLength(2)
+    expect(out.every(a => a.filename.endsWith('.xml'))).toBe(true)
+  })
+
+  test('expandAttachments: zip solo con PDF → cae al PDF', () => {
+    const zb64 = zipB64({ 'factura.pdf': '%PDF-1.4 x' })
+    const out = inboundEmailService.expandAttachments([
+      { filename: 'c.zip', mimetype: 'application/zip', contentBase64: zb64 },
+    ])
+    expect(out).toHaveLength(1)
+    expect(out[0].mimetype).toBe('application/pdf')
+  })
+
+  test('expandAttachments: adjunto NO-zip se devuelve tal cual', () => {
+    const att = { filename: 'f.xml', mimetype: 'application/xml', contentBase64: b64('<xml/>') }
+    expect(inboundEmailService.expandAttachments([att])).toEqual([att])
+  })
+
+  test('ruta: un .zip con un CFDI XML → crea el gasto', async () => {
+    const zb64 = zipB64({ 'factura.xml': cfdiXml({ uuid: 'aaaaaaaa-0000-0000-0000-000000000010', folio: 'ZIP1' }) })
+    const res = await request(app)
+      .post('/api/inbound/expense')
+      .set('X-Ingest-Secret', 'test-ingest-secret-123')
+      .send({ token: curToken, from: 'contador@correo.mx', attachments: [
+        { filename: 'cfdi.zip', mimetype: 'application/zip', contentBase64: zb64 },
+      ] })
+    expect(res.status).toBe(200)
+    expect(res.body.results[0].status).toBe('created')
+  })
+
+  test('ruta: zip sin XML/PDF (imágenes/notas) → 422 claro', async () => {
+    const zb64 = zipB64({ 'foto.jpg': 'JPGDATA', 'nota.txt': 'hola' })
+    const res = await request(app)
+      .post('/api/inbound/expense')
+      .set('X-Ingest-Secret', 'test-ingest-secret-123')
+      .send({ token: curToken, attachments: [
+        { filename: 'cosas.zip', mimetype: 'application/zip', contentBase64: zb64 },
+      ] })
+    expect(res.status).toBe(422)
+  })
+})

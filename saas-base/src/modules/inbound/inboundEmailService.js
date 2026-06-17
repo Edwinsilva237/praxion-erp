@@ -16,12 +16,75 @@
  */
 
 const { query } = require('../../db')
+const { unzipSync } = require('fflate')
 const documentParserService = require('../purchases/documentParserService')
 const supplierInvoiceService = require('../purchases/supplierInvoiceService')
 const logger = require('../../config/logger')
 
 function err(status, message) { const e = new Error(message); e.status = status; return e }
 function normRfc(r) { return (r || '').toUpperCase().replace(/\s+/g, '').trim() }
+
+// ── Expansión de adjuntos comprimidos (.zip) ───────────────────────────────
+// Los CFDI suelen llegar zippeados (XML + PDF juntos, a veces varios CFDI). Aquí
+// descomprimimos y nos quedamos con los XML/PDF de adentro. Preferimos el XML (la
+// representación BUENA del CFDI); si el zip no trae XML, caemos al/los PDF. Guardas
+// anti-zip-bomb: tope de entradas procesadas y de tamaño por entrada.
+const ARCHIVE_MAX_ENTRIES = 50
+const ARCHIVE_MAX_ENTRY_BYTES = 15 * 1024 * 1024   // 15 MiB por archivo interno
+
+function isZip(att) {
+  const mt = (att.mimetype || '').toLowerCase()
+  const name = (att.filename || '').toLowerCase()
+  return mt.includes('zip') || name.endsWith('.zip')
+}
+
+/** Expande UN adjunto: si es .zip → [XML/PDF internos]; si no → [el adjunto tal cual]. */
+function expandAttachment(att) {
+  if (!att || !att.contentBase64) return []
+  if (!isZip(att)) return [att]
+
+  let files
+  try {
+    files = unzipSync(Buffer.from(att.contentBase64, 'base64'))
+  } catch (e) {
+    logger.warn('inbound: zip ilegible, se omite', { filename: att.filename, error: e.message })
+    return []   // zip corrupto → nada que procesar (el lote sigue con lo demás)
+  }
+
+  const inner = []
+  let count = 0
+  for (const [name, bytes] of Object.entries(files)) {
+    const lower = name.toLowerCase()
+    if (lower.endsWith('/')) continue                                  // directorio
+    if (lower.startsWith('__macosx/') || lower.includes('/._')) continue  // basura de macOS
+    const isXml = lower.endsWith('.xml')
+    const isPdf = lower.endsWith('.pdf')
+    if (!isXml && !isPdf) continue
+    if (bytes.length > ARCHIVE_MAX_ENTRY_BYTES) {
+      logger.warn('inbound: entrada de zip demasiado grande, se omite', { name, bytes: bytes.length })
+      continue
+    }
+    if (++count > ARCHIVE_MAX_ENTRIES) break
+    inner.push({
+      filename: name.split('/').pop(),
+      mimetype: isXml ? 'application/xml' : 'application/pdf',
+      contentBase64: Buffer.from(bytes).toString('base64'),
+      _isXml: isXml,
+    })
+  }
+
+  // Preferir XML: si hay al menos un XML, ignorar los PDF (versión impresa del
+  // mismo CFDI → evita procesar dos veces lo mismo; el anti-dup por UUID también
+  // lo cubriría, pero así no genera ruido de "duplicado").
+  const xmls = inner.filter(a => a._isXml)
+  const chosen = xmls.length ? xmls : inner
+  return chosen.map(({ _isXml, ...a }) => a)
+}
+
+/** Expande una lista de adjuntos (descomprime los .zip). */
+function expandAttachments(list) {
+  return (list || []).flatMap(expandAttachment)
+}
 
 const INBOUND_DOMAIN = process.env.INBOUND_EMAIL_DOMAIN || 'inbox.praxionops.com'
 
@@ -183,4 +246,7 @@ async function ingestInboundDocument({ token, filename, mimetype, contentBase64,
   }
 }
 
-module.exports = { ingestInboundDocument, addressForToken, getInboxAddress, rotateInboxToken }
+module.exports = {
+  ingestInboundDocument, expandAttachments,
+  addressForToken, getInboxAddress, rotateInboxToken,
+}

@@ -113,6 +113,8 @@ el aviso ámbar "no está activo".
 ## Notas
 
 - Tope de correo entrante: **25 MiB** (Email Routing). El Worker rechaza arriba de eso.
-- El Worker filtra adjuntos a **.xml / .pdf** (CFDI). Ignora firmas e imágenes.
+- El Worker filtra adjuntos a **.xml / .pdf / .zip** (CFDI). Ignora firmas e imágenes.
+  El **.zip** se reenvía tal cual; la API lo descomprime y procesa el XML/PDF de adentro
+  (prefiere el XML; soporta zips con varios CFDI). Ver `inboundEmailService.expandAttachments`.
 - Errores de la API o de red **no rebotan** el correo: se loguean (`wrangler tail`).
   Decisión deliberada — un hipo de infra no debe devolverle un bounce al proveedor.
