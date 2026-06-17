@@ -873,6 +873,25 @@ router.post('/expenses/:id/request-invoice', checkPermission('expenses', 'create
 })
 
 /**
+ * POST /api/purchases/expenses/:id/link-receipt
+ * Vincula un gasto a una recepción → lo reclasifica como factura de compra ligada
+ * (mitad manual de la Fase 5A). Body: { receiptId }.
+ */
+router.post('/expenses/:id/link-receipt',
+  checkAnyPermission([['expenses', 'create'], ['purchases', 'create']]),
+  async (req, res, next) => {
+    try {
+      const { receiptId } = req.body || {}
+      if (!receiptId) return res.status(400).json({ error: 'receiptId es requerido.' })
+      const result = await supplierInvoiceService.linkExpenseToReceipt({
+        tenantId: req.tenant.id, expenseId: req.params.id, receiptId,
+        userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+      })
+      res.json(result)
+    } catch (err) { next(err) }
+  })
+
+/**
  * GET /api/purchases/invoices
  * Query: type, status, supplierId, from, to, page, limit
  */

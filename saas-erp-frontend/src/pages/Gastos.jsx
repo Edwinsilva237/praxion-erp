@@ -341,6 +341,8 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const [askCancel, setAskCancel] = useState(false)
   const [cancelReason, setCancelReason] = useState('')
   const [requestMsg, setRequestMsg] = useState(null)
+  const [linkOpen, setLinkOpen] = useState(false)
+  const [linkReceiptId, setLinkReceiptId] = useState('')
 
   useEffect(() => {
     if (exp && !form) {
@@ -395,6 +397,25 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
     onSuccess: (r) => {
       setRequestMsg(`Solicitud enviada a ${(r.sentTo || []).join(', ') || 'el proveedor'}.`)
       qc.invalidateQueries({ queryKey: ['expense', id] })
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message),
+  })
+
+  // Recepciones pendientes de factura del proveedor (para vincular este gasto).
+  const { data: pendingReceipts } = useQuery({
+    queryKey: ['pending-invoice-receipts', exp?.partner_id],
+    queryFn:  () => purchasesApi.listPendingInvoiceReceipts(exp.partner_id),
+    enabled:  linkOpen && !!exp?.partner_id,
+  })
+
+  const linkReceipt = useMutation({
+    mutationFn: () => purchasesApi.linkExpenseToReceipt(id, linkReceiptId),
+    onSuccess: () => {
+      // El gasto se volvió factura de compra → sale del listado de Gastos.
+      qc.invalidateQueries({ queryKey: ['expenses'] })
+      qc.invalidateQueries({ queryKey: ['expenses-summary'] })
+      qc.invalidateQueries({ queryKey: ['cxp'] })
+      onSaved(); onClose()
     },
     onError: (e) => setError(e.response?.data?.error || e.message),
   })
@@ -458,6 +479,52 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
                     </Can>
                   )}
               </div>
+            )}
+
+            {/* Vincular a una recepción → reclasificar a factura de compra (mercancía) */}
+            {!isCancelled && !isPaid && exp.partner_id && (
+              <Can do="expenses:create">
+                <div className="bg-brand-500/10 border border-brand-100 rounded-lg p-3 flex flex-col gap-2">
+                  <p className="text-xs text-ink-secondary">
+                    ¿Es una factura de <strong>mercancía</strong>? Vincúlala a su recepción → se vuelve
+                    factura de compra (toca inventario vía la recepción y evita doble cuenta por pagar).
+                  </p>
+                  {!linkOpen ? (
+                    <button type="button" className="btn-secondary text-xs self-start"
+                      onClick={() => { setError(null); setLinkOpen(true) }}>
+                      Vincular a recepción
+                    </button>
+                  ) : pendingReceipts === undefined ? (
+                    <Spinner size="sm" />
+                  ) : pendingReceipts.length === 0 ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs text-ink-muted">Este proveedor no tiene recepciones pendientes de factura.</p>
+                      <button type="button" className="btn-ghost text-xs" onClick={() => setLinkOpen(false)}>Cerrar</button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      <select className="select text-sm" value={linkReceiptId}
+                        onChange={e => setLinkReceiptId(e.target.value)}>
+                        <option value="">— Elige la recepción —</option>
+                        {pendingReceipts.map(r => (
+                          <option key={r.id} value={r.id}>
+                            {r.receipt_number} · {fmtDateOnly(r.received_date)} · {fmtMXN(r.total_mxn)}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="flex gap-2">
+                        <button type="button" className="btn-ghost text-xs"
+                          onClick={() => { setLinkOpen(false); setLinkReceiptId('') }}>Cancelar</button>
+                        <button type="button" className="btn-primary text-xs"
+                          disabled={!linkReceiptId || linkReceipt.isPending}
+                          onClick={() => { setError(null); linkReceipt.mutate() }}>
+                          {linkReceipt.isPending ? <Spinner size="sm" /> : 'Vincular'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </Can>
             )}
 
             <fieldset disabled={isCancelled} className="flex flex-col gap-4">

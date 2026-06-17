@@ -1013,6 +1013,143 @@ async function cancelExpense({ tenantId, id, userId, reason, ipAddress, userAgen
 }
 
 /**
+ * Vincular un GASTO existente a una recepción → reclasificarlo EN SU LUGAR como
+ * FACTURA DE COMPRA ligada (mitad manual de la Fase 5A; corazón de la 5B). Útil
+ * cuando un CFDI de mercancía entró por correo como gasto suelto y debe amarrarse
+ * a su recepción (evita doble CXP).
+ *
+ * Reusa EXACTAMENTE el enlace + sustitución de `registerInvoice` (ver ahí la
+ * fuente de verdad) pero aplicado a una supplier_invoice que YA existe (no crea
+ * una nueva → no choca con el anti-dup por UUID). Si las dos divergen, cuadrarlas.
+ */
+async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, userId, ipAddress, userAgent }) {
+  return withTransaction(async (client) => {
+    // 1. El gasto: existe, no cancelado, sin pago aplicado, con proveedor.
+    const { rows: exp } = await client.query(
+      `SELECT si.id, si.status, si.partner_id, si.currency, si.subtotal,
+              si.total_mxn, si.exchange_rate_value, si.invoice_number,
+              ap.amount_paid AS ap_amount_paid
+         FROM supplier_invoices si
+         LEFT JOIN accounts_payable ap ON ap.document_id = si.id AND ap.tenant_id = si.tenant_id
+        WHERE si.id = $1 AND si.tenant_id = $2 AND si.is_expense = true
+        FOR UPDATE OF si`,
+      [expenseId, tenantId]
+    )
+    if (!exp.length) throw createError(404, 'Gasto no encontrado.')
+    const e = exp[0]
+    if (e.status === 'cancelled') throw createError(409, 'El gasto está cancelado.')
+    if (parseFloat(e.ap_amount_paid || 0) > 0) {
+      throw createError(409, 'El gasto ya tiene un pago aplicado. Reversa el pago antes de vincularlo.')
+    }
+    if (!e.partner_id) throw createError(400, 'El gasto no tiene proveedor del catálogo; no se puede vincular a una recepción.')
+
+    // 2. La recepción: confirmada, mismo proveedor.
+    const { rows: rc } = await client.query(
+      `SELECT sr.id, sr.partner_id, sr.status
+         FROM supplier_receipts sr
+        WHERE sr.id = $1 AND sr.tenant_id = $2
+        FOR UPDATE OF sr`,
+      [receiptId, tenantId]
+    )
+    if (!rc.length) throw createError(404, 'Recepción no encontrada.')
+    if (rc[0].status !== 'confirmed') throw createError(409, 'La recepción no está confirmada.')
+    if (rc[0].partner_id !== e.partner_id) throw createError(400, 'La recepción es de otro proveedor.')
+
+    // 3. Líneas pendientes de la recepción (mismo criterio que registerInvoice:
+    //    sin factura real activa = NULL / cancelada / cubierta por remisión).
+    const { rows: lines } = await client.query(
+      `SELECT srl.id, srl.subtotal
+         FROM supplier_receipt_lines srl
+         LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+        WHERE srl.supplier_receipt_id = $1
+          AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled' OR ci.type = 'remission')`,
+      [receiptId]
+    )
+    if (!lines.length) throw createError(409, 'La recepción ya está facturada (no tiene líneas pendientes).')
+    const coverageSubtotal = parseFloat(lines.reduce((s, l) => s + parseFloat(l.subtotal || 0), 0).toFixed(2))
+
+    // 4. Reclasificar el gasto → factura de compra ligada a la recepción.
+    const subtotalMxn = e.currency === 'USD'
+      ? parseFloat((parseFloat(e.subtotal || 0) * parseFloat(e.exchange_rate_value || 1)).toFixed(2))
+      : parseFloat(e.subtotal || 0)
+    const reconDiff = parseFloat((subtotalMxn - coverageSubtotal).toFixed(2))
+    const reconStatus = Math.abs(reconDiff) < 0.01 ? 'reconciled' : 'with_diff'
+
+    await client.query(
+      `UPDATE supplier_invoices
+          SET is_expense = false, expense_category_id = NULL,
+              supplier_receipt_id = $3,
+              reconciliation_status = $4, reconciliation_diff = $5, updated_at = NOW()
+        WHERE id = $1 AND tenant_id = $2`,
+      [expenseId, tenantId, receiptId, reconStatus, reconDiff]
+    )
+    await client.query(
+      `INSERT INTO invoice_receipt_links (tenant_id, supplier_invoice_id, supplier_receipt_id, amount_applied)
+       VALUES ($1,$2,$3,$4) ON CONFLICT (supplier_invoice_id, supplier_receipt_id) DO NOTHING`,
+      [tenantId, expenseId, receiptId, coverageSubtotal.toFixed(2)]
+    )
+    await client.query(
+      `UPDATE supplier_receipt_lines SET invoiced_by_invoice_id = $1 WHERE id = ANY($2::uuid[])`,
+      [expenseId, lines.map(l => l.id)]
+    )
+
+    // 5. Sustitución: si la recepción tenía una REMISIÓN-CXP activa, anularla
+    //    (con guard de pago) → evita doble CXP. La CXP del gasto queda como la real.
+    const { rows: rems } = await client.query(
+      `SELECT DISTINCT si.id, si.invoice_number
+         FROM supplier_invoices si
+         JOIN invoice_receipt_links irl ON irl.supplier_invoice_id = si.id
+        WHERE si.tenant_id = $1 AND si.type = 'remission' AND si.status <> 'cancelled'
+          AND si.id <> $2 AND irl.supplier_receipt_id = $3`,
+      [tenantId, expenseId, receiptId]
+    )
+    const replacedRemissionIds = []
+    for (const rem of rems) {
+      const { rows: apr } = await client.query(
+        `SELECT amount_paid FROM accounts_payable
+          WHERE tenant_id = $1 AND document_type = 'remission' AND document_id = $2`,
+        [tenantId, rem.id]
+      )
+      if (parseFloat(apr[0]?.amount_paid || 0) > 0) {
+        throw createError(409, `La CXP sin factura ${rem.invoice_number} de esta recepción ya tiene pagos aplicados. Reversa el pago antes de vincular.`)
+      }
+      await client.query(
+        `UPDATE supplier_invoices SET status = 'cancelled', replaced_by_invoice_id = $1, updated_at = NOW()
+          WHERE id = $2 AND tenant_id = $3`, [expenseId, rem.id, tenantId])
+      await client.query(
+        `UPDATE accounts_payable SET status = 'cancelled'
+          WHERE tenant_id = $1 AND document_type = 'remission' AND document_id = $2`, [tenantId, rem.id])
+      await client.query(
+        `UPDATE supplier_receipt_lines SET invoiced_by_invoice_id = NULL WHERE invoiced_by_invoice_id = $1`, [rem.id])
+      replacedRemissionIds.push(rem.id)
+    }
+
+    // 6. Recomputar invoiced_at de la recepción (facturada solo si TODAS sus líneas
+    //    quedan cubiertas por un documento activo).
+    await client.query(
+      `UPDATE supplier_receipts sr
+          SET invoiced_at = CASE WHEN NOT EXISTS (
+                SELECT 1 FROM supplier_receipt_lines srl
+                 LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+                WHERE srl.supplier_receipt_id = sr.id
+                  AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled')
+              ) THEN COALESCE(sr.invoiced_at, NOW()) ELSE NULL END
+        WHERE sr.id = $1 AND sr.tenant_id = $2`,
+      [receiptId, tenantId]
+    )
+
+    await audit({
+      tenantId, userId, action: 'supplier_expense.linked_to_receipt',
+      resource: 'supplier_invoices', resourceId: expenseId,
+      payload: { receiptId, coverageSubtotal, reconStatus, reconDiff, replacedRemissionIds },
+      ipAddress, userAgent,
+    })
+
+    return { id: expenseId, receiptId, reconciliation_status: reconStatus, reconciliation_diff: reconDiff, replacedRemissionIds }
+  })
+}
+
+/**
  * Solicita al proveedor (por correo) la factura de un gasto registrado SIN CFDI.
  * Manda un correo a los contactos del proveedor con email y marca
  * invoice_requested_at. Reusa enqueueEmail + el template de Gastos.
@@ -1097,6 +1234,6 @@ function createError(status, message) {
 
 module.exports = {
   registerInvoice, generateReceiptRemission, listInvoices, getInvoice, listExpenses,
-  listExpensesSummary, getExpense, updateExpense, cancelExpense, requestExpenseInvoice,
-  registerPayment, getSupplierStatement,
+  listExpensesSummary, getExpense, updateExpense, cancelExpense, linkExpenseToReceipt,
+  requestExpenseInvoice, registerPayment, getSupplierStatement,
 }
