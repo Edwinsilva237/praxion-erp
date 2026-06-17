@@ -15,7 +15,6 @@
  * NO requiere sesión de usuario — lo protege un secret compartido en la ruta.
  */
 
-const crypto = require('crypto')
 const { query } = require('../../db')
 const documentParserService = require('../purchases/documentParserService')
 const supplierInvoiceService = require('../purchases/supplierInvoiceService')
@@ -28,9 +27,6 @@ const INBOUND_DOMAIN = process.env.INBOUND_EMAIL_DOMAIN || 'inbox.praxionops.com
 
 /** Dirección de correo entrante de un tenant a partir de su token. */
 function addressForToken(token) { return `${token}@${INBOUND_DOMAIN}` }
-
-/** Token aleatorio de 16 hex (64 bits) — mismo formato que el DEFAULT de la mig 208. */
-function newToken() { return crypto.randomBytes(8).toString('hex') }
 
 /**
  * Dirección de buzón del tenant (para mostrarla en Gastos → Config).
@@ -50,16 +46,20 @@ async function getInboxAddress(tenantId) {
 }
 
 /**
- * Genera una dirección nueva (invalida la anterior). Reintenta ante el caso
- * astronómicamente improbable de colisión con el índice UNIQUE.
+ * Genera una dirección nueva (invalida la anterior) en el formato legible
+ * <slug>.<código6>: conserva el nombre de la empresa y rota solo el código corto.
+ * Reintenta ante el caso astronómicamente improbable de colisión con el UNIQUE.
  */
 async function rotateInboxToken(tenantId) {
   for (let attempt = 0; attempt < 3; attempt++) {
-    const token = newToken()
     try {
       const { rows } = await query(
-        `UPDATE tenants SET inbound_email_token = $1 WHERE id = $2
-         RETURNING inbound_email_token`, [token, tenantId])
+        `UPDATE tenants
+            SET inbound_email_token =
+              regexp_replace(lower(slug), '[^a-z0-9_-]', '', 'g')
+              || '.' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 6)
+          WHERE id = $1
+        RETURNING inbound_email_token`, [tenantId])
       if (!rows.length) throw err(404, 'Tenant no encontrado.')
       logger.info('inbound: dirección de buzón rotada', { tenantId })
       return {

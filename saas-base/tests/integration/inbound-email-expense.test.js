@@ -133,13 +133,16 @@ test('getInboxAddress: dirección = token@dominio y active=true (hay secret)', a
   expect(info.token).toBe(token)
   expect(info.address).toBe(`${token}@${info.domain}`)
   expect(info.active).toBe(true)   // INBOUND_INGEST_SECRET seteado al inicio del archivo
+  // El trigger (mig 209) generó el formato legible <slug>.<6hex> para el tenant nuevo.
+  expect(info.token).toMatch(/^[a-z0-9_-]+\.[0-9a-f]{6}$/)
 })
 
 test('rotateInboxToken: cambia el token, el nuevo rutea y el viejo deja de funcionar', async () => {
   const before  = await inboundEmailService.getInboxAddress(tenantId)
   const rotated = await inboundEmailService.rotateInboxToken(tenantId)
   expect(rotated.token).not.toBe(before.token)
-  expect(/^[0-9a-f]{16}$/.test(rotated.token)).toBe(true)
+  // Formato legible: <slug>.<6 hex>.
+  expect(rotated.token).toMatch(/^[a-z0-9_-]+\.[0-9a-f]{6}$/)
 
   // El token viejo ya no rutea a ningún tenant → 404.
   await expect(inboundEmailService.ingestInboundDocument({
