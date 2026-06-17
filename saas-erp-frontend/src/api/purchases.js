@@ -88,6 +88,8 @@ export const purchasesApi = {
   linkExpenseToReceipt: (id, receiptId, receiptLineIds) =>
     api.post(`${B}/expenses/${id}/link-receipt`, { receiptId, receiptLineIds }).then(r => r.data),
   expenseReceiptSuggestion: (id) => api.get(`${B}/expenses/${id}/receipt-suggestion`).then(r => r.data),
+  createSupplierFromExpense: (id, body) =>
+    api.post(`${B}/expenses/${id}/create-supplier`, body).then(r => r.data),
 
   // ── Devoluciones a proveedor (Fase 1) ──────────────────────────────────
   listReturnReasons: (includeInactive = false) =>

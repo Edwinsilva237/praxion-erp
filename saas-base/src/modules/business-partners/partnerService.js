@@ -88,13 +88,15 @@ async function createPartner({
   supplierBankName, supplierAccountHolder, supplierAccountNumber,
   supplierClabe, supplierSwift,
   website, supplierRating,
+  isOccasional = false,     // socio eventual: vive fuera del catálogo principal (mig 172)
   contacts = [],
   userId, ipAddress, userAgent,
+  client: existingClient,   // permite reusar una txn (p.ej. crear proveedor desde un gasto)
 }) {
   // Inferir person_type desde RFC si no viene explícito
   const resolvedPersonType = personType || (rfc ? (rfc.length === 13 ? 'fisica' : 'moral') : null)
 
-  return withTransaction(async (client) => {
+  const exec = async (client) => {
     // Resolver código según nomenclatura configurada del tenant. El tipo
     // 'both' usa la nomenclatura de 'customer' (igual que el form).
     const codeEntity = type === 'supplier' ? 'supplier' : 'customer'
@@ -114,10 +116,10 @@ async function createPartner({
           supplier_min_order_amount,
           supplier_bank_name, supplier_account_holder, supplier_account_number,
           supplier_clabe, supplier_swift,
-          website, supplier_rating)
+          website, supplier_rating, is_occasional)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
                $19,$20,$21,$22,$23,$24,$25,$26,
-               $27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37)
+               $27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)
        RETURNING *`,
       [tenantId, type, resolvedPersonType, name.trim(),
        rfc?.toUpperCase().trim() || null,
@@ -141,7 +143,8 @@ async function createPartner({
        supplierClabe?.trim() || null,
        supplierSwift?.trim() || null,
        website?.trim() || null,
-       supplierRating === '' || supplierRating == null ? null : supplierRating]
+       supplierRating === '' || supplierRating == null ? null : supplierRating,
+       isOccasional === true]
     )
     const partner = rows[0]
 
@@ -163,7 +166,9 @@ async function createPartner({
     })
 
     return partner
-  })
+  }
+
+  return existingClient ? exec(existingClient) : withTransaction(exec)
 }
 
 async function updatePartner({

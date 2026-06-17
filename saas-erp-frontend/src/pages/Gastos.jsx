@@ -345,6 +345,8 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const [pickReceiptId, setPickReceiptId] = useState('')   // selección del dropdown (paso 1 manual)
   const [linkReceiptId, setLinkReceiptId] = useState('')   // recepción confirmada → paso 2 (líneas)
   const [checkedLines, setCheckedLines] = useState({})     // { lineId: bool }
+  const [supOpen, setSupOpen] = useState(false)            // alta rápida de proveedor (gasto genérico)
+  const [supForm, setSupForm] = useState({ name: '', rfc: '', type: 'supplier', recurrente: false })
 
   useEffect(() => {
     if (exp && !form) {
@@ -447,6 +449,26 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
     onError: (e) => setError(e.response?.data?.error || e.message),
   })
 
+  // Gasto genérico (emisor no catalogado): crear el proveedor con los datos del CFDI.
+  const isGeneric = exp && exp.is_expense !== false && exp.status !== 'cancelled' && !exp.partner_id
+  const createSupplier = useMutation({
+    mutationFn: () => purchasesApi.createSupplierFromExpense(id, {
+      name: supForm.name.trim() || undefined,
+      rfc:  supForm.rfc.trim() || undefined,
+      partnerType: supForm.type,
+      isOccasional: !supForm.recurrente,   // eventual por default; recurrente → formal
+    }),
+    onSuccess: () => {
+      setSupOpen(false)
+      qc.invalidateQueries({ queryKey: ['expense', id] })
+      qc.invalidateQueries({ queryKey: ['expenses'] })
+      qc.invalidateQueries({ queryKey: ['partners'] })
+      qc.invalidateQueries({ queryKey: ['cxp'] })
+      onSaved()
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message),
+  })
+
   const sub = parseFloat(form?.subtotal) || 0
   const iva = parseFloat(form?.tax) || 0
   const total = +(sub + iva).toFixed(2)
@@ -490,6 +512,72 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
             {isPaid && !isCancelled && (
               <div className="bg-surface-elevated/40 rounded-lg px-3 py-2 text-xs text-ink-secondary">
                 Gasto con pago aplicado: el monto no se puede editar. Reversa el pago primero (desde Cuentas por pagar).
+              </div>
+            )}
+
+            {/* Gasto genérico: el emisor no está en el catálogo → crear el proveedor
+                con los datos que ya trae el CFDI (RFC + razón social) y vincularlo. */}
+            {isGeneric && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 flex flex-col gap-2">
+                <p className="text-xs text-ink-secondary">
+                  <strong>Proveedor sin identificar.</strong> El emisor de este gasto no está en tu
+                  catálogo{exp.generic_supplier
+                    ? <> (<span className="text-ink-primary">{exp.generic_supplier}</span>{exp.rfc_emisor ? ` · ${exp.rfc_emisor}` : ''})</>
+                    : ''}. Dálo de alta como <strong>proveedor eventual</strong> para poder vincularlo a
+                  recepciones y pedir su factura (no aparece en el catálogo hasta marcarlo como recurrente).
+                </p>
+                {!supOpen ? (
+                  <Can do="business_partners:create">
+                    <button type="button" className="btn-primary text-xs self-start"
+                      onClick={() => {
+                        setError(null)
+                        setSupForm({ name: exp.generic_supplier || '', rfc: exp.rfc_emisor || '', type: 'supplier', recurrente: false })
+                        setSupOpen(true)
+                      }}>
+                      Crear proveedor con estos datos
+                    </button>
+                  </Can>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div>
+                        <label className="label">Razón social</label>
+                        <input className="input" value={supForm.name}
+                          onChange={e => setSupForm(f => ({ ...f, name: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="label">RFC</label>
+                        <input className="input uppercase" value={supForm.rfc}
+                          onChange={e => setSupForm(f => ({ ...f, rfc: e.target.value.toUpperCase() }))} />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="label">Tipo</label>
+                      <select className="select" value={supForm.type}
+                        onChange={e => setSupForm(f => ({ ...f, type: e.target.value }))}>
+                        <option value="supplier">Proveedor</option>
+                        <option value="both">Cliente y proveedor</option>
+                      </select>
+                    </div>
+                    <label className="flex items-start gap-2 text-xs cursor-pointer">
+                      <input type="checkbox" className="w-4 h-4 mt-0.5 accent-brand-600"
+                        checked={supForm.recurrente}
+                        onChange={e => setSupForm(f => ({ ...f, recurrente: e.target.checked }))} />
+                      <span className="text-ink-secondary">
+                        Es un proveedor <strong>recurrente</strong> — agrégalo al catálogo.
+                        <span className="block text-ink-muted">Déjalo sin marcar para una compra de una sola vez (proveedor eventual).</span>
+                      </span>
+                    </label>
+                    <div className="flex gap-2">
+                      <button type="button" className="btn-ghost text-xs" onClick={() => setSupOpen(false)}>Cancelar</button>
+                      <button type="button" className="btn-primary text-xs"
+                        disabled={!supForm.name.trim() || createSupplier.isPending}
+                        onClick={() => { setError(null); createSupplier.mutate() }}>
+                        {createSupplier.isPending ? <Spinner size="sm" /> : 'Crear y vincular'}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

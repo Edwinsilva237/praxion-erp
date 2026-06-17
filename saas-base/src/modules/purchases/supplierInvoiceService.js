@@ -6,6 +6,7 @@ const { buildOrderBy }           = require('../../utils/sortOrder')
 const { getRateForDate }         = require('../exchange-rates/exchangeRateService')
 const { enqueueEmail }           = require('../../queues/emailQueue')
 const { expenseInvoiceRequestEmail } = require('../email/templates/sales')
+const partnerService             = require('../business-partners/partnerService')
 
 /**
  * Registra una factura o remisión de proveedor y genera CXP automáticamente.
@@ -812,7 +813,7 @@ async function getExpense({ tenantId, id }) {
             si.uuid_sat, si.invoice_date, si.due_date,
             si.currency, si.exchange_rate_value,
             si.subtotal, si.tax, si.total, si.total_mxn,
-            si.generic_supplier, si.notes, si.is_expense,
+            si.generic_supplier, si.rfc_emisor, si.notes, si.is_expense,
             si.expense_category_id, si.payment_method, si.invoice_requested_at,
             ec.name AS expense_category_name,
             bp.name AS partner_name, bp.rfc AS partner_rfc,
@@ -829,6 +830,122 @@ async function getExpense({ tenantId, id }) {
     [id, tenantId]
   )
   return rows[0] || null
+}
+
+/**
+ * Crea (o reusa) un PROVEEDOR a partir de un GASTO genérico — típicamente uno que
+ * llegó por correo cuyo emisor no estaba en el catálogo (`partner_id IS NULL`,
+ * `generic_supplier` = razón social del CFDI). Usa el RFC + nombre que ya trae el
+ * gasto, vincula el gasto al proveedor y **genera la CXP que faltaba** (los gastos
+ * genéricos no tienen `accounts_payable`: `registerInvoice` solo la crea si hay
+ * `supplierId`).
+ *
+ * Dedup por RFC: si ya existe un socio con ese RFC se REUSA (un 'customer' se
+ * PROMUEVE a 'both' para que aparezca como proveedor — mismo gotcha que el match
+ * por RFC del inbound). Si no hay match, se crea uno nuevo.
+ *
+ * @returns {{ outcome: 'created'|'linked'|'promoted', partner: {id,name,type}, expense }}
+ */
+async function assignExpenseSupplier({
+  tenantId, id, userId, ipAddress, userAgent,
+  name, rfc, partnerType = 'supplier',
+  isOccasional = true,   // por default = proveedor EVENTUAL (fuera del catálogo); el
+                         // usuario marca "es recurrente" para crearlo formal.
+}) {
+  if (!['supplier', 'both'].includes(partnerType)) {
+    throw createError(400, 'partnerType inválido (supplier | both).')
+  }
+  return withTransaction(async (client) => {
+    // 1. Cargar el gasto (debe ser un gasto, no cancelado, SIN proveedor).
+    const { rows } = await client.query(
+      `SELECT * FROM supplier_invoices
+        WHERE id = $1 AND tenant_id = $2 AND is_expense = true
+        FOR UPDATE`,
+      [id, tenantId]
+    )
+    if (!rows.length) throw createError(404, 'Gasto no encontrado.')
+    const exp = rows[0]
+    if (exp.status === 'cancelled') throw createError(409, 'No se puede asignar proveedor a un gasto cancelado.')
+    if (exp.partner_id) throw createError(409, 'Este gasto ya tiene un proveedor asignado.')
+
+    // 2. Datos del proveedor: overrides del form, o lo que trae el CFDI.
+    const resolvedName = (name || exp.generic_supplier || '').trim()
+    const resolvedRfc  = ((rfc != null ? rfc : exp.rfc_emisor) || '')
+      .toUpperCase().replace(/\s+/g, '').trim()
+    if (!resolvedName) throw createError(400, 'El nombre del proveedor es requerido.')
+
+    // 3. Dedup por RFC: ¿ya existe un socio con ese RFC en el tenant?
+    let partner = null, outcome = 'created'
+    if (resolvedRfc) {
+      const { rows: existing } = await client.query(
+        `SELECT id, name, type FROM business_partners
+          WHERE tenant_id = $1 AND UPPER(REPLACE(rfc, ' ', '')) = $2
+          ORDER BY (type IN ('supplier','both')) DESC, created_at
+          LIMIT 1`,
+        [tenantId, resolvedRfc]
+      )
+      if (existing[0]) {
+        partner = existing[0]
+        if (partner.type === 'customer') {
+          // Promover a 'both' para que funcione como proveedor.
+          await client.query(
+            `UPDATE business_partners SET type = 'both', updated_at = now()
+              WHERE id = $1 AND tenant_id = $2`,
+            [partner.id, tenantId]
+          )
+          partner.type = 'both'
+          outcome = 'promoted'
+        } else {
+          outcome = 'linked'
+        }
+      }
+    }
+
+    // 4. Sin match → crear el proveedor (reusa createPartner en la MISMA txn).
+    //    Eventual por default; formal solo si el usuario lo marcó como recurrente.
+    if (!partner) {
+      partner = await partnerService.createPartner({
+        tenantId, type: partnerType,
+        name: resolvedName, rfc: resolvedRfc || null,
+        isOccasional: isOccasional !== false,
+        userId, ipAddress, userAgent,
+        client,
+      })
+      outcome = 'created'
+    }
+
+    // 5. Vincular el gasto al proveedor (deja de ser genérico).
+    await client.query(
+      `UPDATE supplier_invoices
+          SET partner_id = $1, generic_supplier = NULL, updated_at = now()
+        WHERE id = $2 AND tenant_id = $3`,
+      [partner.id, id, tenantId]
+    )
+
+    // 6. Generar la CXP que faltaba (gasto genérico nunca tuvo accounts_payable).
+    //    Mismo INSERT que registerInvoice; ON CONFLICT por si ya existiera.
+    await client.query(
+      `INSERT INTO accounts_payable
+         (tenant_id, partner_id, document_type, document_id, document_number,
+          currency, exchange_rate, amount_total, issue_date, due_date, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       ON CONFLICT (tenant_id, document_type, document_id) DO NOTHING`,
+      [tenantId, partner.id,
+       exp.type === 'remission' ? 'remission' : 'invoice',
+       exp.id, exp.invoice_number,
+       exp.currency, exp.exchange_rate_value || 1, exp.total_mxn,
+       exp.invoice_date, exp.due_date, userId]
+    )
+
+    await audit({
+      tenantId, userId, action: 'expense.supplier_assigned',
+      resource: 'supplier_invoices', resourceId: id,
+      payload: { partnerId: partner.id, outcome, rfc: resolvedRfc || null },
+      ipAddress, userAgent,
+    })
+
+    return { outcome, partner: { id: partner.id, name: partner.name || resolvedName, type: partner.type || partnerType } }
+  })
 }
 
 /**
@@ -955,6 +1072,22 @@ async function updateExpense({
         await client.query(
           `UPDATE accounts_payable SET ${apSet.join(', ')} WHERE id = $${j++} AND tenant_id = $${j}`, ap)
       }
+    } else if (upd[0].partner_id) {
+      // El gasto era genérico (sin CXP) y ahora tiene proveedor → generar la CXP
+      // que faltaba (registerInvoice solo la crea cuando hay supplierId). Deja
+      // este camino consistente con assignExpenseSupplier.
+      await client.query(
+        `INSERT INTO accounts_payable
+           (tenant_id, partner_id, document_type, document_id, document_number,
+            currency, exchange_rate, amount_total, issue_date, due_date, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT (tenant_id, document_type, document_id) DO NOTHING`,
+        [tenantId, upd[0].partner_id,
+         upd[0].type === 'remission' ? 'remission' : 'invoice',
+         id, upd[0].invoice_number,
+         upd[0].currency, upd[0].exchange_rate_value || 1, upd[0].total_mxn,
+         upd[0].invoice_date, upd[0].due_date, userId]
+      )
     }
 
     await audit({
@@ -1312,5 +1445,6 @@ function createError(status, message) {
 module.exports = {
   registerInvoice, generateReceiptRemission, listInvoices, getInvoice, listExpenses,
   listExpensesSummary, getExpense, updateExpense, cancelExpense, linkExpenseToReceipt,
+  assignExpenseSupplier,
   suggestReceiptForExpense, requestExpenseInvoice, registerPayment, getSupplierStatement,
 }

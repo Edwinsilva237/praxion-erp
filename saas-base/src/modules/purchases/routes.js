@@ -873,6 +873,32 @@ router.post('/expenses/:id/request-invoice', checkPermission('expenses', 'create
 })
 
 /**
+ * POST /api/purchases/expenses/:id/create-supplier
+ * Crea (o reusa) un PROVEEDOR a partir de un gasto genérico (emisor no catalogado)
+ * y lo vincula al gasto, generando la CXP que faltaba. Body opcional:
+ * { name, rfc, partnerType }. Gateado por business_partners:create (da de alta un socio).
+ */
+router.post('/expenses/:id/create-supplier',
+  checkPermission('business_partners', 'create'), async (req, res, next) => {
+    try {
+      const { name, rfc, partnerType, isOccasional } = req.body || {}
+      const result = await supplierInvoiceService.assignExpenseSupplier({
+        tenantId: req.tenant.id, id: req.params.id,
+        name, rfc, partnerType, isOccasional,
+        userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+      })
+      res.json(result)
+    } catch (err) {
+      if (err.code === '23505' && err.constraint === 'si_number_partner_tenant') {
+        return res.status(409).json({
+          error: 'Ya existe una factura con ese folio para este proveedor. Revisa si el gasto está duplicado.',
+        })
+      }
+      next(err)
+    }
+  })
+
+/**
  * GET /api/purchases/expenses/:id/receipt-suggestion
  * Sugiere (no liga) la recepción pendiente que cuadra con este gasto de mercancía.
  */
