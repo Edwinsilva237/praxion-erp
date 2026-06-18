@@ -705,7 +705,7 @@ router.get('/expenses', checkPermission('expenses', 'read'), async (req, res, ne
  */
 router.post('/expenses', checkPermission('expenses', 'create'), async (req, res, next) => {
   try {
-    const { total, markPaid, paymentMethod, paymentReference, paymentDate } = req.body
+    const { total, markPaid, paymentMethod, paymentReference, paymentDate, paymentBankAccountId, paymentCreditCardId } = req.body
     if (!total) return res.status(400).json({ error: 'total es requerido.' })
     const expense = await supplierInvoiceService.registerInvoice({
       tenantId: req.tenant.id, ...req.body,
@@ -727,6 +727,8 @@ router.post('/expenses', checkPermission('expenses', 'create'), async (req, res,
         reference: paymentReference || null,
         amount: expense.total,
         currency: expense.currency || 'MXN',
+        bankAccountId: paymentBankAccountId || null,
+        creditCardId: paymentCreditCardId || null,
         applications: [{ apId: expense.ap_id, amountApplied: expense.total_mxn }],
         userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
       })
@@ -867,10 +869,10 @@ router.post('/expenses/:id/cancel', checkPermission('expenses', 'create'), async
  */
 router.post('/expenses/:id/pay', checkPermission('expenses', 'create'), async (req, res, next) => {
   try {
-    const { method, reference, paymentDate } = req.body || {}
+    const { method, reference, paymentDate, bankAccountId, creditCardId } = req.body || {}
     const result = await supplierInvoiceService.payExpense({
       tenantId: req.tenant.id, id: req.params.id,
-      method, reference, paymentDate,
+      method, reference, paymentDate, bankAccountId, creditCardId,
       userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
     })
     res.json(result)

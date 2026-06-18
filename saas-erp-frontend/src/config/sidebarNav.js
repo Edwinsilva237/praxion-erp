@@ -124,6 +124,7 @@ export const NAV_SECTIONS = [
       { label: 'Almacenes',               to: '/configuracion/almacenes',             iconKey: 'gear',     permission: 'warehouses:read',   module: 'inventory' },
       { label: 'Categorías de gasto',     to: '/configuracion/categorias-gasto',      iconKey: 'gear',     permission: 'tenant_catalogs:read', flag: 'expenses_enabled' },
       { label: 'Cuentas bancarias',       to: '/configuracion/cuentas-bancarias',     iconKey: 'gear',     permission: 'financials:read' },
+      { label: 'Tarjetas de crédito',     to: '/configuracion/tarjetas-credito',      iconKey: 'gear',     permission: 'financials:read' },
       { label: 'Notificaciones',          to: '/configuracion/notificaciones',        iconKey: 'gear',     permission: 'settings:read' },
       { label: 'Usuarios',                to: '/configuracion/usuarios',              iconKey: 'partners', permission: 'users:read' },
       { label: 'Roles y permisos',        to: '/configuracion/roles',                 iconKey: 'gear',     permission: 'roles:read' },

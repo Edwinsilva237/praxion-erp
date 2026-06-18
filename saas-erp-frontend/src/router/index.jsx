@@ -46,6 +46,7 @@ const ReportesProduccion      = lazy(() => import('@/pages/Reportes/ReportesProd
 const EstadoDeCuenta          = lazy(() => import('@/pages/Reportes/EstadoDeCuenta'))
 const ConfigNotificaciones    = lazy(() => import('@/pages/Configuracion/Notificaciones'))
 const ConfigCuentasBancarias  = lazy(() => import('@/pages/Configuracion/CuentasBancarias'))
+const ConfigTarjetasCredito   = lazy(() => import('@/pages/Configuracion/TarjetasCredito'))
 const ConfigAlmacenes         = lazy(() => import('@/pages/Configuracion/Almacenes'))
 const ConfigUsuarios          = lazy(() => import('@/pages/Configuracion/Usuarios'))
 const ConfigRoles             = lazy(() => import('@/pages/Configuracion/Roles'))
@@ -226,6 +227,7 @@ const router = createBrowserRouter([
       { path: '/inventario/conteos/:id', element: <ConteoDetalle /> },
       { path: '/configuracion/notificaciones',    element: <ConfigNotificaciones /> },
       { path: '/configuracion/cuentas-bancarias', element: <ConfigCuentasBancarias /> },
+      { path: '/configuracion/tarjetas-credito',  element: <ConfigTarjetasCredito /> },
       { path: '/configuracion/almacenes',         element: <ConfigAlmacenes /> },
       { path: '/configuracion/usuarios',          element: <ConfigUsuarios /> },
       { path: '/configuracion/roles',             element: <ConfigRoles /> },

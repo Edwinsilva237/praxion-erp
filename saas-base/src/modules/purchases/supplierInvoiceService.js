@@ -520,6 +520,7 @@ async function registerPayment({
   tenantId, supplierId, genericSupplier,
   paymentDate, method, reference, amount, currency = 'MXN',
   bankAccountId = null,
+  creditCardId = null,
   applications = [],
   saveSurplusAsAdvance = false,  // si true y sobra dinero, crea ap_advance
   notes,
@@ -540,6 +541,14 @@ async function registerPayment({
       if (!baRows.length) throw createError(400, 'La cuenta bancaria seleccionada no existe o está inactiva.')
     }
 
+    if (creditCardId) {
+      const { rows: ccRows } = await client.query(
+        `SELECT id FROM credit_cards WHERE id = $1 AND tenant_id = $2 AND active = TRUE`,
+        [creditCardId, tenantId]
+      )
+      if (!ccRows.length) throw createError(400, 'La tarjeta de crédito seleccionada no existe o está inactiva.')
+    }
+
     // Resolver TC si es USD
     let exchangeRateValue = 1
     let amountMxn = amount
@@ -556,13 +565,13 @@ async function registerPayment({
       `INSERT INTO supplier_payments
          (tenant_id, partner_id, generic_supplier, payment_date,
           method, reference, amount, currency, exchange_rate_value, amount_mxn,
-          bank_account_id, notes, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          bank_account_id, credit_card_id, notes, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        RETURNING *`,
       [tenantId, supplierId || null, genericSupplier || null,
        paymentDate || new Date().toISOString().split('T')[0],
        method, reference || null, amount, currency, exchangeRateValue, amountMxn,
-       bankAccountId || null, notes || null, userId]
+       bankAccountId || null, creditCardId || null, notes || null, userId]
     )
     const payment = payRows[0]
 
@@ -846,6 +855,7 @@ async function getExpense({ tenantId, id }) {
  */
 async function payExpense({
   tenantId, id, method = 'cash', reference = null, paymentDate = null,
+  bankAccountId = null, creditCardId = null,
   userId, ipAddress, userAgent,
 }) {
   const exp = await getExpense({ tenantId, id })
@@ -871,6 +881,7 @@ async function payExpense({
     reference,
     amount: parseFloat(exp.total),            // monto en la moneda del documento
     currency: exp.currency || 'MXN',
+    bankAccountId, creditCardId,              // asociación opcional (transfer→cuenta, tarjeta→credit_card)
     applications: [{ apId: exp.ap_id, amountApplied: pendingMxn }],
     notes: 'Pago de contado del gasto',
     userId, ipAddress, userAgent,

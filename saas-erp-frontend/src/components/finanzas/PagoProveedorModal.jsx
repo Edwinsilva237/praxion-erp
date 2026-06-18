@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { cxpApi } from '@/api/cxp'
 import { partnersApi } from '@/api/partners'
 import { bankAccountsApi } from '@/api/bankAccounts'
+import { creditCardsApi } from '@/api/creditCards'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
 import Badge from '@/components/ui/Badge'
@@ -39,6 +40,7 @@ export function PagoProveedorModal({ onClose, onSaved, initialPartnerId = null, 
   const [method, setMethod]       = useState('transfer')
   const [reference, setReference] = useState('')
   const [bankAccountId, setBankAccountId] = useState('')
+  const [creditCardId, setCreditCardId] = useState('')
   const [amount, setAmount]       = useState('')
   const [appByApId, setAppByApId] = useState({})  // { [apId]: '123.45' }
   const [notes, setNotes]         = useState('')
@@ -49,6 +51,12 @@ export function PagoProveedorModal({ onClose, onSaved, initialPartnerId = null, 
   const { data: bankAccounts = [] } = useQuery({
     queryKey: ['bank-accounts', 'active'],
     queryFn:  () => bankAccountsApi.list(),
+    staleTime: 5 * 60 * 1000,
+  })
+  // Catálogo de tarjetas de crédito activas (para asociar cuando el pago es con tarjeta)
+  const { data: creditCards = [] } = useQuery({
+    queryKey: ['credit-cards', 'active'],
+    queryFn:  () => creditCardsApi.list(),
     staleTime: 5 * 60 * 1000,
   })
 
@@ -163,7 +171,8 @@ export function PagoProveedorModal({ onClose, onSaved, initialPartnerId = null, 
         paymentDate,
         method,
         reference:     reference.trim() || null,
-        bankAccountId: bankAccountId || null,
+        bankAccountId: method === 'transfer'    ? (bankAccountId || null) : null,
+        creditCardId:  method === 'credit_card' ? (creditCardId  || null) : null,
         amount:        amountNum,
         applications,
         saveSurplusAsAdvance: saveSurplus && remaining > 0.01,
@@ -243,32 +252,61 @@ export function PagoProveedorModal({ onClose, onSaved, initialPartnerId = null, 
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="label">
-                  Banco emisor
-                  <span className="text-ink-muted text-xs"> (¿de qué cuenta sale?)</span>
-                </label>
-                <select className="select" value={bankAccountId}
-                  onChange={e => setBankAccountId(e.target.value)}>
-                  <option value="">— Sin asignar —</option>
-                  {bankAccounts.map(a => (
-                    <option key={a.id} value={a.id}>
-                      {a.bank_name}
-                      {a.alias ? ` · ${a.alias}` : ''}
-                      {a.account_number ? ` (${a.account_number})` : ''}
-                      {' · '}{a.currency}
-                    </option>
-                  ))}
-                </select>
-                {bankAccounts.length === 0 && (
-                  <p className="text-[11px] text-status-warning mt-1">
-                    No hay cuentas bancarias configuradas.{' '}
-                    <a href="/configuracion/cuentas-bancarias" target="_blank" rel="noopener" className="underline">
-                      Crear una
-                    </a>.
-                  </p>
-                )}
-              </div>
+              {/* Transferencia → cuenta de la que sale */}
+              {method === 'transfer' && (
+                <div>
+                  <label className="label">
+                    Banco emisor
+                    <span className="text-ink-muted text-xs"> (¿de qué cuenta sale?)</span>
+                  </label>
+                  <select className="select" value={bankAccountId}
+                    onChange={e => setBankAccountId(e.target.value)}>
+                    <option value="">— Sin asignar —</option>
+                    {bankAccounts.map(a => (
+                      <option key={a.id} value={a.id}>
+                        {a.bank_name}
+                        {a.alias ? ` · ${a.alias}` : ''}
+                        {a.account_number ? ` (${a.account_number})` : ''}
+                        {' · '}{a.currency}
+                      </option>
+                    ))}
+                  </select>
+                  {bankAccounts.length === 0 && (
+                    <p className="text-[11px] text-status-warning mt-1">
+                      No hay cuentas bancarias configuradas.{' '}
+                      <a href="/configuracion/cuentas-bancarias" target="_blank" rel="noopener" className="underline">
+                        Crear una
+                      </a>.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Tarjeta de crédito → a qué tarjeta se cargó */}
+              {method === 'credit_card' && (
+                <div>
+                  <label className="label">
+                    Tarjeta<span className="text-ink-muted text-xs"> (¿a cuál se cargó?)</span>
+                  </label>
+                  <select className="select" value={creditCardId}
+                    onChange={e => setCreditCardId(e.target.value)}>
+                    <option value="">— Sin asignar —</option>
+                    {creditCards.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.alias}{c.last_four ? ` ••${c.last_four}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {creditCards.length === 0 && (
+                    <p className="text-[11px] text-status-warning mt-1">
+                      No hay tarjetas configuradas.{' '}
+                      <a href="/configuracion/tarjetas-credito" target="_blank" rel="noopener" className="underline">
+                        Crear una
+                      </a>.
+                    </p>
+                  )}
+                </div>
+              )}
               <div>
                 <label className="label">Monto del pago <span className="text-status-danger">*</span></label>
                 <input type="number" step="0.01" min="0" inputMode="decimal" className="input text-base"

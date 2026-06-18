@@ -6,6 +6,8 @@ import { createPortal } from 'react-dom'
 import { purchasesApi } from '@/api/purchases'
 import { processConfigApi } from '@/api/processConfig'
 import { partnersApi } from '@/api/partners'
+import { bankAccountsApi } from '@/api/bankAccounts'
+import { creditCardsApi } from '@/api/creditCards'
 import { fmtMXN, fmtDateOnly } from '@/utils/fmt'
 import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
@@ -64,6 +66,8 @@ function GastoModal({ categories, onClose, onSaved }) {
   const [paymentMethod, setPaymentMethod] = useState('transfer')
   const [markPaid, setMarkPaid]       = useState(false)
   const [paymentReference, setPaymentReference] = useState('')
+  const [paymentBankAccountId, setPaymentBankAccountId] = useState('')
+  const [paymentCreditCardId, setPaymentCreditCardId] = useState('')
   const [notes, setNotes]             = useState('')
   const [error, setError]             = useState(null)
   // Fase 2: carga de CFDI/PDF
@@ -105,6 +109,18 @@ function GastoModal({ categories, onClose, onSaved }) {
   })
   const suppliers = suppliersResp?.data || suppliersResp || []
 
+  // Catálogos para asociar el pago (solo cuando se marca Pagado).
+  const { data: bankAccounts = [] } = useQuery({
+    queryKey: ['bank-accounts', 'active'],
+    queryFn:  () => bankAccountsApi.list(),
+    enabled:  markPaid, staleTime: 5 * 60 * 1000,
+  })
+  const { data: creditCards = [] } = useQuery({
+    queryKey: ['credit-cards', 'active'],
+    queryFn:  () => creditCardsApi.list(),
+    enabled:  markPaid, staleTime: 5 * 60 * 1000,
+  })
+
   const sub = parseFloat(subtotal) || 0
   const iva = parseFloat(tax) || 0
   const total = +(sub + iva).toFixed(2)
@@ -129,6 +145,8 @@ function GastoModal({ categories, onClose, onSaved }) {
         paymentMethod,
         markPaid,
         paymentReference: markPaid ? (paymentReference.trim() || undefined) : undefined,
+        paymentBankAccountId: markPaid && paymentMethod === 'transfer'    ? (paymentBankAccountId || undefined) : undefined,
+        paymentCreditCardId:  markPaid && paymentMethod === 'credit_card' ? (paymentCreditCardId  || undefined) : undefined,
         notes: notes.trim() || undefined,
       })
     },
@@ -289,6 +307,41 @@ function GastoModal({ categories, onClose, onSaved }) {
                 <input className="input" value={paymentReference} onChange={e => setPaymentReference(e.target.value)}
                   placeholder={paymentMethod === 'transfer' ? 'SPEI / folio' : paymentMethod === 'check' ? '# cheque' : 'Opcional'} />
               </div>
+
+              {/* Transferencia → cuenta; Tarjeta → tarjeta (ambos opcionales) */}
+              {paymentMethod === 'transfer' && (
+                <div className="sm:col-span-2">
+                  <label className="label">Cuenta bancaria <span className="text-ink-muted text-xs">(opcional)</span></label>
+                  <select className="select" value={paymentBankAccountId}
+                    onChange={e => setPaymentBankAccountId(e.target.value)}>
+                    <option value="">— Sin especificar —</option>
+                    {bankAccounts.map(a => (
+                      <option key={a.id} value={a.id}>
+                        {a.bank_name}{a.alias ? ` · ${a.alias}` : ''} ({a.currency})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {paymentMethod === 'credit_card' && (
+                <div className="sm:col-span-2">
+                  <label className="label">Tarjeta <span className="text-ink-muted text-xs">(opcional)</span></label>
+                  {creditCards.length === 0 ? (
+                    <p className="text-xs text-ink-muted">
+                      No hay tarjetas configuradas.{' '}
+                      <a href="/configuracion/tarjetas-credito" target="_blank" rel="noopener" className="underline">Crear una</a>
+                    </p>
+                  ) : (
+                    <select className="select" value={paymentCreditCardId}
+                      onChange={e => setPaymentCreditCardId(e.target.value)}>
+                      <option value="">— Sin especificar —</option>
+                      {creditCards.map(c => (
+                        <option key={c.id} value={c.id}>{c.alias}{c.last_four ? ` ••${c.last_four}` : ''}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -351,6 +404,8 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const [payOpen, setPayOpen] = useState(false)            // liquidar de contado
   const [payMethod, setPayMethod] = useState('cash')
   const [payRef, setPayRef] = useState('')
+  const [payBankAccountId, setPayBankAccountId] = useState('')
+  const [payCreditCardId, setPayCreditCardId] = useState('')
 
   useEffect(() => {
     if (exp && !form) {
@@ -411,12 +466,26 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
 
   // Liquidar de contado: registra el pago por el total y deja la CXP en "Pagado".
   // Solo cuando el gasto tiene CXP propia (proveedor de catálogo) y sigue pendiente.
+  // Catálogos para asociar el pago (transfer→cuenta, tarjeta→credit_card). Solo al abrir.
+  const { data: bankAccounts = [] } = useQuery({
+    queryKey: ['bank-accounts', 'active'],
+    queryFn:  () => bankAccountsApi.list(),
+    enabled:  payOpen, staleTime: 5 * 60 * 1000,
+  })
+  const { data: creditCards = [] } = useQuery({
+    queryKey: ['credit-cards', 'active'],
+    queryFn:  () => creditCardsApi.list(),
+    enabled:  payOpen, staleTime: 5 * 60 * 1000,
+  })
+
   const pay = useMutation({
     mutationFn: () => {
       if (payMethod === 'check' && !payRef.trim()) throw new Error('El número de cheque es requerido.')
       return purchasesApi.payExpense(id, {
         method: payMethod,
         reference: payRef.trim() || undefined,
+        bankAccountId: payMethod === 'transfer'    ? (payBankAccountId || undefined) : undefined,
+        creditCardId:  payMethod === 'credit_card' ? (payCreditCardId  || undefined) : undefined,
       })
     },
     onSuccess: () => {
@@ -646,6 +715,48 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
                             placeholder={payMethod === 'transfer' ? 'SPEI / folio' : payMethod === 'check' ? '# cheque' : 'Opcional'} />
                         </div>
                       </div>
+
+                      {/* Transferencia → ¿de qué cuenta sale? (opcional) */}
+                      {payMethod === 'transfer' && (
+                        <div>
+                          <label className="label">Cuenta bancaria <span className="text-ink-muted text-xs">(opcional)</span></label>
+                          <select className="select" value={payBankAccountId}
+                            onChange={e => setPayBankAccountId(e.target.value)}>
+                            <option value="">— Sin especificar —</option>
+                            {bankAccounts.map(a => (
+                              <option key={a.id} value={a.id}>
+                                {a.bank_name}{a.alias ? ` · ${a.alias}` : ''} ({a.currency})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {/* Tarjeta de crédito → ¿a qué tarjeta se cargó? (opcional) */}
+                      {payMethod === 'credit_card' && (
+                        <div>
+                          <label className="label">Tarjeta <span className="text-ink-muted text-xs">(opcional)</span></label>
+                          {creditCards.length === 0 ? (
+                            <p className="text-xs text-ink-muted">
+                              No hay tarjetas configuradas.{' '}
+                              <a href="/configuracion/tarjetas-credito" target="_blank" rel="noopener" className="underline">
+                                Crear una
+                              </a>
+                            </p>
+                          ) : (
+                            <select className="select" value={payCreditCardId}
+                              onChange={e => setPayCreditCardId(e.target.value)}>
+                              <option value="">— Sin especificar —</option>
+                              {creditCards.map(c => (
+                                <option key={c.id} value={c.id}>
+                                  {c.alias}{c.last_four ? ` ••${c.last_four}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                      )}
+
                       <div className="flex gap-2">
                         <button type="button" className="btn-ghost text-xs"
                           onClick={() => { setPayOpen(false); setPayRef('') }}>Cancelar</button>

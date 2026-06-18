@@ -119,6 +119,29 @@ registerCron('inventory.low-stock-scan', '0 14 * * *', () => withBypass(async ()
   if (total > 0) logger.info(`[inventory.low-stock-scan] ${total} alerta(s) nueva(s) de stock bajo en ${tenants.length} tenants.`)
 }))
 
+// ── 4c) Recordatorios de pago de tarjetas de crédito ────────────────────────
+// Una vez al día (15:00 UTC ≈ 9:00 MX): por cada tenant con tarjetas activas,
+// dispara una alerta por cada tarjeta cuyo día de pago caiga dentro de su
+// ventana de anticipación (reminder_lead_days). dispatchAlert dedupea por
+// (tarjeta, ciclo) → un aviso por tarjeta por mes; push al responsable.
+const { scanDuePayments } = require('./modules/credit-cards/service')
+
+registerCron('credit-cards.payment-due-scan', '0 15 * * *', () => withBypass(async () => {
+  const { query } = require('./db')
+  const { rows: tenants } = await query(
+    `SELECT DISTINCT tenant_id FROM credit_cards WHERE active = TRUE`
+  )
+  let total = 0
+  for (const t of tenants) {
+    try {
+      total += await scanDuePayments({ tenantId: t.tenant_id })
+    } catch (err) {
+      logger.error(`[credit-cards.payment-due-scan] tenant ${t.tenant_id}: ${err.message}`)
+    }
+  }
+  if (total > 0) logger.info(`[credit-cards.payment-due-scan] ${total} recordatorio(s) de pago en ${tenants.length} tenants.`)
+}))
+
 // ── 4) Notificaciones de mensajes del sistema ────────────────────────────────
 // Cada hora revisamos:
 //   a) Mensajes con notify_email=TRUE que ya empezaron y no se han notificado
