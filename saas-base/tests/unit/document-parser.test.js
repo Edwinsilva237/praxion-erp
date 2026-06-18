@@ -268,10 +268,20 @@ describe('parseTotalsFromText — reconciliación de totales (bug IVA=tasa)', ()
     expect(r.tax).toBe(160)        // derivado, NO 0.16
   })
 
-  test('tasa sin subtotal legible → IVA queda null (no 0.16), no se inventa', () => {
+  test('tasa sin subtotal legible → NO toma 0.16; estima 16% del total', () => {
+    // La tasa 0.16 se descarta; como sólo queda el total, se estima IVA 16%.
     const r = parseTotalsFromText('IVA 0.160000   Total 1,160.00')
     expect(r.total).toBe(1160)
-    expect(r.tax).toBeNull()       // mejor null para captura manual que 0.16
+    expect(r.subtotal).toBe(1000)  // 1160 / 1.16
+    expect(r.tax).toBe(160)        // NO 0.16
+  })
+
+  test('sólo total legible → estima desglose al 16% (no deja $0/$0)', () => {
+    // Caso ISI CLEAN: el PDF sólo expuso "Total $12,180.00".
+    const r = parseTotalsFromText('Total: $12,180.00')
+    expect(r.total).toBe(12180)
+    expect(r.subtotal).toBe(10500) // 12180 / 1.16
+    expect(r.tax).toBe(1680)       // 12180 − 10500
   })
 
   test('total + IVA real (sin subtotal) → deriva el subtotal', () => {

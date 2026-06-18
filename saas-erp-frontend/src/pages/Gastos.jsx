@@ -407,8 +407,16 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const [payBankAccountId, setPayBankAccountId] = useState('')
   const [payCreditCardId, setPayCreditCardId] = useState('')
 
+  // ¿El gasto trae total pero SIN desglose (subtotal/IVA en 0)? Pasa con facturas
+  // que llegaron por correo como PDF y el parser sólo pudo leer el total. En ese
+  // caso estimamos el desglose al 16% (editable) para no mostrar $0/$0.
+  const breakdownMissing = exp && parseFloat(exp.total || 0) > 0
+    && !parseFloat(exp.subtotal || 0) && !parseFloat(exp.tax || 0)
+
   useEffect(() => {
     if (exp && !form) {
+      const stTotal = parseFloat(exp.total || 0)
+      const estSub  = breakdownMissing ? +(stTotal / 1.16).toFixed(2) : null
       setForm({
         supplierId:        exp.partner_id || '',
         expenseCategoryId: exp.expense_category_id || '',
@@ -416,12 +424,12 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
         documentNumber:    exp.invoice_number || '',
         hasCfdi:           !!exp.uuid_sat,
         uuid:              exp.uuid_sat || '',
-        subtotal:          exp.subtotal ?? '',
-        tax:               exp.tax ?? '',
+        subtotal:          breakdownMissing ? estSub : (exp.subtotal ?? ''),
+        tax:               breakdownMissing ? +(stTotal - estSub).toFixed(2) : (exp.tax ?? ''),
         notes:             exp.notes || '',
       })
     }
-  }, [exp, form])
+  }, [exp, form, breakdownMissing])
 
   const isCancelled = exp?.status === 'cancelled'
   // El backend bloquea editar monto / cancelar cuando hay pago aplicado.
@@ -951,6 +959,14 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
                   <label className="label">UUID (folio fiscal)</label>
                   <input className="input font-mono text-xs" value={form.uuid} onChange={e => set('uuid', e.target.value)}
                     placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+                </div>
+              )}
+
+              {breakdownMissing && !isPaid && (
+                <div className="alert-warning text-xs">
+                  Esta factura llegó <strong>sin desglose</strong> (total {fmtMXN(exp.total)}). Estimamos el
+                  Subtotal e IVA al <strong>16%</strong> — verifícalos y ajústalos si la factura usa otra
+                  tasa, luego <strong>Guardar cambios</strong>.
                 </div>
               )}
 

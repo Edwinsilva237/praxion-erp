@@ -217,6 +217,15 @@ function parseTotalsFromText(text) {
   if (subtotal != null && tax != null && total != null && Math.abs(subtotal + tax - total) > 0.5) {
     tax = total >= subtotal ? round2(total - subtotal) : null
   }
+
+  // Último recurso: si SÓLO se leyó el total (el PDF impreso no expuso el desglose),
+  // estimamos IVA 16% (la tasa dominante en MX) para no dejar el gasto en $0/$0.
+  // Es una ESTIMACIÓN visible y editable; el usuario la ajusta si la factura usa
+  // otra tasa (8% frontera, 0%, exento) o sube el XML/activa la IA para el exacto.
+  if (total != null && total > 0 && subtotal == null && tax == null) {
+    subtotal = round2(total / 1.16)
+    tax = round2(total - subtotal)
+  }
   return { subtotal, tax, total }
 }
 
