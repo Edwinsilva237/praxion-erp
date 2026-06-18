@@ -177,6 +177,49 @@ async function parsePDF(buffer) {
     : 'No se pudieron leer los datos del PDF. Sube el XML (CFDI) o configura ANTHROPIC_API_KEY para extracción con IA.')
 }
 
+/**
+ * Extrae y RECONCILIA los totales (subtotal / IVA / total) del texto plano de un
+ * PDF de factura. El texto de un CFDI impreso es ruidoso: el IVA casi siempre se
+ * imprime como TASA ("0.160000") o como CÓDIGO de impuesto ("002"), NO como el
+ * importe. Antes ese regex tomaba "0.16" como si fuera el impuesto → se guardaba
+ * tax=0.16 y subtotal=0, y el total se "sumaba" como +0.16 en vez de 16%.
+ *
+ * Ahora: capturamos los tres por separado, descartamos un IVA que parece tasa
+ * (< 1), y DERIVAMOS el dato faltante de los otros dos (subtotal y total son los
+ * fiables). Si la terna no cuadra, dejamos el IVA en null para captura manual en
+ * lugar de guardar un número que se suma mal.
+ */
+function parseTotalsFromText(text) {
+  const num = (m) => (m ? parseFloat(m[1].replace(/,/g, '')) : null)
+  const round2 = (n) => Math.round(n * 100) / 100
+  // Importe: miles con coma y/o 2 decimales, o entero. Evita capturar la cola de
+  // una tasa "0.160000" como dinero (sólo toma "0.16", que luego se descarta).
+  const MONEY = '([0-9]{1,3}(?:,[0-9]{3})*(?:\\.[0-9]{2})?|[0-9]+\\.[0-9]{2}|[0-9]+)'
+
+  let subtotal = num(text.match(new RegExp(`sub[\\s-]*total[:\\s$]*${MONEY}`, 'i')))
+  // \b evita que "total" haga match DENTRO de "Subtotal".
+  let total    = num(text.match(new RegExp(`\\btotal[:\\s$]*${MONEY}`, 'i')))
+  let tax      = num(text.match(new RegExp(`(?:iva|i\\.v\\.a\\.)[:\\s$]*${MONEY}`, 'i')))
+
+  // 0.16 / 0.08 = TASA, no importe → fuera.
+  if (tax != null && tax < 1) tax = null
+
+  // Reconciliar a una terna consistente; subtotal y total son los más fiables.
+  if (subtotal != null && total != null && total + 0.005 >= subtotal) {
+    tax = round2(total - subtotal)                 // IVA = total − subtotal
+  } else if (total != null && tax != null && total > tax) {
+    subtotal = round2(total - tax)
+  } else if (subtotal != null && tax != null) {
+    total = round2(subtotal + tax)
+  }
+
+  // Sanidad final: si los tres existen pero no cuadran, el IVA capturado es ruido.
+  if (subtotal != null && tax != null && total != null && Math.abs(subtotal + tax - total) > 0.5) {
+    tax = total >= subtotal ? round2(total - subtotal) : null
+  }
+  return { subtotal, tax, total }
+}
+
 async function extractPDFByText(buffer) {
   // pdf-parse v2 exporta la clase PDFParse (la API vieja `pdfParse(buffer)` ya no
   // existe → tronaba siempre). Mismo uso que business-partners/csfService.
@@ -191,16 +234,8 @@ async function extractPDFByText(buffer) {
   const rfcMatch = text.match(/RFC[:\s]+([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3})/i)
   const rfc = rfcMatch ? rfcMatch[1].trim() : null
 
-  // Totales
-  const subtotalMatch = text.match(/subtotal[:\s$]*([0-9,]+\.?\d{0,2})/i)
-  // \b evita que "total" haga match DENTRO de "Subtotal" (ahí no hay frontera de
-  // palabra antes de "total") y tome el subtotal por equivocación.
-  const totalMatch    = text.match(/\btotal[:\s$]*([0-9,]+\.?\d{0,2})/i)
-  const ivaMatch      = text.match(/(?:iva|impuesto)[:\s$]*([0-9,]+\.?\d{0,2})/i)
-
-  const subtotal = subtotalMatch ? parseFloat(subtotalMatch[1].replace(/,/g, '')) : null
-  const total    = totalMatch    ? parseFloat(totalMatch[1].replace(/,/g, ''))    : null
-  const tax      = ivaMatch      ? parseFloat(ivaMatch[1].replace(/,/g, ''))      : null
+  // Totales (reconciliados — ver parseTotalsFromText).
+  const { subtotal, tax, total } = parseTotalsFromText(text)
 
   // Fecha
   const dateMatch = text.match(/fecha[:\s]+(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/i)
@@ -370,4 +405,4 @@ function createError(status, message) {
   return err
 }
 
-module.exports = { parseSupplierDocument }
+module.exports = { parseSupplierDocument, parseTotalsFromText }

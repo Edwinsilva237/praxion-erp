@@ -23,7 +23,7 @@ jest.mock('pdf-parse', () => ({
   },
 }))
 
-const { parseSupplierDocument } = require('../../src/modules/purchases/documentParserService')
+const { parseSupplierDocument, parseTotalsFromText } = require('../../src/modules/purchases/documentParserService')
 
 const SAMPLE_CFDI = `<?xml version="1.0" encoding="UTF-8"?>
 <cfdi:Comprobante Serie="A" Folio="1234" Fecha="2026-06-09T10:30:00"
@@ -251,5 +251,54 @@ describe('documentParserService — formato no soportado', () => {
     await expect(
       parseSupplierDocument(Buffer.from('hola'), 'text/plain', 'nota.txt')
     ).rejects.toMatchObject({ status: 400 })
+  })
+})
+
+describe('parseTotalsFromText — reconciliación de totales (bug IVA=tasa)', () => {
+  test('subtotal + total presentes → IVA = total − subtotal', () => {
+    expect(parseTotalsFromText('Subtotal 1,000.00 IVA 160.00 Total 1,160.00'))
+      .toEqual({ subtotal: 1000, tax: 160, total: 1160 })
+  })
+
+  test('IVA impreso como TASA (0.160000) NO se toma como importe', () => {
+    // El bug reportado: tomaba 0.16 y lo sumaba (+0.16) en vez de 16%.
+    const r = parseTotalsFromText('Subtotal: 1,000.00  IVA Tasa 0.160000  Total: 1,160.00')
+    expect(r.subtotal).toBe(1000)
+    expect(r.total).toBe(1160)
+    expect(r.tax).toBe(160)        // derivado, NO 0.16
+  })
+
+  test('tasa sin subtotal legible → IVA queda null (no 0.16), no se inventa', () => {
+    const r = parseTotalsFromText('IVA 0.160000   Total 1,160.00')
+    expect(r.total).toBe(1160)
+    expect(r.tax).toBeNull()       // mejor null para captura manual que 0.16
+  })
+
+  test('total + IVA real (sin subtotal) → deriva el subtotal', () => {
+    expect(parseTotalsFromText('Total 1,160.00 IVA 160.00'))
+      .toEqual({ subtotal: 1000, tax: 160, total: 1160 })
+  })
+
+  test('terna inconsistente → recomputa el IVA de los extremos', () => {
+    // IVA capturado (5) no cuadra; subtotal/total sí → IVA = 1160 − 1000.
+    const r = parseTotalsFromText('Subtotal 1,000.00 IVA 5 Total 1,160.00')
+    expect(r.tax).toBe(160)
+  })
+
+  test('PDF completo: un CFDI impreso con IVA como tasa ya NO guarda tax=0.16', async () => {
+    delete process.env.ANTHROPIC_API_KEY
+    mockGetText = jest.fn().mockResolvedValue({
+      text: [
+        'PROVEEDOR DEMO SA DE CV',
+        'RFC: AAA010101AAA',
+        'Subtotal: $1,000.00',
+        'IVA (Tasa 0.160000):  $160.00',
+        'Total: $1,160.00',
+      ].join('\n'),
+    })
+    const r = await parseSupplierDocument(Buffer.from('pdf'), 'application/pdf', 'f.pdf')
+    expect(r.subtotal).toBe(1000)
+    expect(r.tax).toBe(160)
+    expect(r.total).toBe(1160)
   })
 })
