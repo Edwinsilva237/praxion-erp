@@ -10,6 +10,7 @@
 const { createTenant, cleanupTestTenants } = require('../helpers/factory')
 const { pool, query, withBypass } = require('../../src/db')
 const { getFinancialSnapshot } = require('../../src/modules/reports/financialSnapshot')
+const supplierInvoiceService = require('../../src/modules/purchases/supplierInvoiceService')
 
 let tenantId, userId, partnerId
 
@@ -74,5 +75,35 @@ describe('IVA del mes — base AL COBRO (sobre pagos, no facturas emitidas)', ()
     expect(snap.iva.transferred).toBeCloseTo(80, 2)  // del test anterior
     expect(snap.iva.net).toBeCloseTo(40, 2)          // 80 − 40
     expect(snap.iva.direction).toBe('to_pay')
+  })
+
+  // El IVA de los GASTOS (supplier_invoices.is_expense = true) también es acreditable:
+  // misma tabla, la query NO filtra por is_expense. Pero AL PAGO → solo cuenta cuando
+  // el gasto se liquida. Esto valida que el botón "Marcar como pagado" hace que su IVA
+  // aparezca, y que se cuenta UNA sola vez (sin duplicar).
+  test('gasto con CFDI: su IVA NO cuenta hasta pagarlo, y entra UNA sola vez al liquidarlo', async () => {
+    const before = (await getFinancialSnapshot({ tenantId })).iva.creditable  // 40 (acumulado)
+
+    // Gasto con CFDI: subtotal 1000, IVA 160, total 1160. Crea su CXP (proveedor de catálogo).
+    const exp = await supplierInvoiceService.registerInvoice({
+      tenantId, supplierId: partnerId,
+      documentNumber: 'GASTO-IVA-1',
+      uuidSat: '0a000000-0000-0000-0000-0000000000aa',
+      subtotal: 1000, tax: 160, total: 1160,
+      invoiceDate: new Date().toISOString().slice(0, 10), currency: 'MXN',
+      isExpense: true, expenseCategoryId: null, userId,
+    })
+    expect(exp.ap_id).toBeTruthy()
+
+    // Aún SIN pagar → el IVA del gasto NO debe sumar (base al pago).
+    const unpaid = (await getFinancialSnapshot({ tenantId })).iva.creditable
+    expect(unpaid).toBeCloseTo(before, 2)
+
+    // Marcar pagado de contado → registra el pago y aplica a la CXP.
+    await supplierInvoiceService.payExpense({ tenantId, id: exp.id, method: 'cash' })
+
+    // Ahora el IVA del gasto (160) entra exactamente una vez: before + 160.
+    const after = (await getFinancialSnapshot({ tenantId })).iva.creditable
+    expect(after).toBeCloseTo(before + 160, 2)
   })
 })

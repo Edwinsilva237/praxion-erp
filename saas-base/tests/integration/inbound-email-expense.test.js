@@ -13,6 +13,7 @@ const request = require('supertest')
 const app = require('../../src/app')
 const { pool, query, withBypass } = require('../../src/db')
 const inboundEmailService = require('../../src/modules/inbound/inboundEmailService')
+const supplierInvoiceService = require('../../src/modules/purchases/supplierInvoiceService')
 const { createTenant, cleanupTestTenants } = require('../helpers/factory')
 
 let tenantId, token, supplierId
@@ -235,5 +236,52 @@ describe('adjuntos comprimidos (.zip)', () => {
         { filename: 'cosas.zip', mimetype: 'application/zip', contentBase64: zb64 },
       ] })
     expect(res.status).toBe(422)
+  })
+})
+
+// ── payExpense: liquidar un gasto de contado en un paso ─────────────────────
+describe('payExpense — liquidar de contado', () => {
+  const mkExpense = (over = {}) => supplierInvoiceService.registerInvoice({
+    tenantId, supplierId,
+    documentNumber: `PAY-${over.documentNumber || '0'}`,
+    subtotal: 200, tax: 32, total: 232,
+    invoiceDate: '2026-06-10', currency: 'MXN',
+    isExpense: true, expenseCategoryId: null, userId: null,
+    ...over,
+  })
+
+  test('gasto pendiente con proveedor de catálogo → queda Pagado', async () => {
+    const exp = await mkExpense({ documentNumber: 'OK', uuidSat: 'a1000001-0000-0000-0000-000000000001' })
+    expect(exp.ap_id).toBeTruthy()
+
+    const paid = await supplierInvoiceService.payExpense({ tenantId, id: exp.id, method: 'cash' })
+    expect(paid.ap_status).toBe('paid')
+    expect(parseFloat(paid.ap_amount_pending)).toBeCloseTo(0, 2)
+
+    const { rows } = await withBypass(() => query(
+      `SELECT method, amount_mxn FROM supplier_payments
+        WHERE tenant_id = $1 AND partner_id = $2 ORDER BY created_at DESC LIMIT 1`,
+      [tenantId, supplierId]))
+    expect(rows[0].method).toBe('cash')
+    expect(parseFloat(rows[0].amount_mxn)).toBeCloseTo(232, 2)
+  })
+
+  test('gasto ya pagado → 409', async () => {
+    const exp = await mkExpense({ documentNumber: 'DUP', uuidSat: 'a1000002-0000-0000-0000-000000000002' })
+    await supplierInvoiceService.payExpense({ tenantId, id: exp.id })
+    await expect(supplierInvoiceService.payExpense({ tenantId, id: exp.id }))
+      .rejects.toMatchObject({ status: 409 })
+  })
+
+  test('gasto genérico (sin proveedor de catálogo → sin CXP) → 409', async () => {
+    const exp = await supplierInvoiceService.registerInvoice({
+      tenantId, genericSupplier: 'Eventual SA',
+      documentNumber: 'PAY-GEN', subtotal: 30, tax: 0, total: 30,
+      invoiceDate: '2026-06-10', currency: 'MXN',
+      isExpense: true, expenseCategoryId: null, userId: null,
+    })
+    expect(exp.ap_id).toBeFalsy()
+    await expect(supplierInvoiceService.payExpense({ tenantId, id: exp.id }))
+      .rejects.toMatchObject({ status: 409 })
   })
 })

@@ -347,6 +347,9 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const [checkedLines, setCheckedLines] = useState({})     // { lineId: bool }
   const [supOpen, setSupOpen] = useState(false)            // alta rápida de proveedor (gasto genérico)
   const [supForm, setSupForm] = useState({ name: '', rfc: '', type: 'supplier', recurrente: false })
+  const [payOpen, setPayOpen] = useState(false)            // liquidar de contado
+  const [payMethod, setPayMethod] = useState('cash')
+  const [payRef, setPayRef] = useState('')
 
   useEffect(() => {
     if (exp && !form) {
@@ -404,6 +407,29 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
     },
     onError: (e) => setError(e.response?.data?.error || e.message),
   })
+
+  // Liquidar de contado: registra el pago por el total y deja la CXP en "Pagado".
+  // Solo cuando el gasto tiene CXP propia (proveedor de catálogo) y sigue pendiente.
+  const pay = useMutation({
+    mutationFn: () => {
+      if (payMethod === 'check' && !payRef.trim()) throw new Error('El número de cheque es requerido.')
+      return purchasesApi.payExpense(id, {
+        method: payMethod,
+        reference: payRef.trim() || undefined,
+      })
+    },
+    onSuccess: () => {
+      setPayOpen(false); setPayRef('')
+      qc.invalidateQueries({ queryKey: ['expense', id] })
+      qc.invalidateQueries({ queryKey: ['expenses'] })
+      qc.invalidateQueries({ queryKey: ['expenses-summary'] })
+      qc.invalidateQueries({ queryKey: ['cxp'] })
+      onSaved()
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message),
+  })
+  const canPay = exp && exp.is_expense !== false && exp.status !== 'cancelled'
+    && !!exp.ap_id && exp.ap_status === 'pending'
 
   const canLink = exp && exp.is_expense !== false && exp.status !== 'cancelled'
     && !['paid', 'partial'].includes(exp.ap_status) && !!exp.partner_id
@@ -579,6 +605,59 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
                   </div>
                 )}
               </div>
+            )}
+
+            {/* Marcar como pagado (de contado) — liquida la CXP en un paso, sin ir
+                a Cuentas por pagar. Solo si el gasto tiene CXP propia y sigue pendiente. */}
+            {canPay && (
+              <Can do="expenses:create">
+                <div className="bg-status-success/10 border border-status-success/30 rounded-lg p-3 flex flex-col gap-2">
+                  {!payOpen ? (
+                    <>
+                      <p className="text-xs text-ink-secondary">
+                        ¿Ya lo pagaste? Márcalo como <strong>pagado de contado</strong> y se liquida
+                        en el momento (no queda como cuenta por pagar).
+                      </p>
+                      <button type="button" className="btn-secondary text-xs self-start"
+                        onClick={() => { setError(null); setPayOpen(true) }}>
+                        Marcar como pagado
+                      </button>
+                    </>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      <p className="text-xs text-ink-secondary">
+                        Se registra un pago por <strong>{fmtMXN(exp.total)}</strong> y el gasto queda <strong>Pagado</strong>.
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                          <label className="label">Forma de pago</label>
+                          <select className="select" value={payMethod}
+                            onChange={e => setPayMethod(e.target.value)}>
+                            {METHOD_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="label">
+                            {payMethod === 'check' ? 'Número de cheque' : 'Referencia (opcional)'}
+                          </label>
+                          <input className="input" value={payRef}
+                            onChange={e => setPayRef(e.target.value)}
+                            placeholder={payMethod === 'transfer' ? 'SPEI / folio' : payMethod === 'check' ? '# cheque' : 'Opcional'} />
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button type="button" className="btn-ghost text-xs"
+                          onClick={() => { setPayOpen(false); setPayRef('') }}>Cancelar</button>
+                        <button type="button" className="btn-primary text-xs"
+                          disabled={pay.isPending}
+                          onClick={() => { setError(null); pay.mutate() }}>
+                          {pay.isPending ? <Spinner size="sm" /> : 'Confirmar pago'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </Can>
             )}
 
             {/* Solicitar factura al proveedor (gasto sin CFDI) */}

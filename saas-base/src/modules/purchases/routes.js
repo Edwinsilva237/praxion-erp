@@ -859,6 +859,25 @@ router.post('/expenses/:id/cancel', checkPermission('expenses', 'create'), async
 })
 
 /**
+ * POST /api/purchases/expenses/:id/pay
+ * Liquida un gasto DE CONTADO en un paso: registra el pago por el total pendiente
+ * y deja su CXP en "Pagado", sin pasar por Cuentas por pagar. Body opcional:
+ * { method?, reference?, paymentDate? }. Gateado por expenses:create — misma
+ * puerta que el toggle "Pagado" del alta de gasto (que también registra el pago).
+ */
+router.post('/expenses/:id/pay', checkPermission('expenses', 'create'), async (req, res, next) => {
+  try {
+    const { method, reference, paymentDate } = req.body || {}
+    const result = await supplierInvoiceService.payExpense({
+      tenantId: req.tenant.id, id: req.params.id,
+      method, reference, paymentDate,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
  * POST /api/purchases/expenses/:id/request-invoice
  * Solicita al proveedor (por correo) la factura de un gasto sin CFDI.
  */

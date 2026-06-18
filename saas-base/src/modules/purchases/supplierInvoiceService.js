@@ -833,6 +833,52 @@ async function getExpense({ tenantId, id }) {
 }
 
 /**
+ * Liquida un GASTO de contado en un solo paso: registra un pago por el TOTAL
+ * pendiente y lo aplica a la CXP del gasto, dejándolo "Pagado" sin tener que ir
+ * al módulo de Cuentas por pagar. Pensado para las facturas que entran por correo
+ * y se pagan al contado.
+ *
+ * Requiere un proveedor del catálogo (es quien tiene CXP — `ap_id`). Un gasto
+ * genérico no tiene CXP; primero hay que asignarle proveedor (assignExpenseSupplier).
+ * Si ya hay un pago parcial, se manda a Cuentas por pagar (no adivinamos el resto).
+ *
+ * @returns el gasto actualizado (mismo shape que getExpense).
+ */
+async function payExpense({
+  tenantId, id, method = 'cash', reference = null, paymentDate = null,
+  userId, ipAddress, userAgent,
+}) {
+  const exp = await getExpense({ tenantId, id })
+  if (!exp) throw createError(404, 'Gasto no encontrado.')
+  if (exp.status === 'cancelled') throw createError(409, 'El gasto está cancelado.')
+  if (!exp.ap_id) {
+    throw createError(409, 'Este gasto no tiene cuenta por pagar (asigna un proveedor del catálogo primero).')
+  }
+  if (exp.ap_status === 'paid') throw createError(409, 'El gasto ya está pagado.')
+  if (exp.ap_status === 'partial') {
+    throw createError(409, 'El gasto ya tiene un pago parcial; liquídalo desde Cuentas por pagar.')
+  }
+
+  // El pendiente vive en la CXP (MXN). En un gasto sin pagos, pendiente == total_mxn.
+  const pendingMxn = parseFloat(exp.ap_amount_pending ?? exp.total_mxn)
+  await registerPayment({
+    tenantId,
+    supplierId: exp.partner_id,
+    // Pago de contado: por default se registra hoy (cuando se captura el pago);
+    // registerPayment cae a la fecha de hoy si no se manda una.
+    paymentDate: paymentDate || undefined,
+    method,
+    reference,
+    amount: parseFloat(exp.total),            // monto en la moneda del documento
+    currency: exp.currency || 'MXN',
+    applications: [{ apId: exp.ap_id, amountApplied: pendingMxn }],
+    notes: 'Pago de contado del gasto',
+    userId, ipAddress, userAgent,
+  })
+  return getExpense({ tenantId, id })
+}
+
+/**
  * Crea (o reusa) un PROVEEDOR a partir de un GASTO genérico — típicamente uno que
  * llegó por correo cuyo emisor no estaba en el catálogo (`partner_id IS NULL`,
  * `generic_supplier` = razón social del CFDI). Usa el RFC + nombre que ya trae el
@@ -1445,6 +1491,6 @@ function createError(status, message) {
 module.exports = {
   registerInvoice, generateReceiptRemission, listInvoices, getInvoice, listExpenses,
   listExpensesSummary, getExpense, updateExpense, cancelExpense, linkExpenseToReceipt,
-  assignExpenseSupplier,
+  assignExpenseSupplier, payExpense,
   suggestReceiptForExpense, requestExpenseInvoice, registerPayment, getSupplierStatement,
 }
