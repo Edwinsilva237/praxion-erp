@@ -14,6 +14,7 @@ const METHOD_LABEL = {
   cash:                'Efectivo',
   transfer:            'Transferencia',
   check:               'Cheque',
+  credit_card:         'Tarjeta de crédito',
   advance_application: 'Aplicación',
 }
 
@@ -113,6 +114,7 @@ function NuevoAnticipoModal({ onClose, onSaved }) {
               <option value="transfer">Transferencia</option>
               <option value="cash">Efectivo</option>
               <option value="check">Cheque</option>
+              <option value="credit_card">Tarjeta de crédito</option>
             </select>
           </div>
           <div>

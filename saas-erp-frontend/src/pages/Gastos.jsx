@@ -32,9 +32,10 @@ function PagoBadge({ status }) {
 
 // ── Forma de pago (mismo vocabulario que el módulo de pagos a proveedor) ─────
 const METHOD_OPTS = [
-  ['transfer', 'Transferencia'],
-  ['cash',     'Efectivo'],
-  ['check',    'Cheque'],
+  ['transfer',    'Transferencia'],
+  ['cash',        'Efectivo'],
+  ['check',       'Cheque'],
+  ['credit_card', 'Tarjeta de crédito'],
 ]
 const methodLabel = (m) => (METHOD_OPTS.find(([v]) => v === m)?.[1]) || null
 

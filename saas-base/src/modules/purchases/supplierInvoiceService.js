@@ -52,8 +52,8 @@ async function registerInvoice({
     if (!documentNumber) throw createError(400, 'documentNumber es requerido.')
     if (!total || total <= 0) throw createError(400, 'total debe ser mayor a cero.')
     if (!supplierId && !genericSupplier) throw createError(400, 'supplierId o genericSupplier es requerido.')
-    if (paymentMethod && !['transfer', 'cash', 'check'].includes(paymentMethod)) {
-      throw createError(400, 'paymentMethod inválido (transfer | cash | check).')
+    if (paymentMethod && !['transfer', 'cash', 'check', 'credit_card'].includes(paymentMethod)) {
+      throw createError(400, 'paymentMethod inválido (transfer | cash | check | credit_card).')
     }
 
     // Verificar duplicado por UUID SAT
@@ -1030,8 +1030,8 @@ async function updateExpense({
       throw createError(409, 'No se puede cambiar el monto de un gasto con un pago aplicado. Reversa el pago primero.')
     }
 
-    if (paymentMethod && !['transfer', 'cash', 'check'].includes(paymentMethod)) {
-      throw createError(400, 'paymentMethod inválido (transfer | cash | check).')
+    if (paymentMethod && !['transfer', 'cash', 'check', 'credit_card'].includes(paymentMethod)) {
+      throw createError(400, 'paymentMethod inválido (transfer | cash | check | credit_card).')
     }
     if (expenseCategoryId) {
       const { rows } = await client.query(

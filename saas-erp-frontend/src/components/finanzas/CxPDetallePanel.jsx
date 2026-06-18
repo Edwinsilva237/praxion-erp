@@ -33,6 +33,7 @@ const PAYMENT_METHOD_LABEL = {
   cash:                'Efectivo',
   transfer:            'Transferencia',
   check:               'Cheque',
+  credit_card:         'Tarjeta de crédito',
 }
 
 // ── Documento origen (factura/remisión de proveedor) ───────────────────────

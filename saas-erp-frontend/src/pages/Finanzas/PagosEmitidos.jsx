@@ -9,16 +9,18 @@ import Spinner from '@/components/ui/Spinner'
 import { fmtMXN, fmtDateOnly } from '@/utils/fmt'
 
 const METHOD_OPTS = [
-  ['',         'Todos'],
-  ['transfer', 'Transferencia'],
-  ['cash',     'Efectivo'],
-  ['check',    'Cheque'],
+  ['',            'Todos'],
+  ['transfer',    'Transferencia'],
+  ['cash',        'Efectivo'],
+  ['check',       'Cheque'],
+  ['credit_card', 'Tarjeta de crédito'],
 ]
 
 const METHOD_LABEL = {
   transfer:            'Transferencia',
   cash:                'Efectivo',
   check:               'Cheque',
+  credit_card:         'Tarjeta de crédito',
   advance_application: 'Aplicación de anticipo',
 }
 

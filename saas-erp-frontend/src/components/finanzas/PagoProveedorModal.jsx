@@ -11,9 +11,10 @@ import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
 const METHOD_OPTS = [
-  ['transfer', 'Transferencia'],
-  ['cash',     'Efectivo'],
-  ['check',    'Cheque'],
+  ['transfer',    'Transferencia'],
+  ['cash',        'Efectivo'],
+  ['check',       'Cheque'],
+  ['credit_card', 'Tarjeta de crédito'],
 ]
 
 const DOC_TYPE_LABEL = {

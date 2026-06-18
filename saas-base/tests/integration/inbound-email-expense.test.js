@@ -273,6 +273,18 @@ describe('payExpense — liquidar de contado', () => {
       .rejects.toMatchObject({ status: 409 })
   })
 
+  test('forma de pago credit_card (tarjeta de crédito, mig 211) se registra', async () => {
+    const exp = await mkExpense({ documentNumber: 'CARD', uuidSat: 'a1000003-0000-0000-0000-000000000003' })
+    await supplierInvoiceService.payExpense({ tenantId, id: exp.id, method: 'credit_card', reference: 'AUTH-9988' })
+
+    const { rows } = await withBypass(() => query(
+      `SELECT method, reference FROM supplier_payments
+        WHERE tenant_id = $1 AND partner_id = $2 ORDER BY created_at DESC LIMIT 1`,
+      [tenantId, supplierId]))
+    expect(rows[0].method).toBe('credit_card')
+    expect(rows[0].reference).toBe('AUTH-9988')
+  })
+
   test('gasto genérico (sin proveedor de catálogo → sin CXP) → 409', async () => {
     const exp = await supplierInvoiceService.registerInvoice({
       tenantId, genericSupplier: 'Eventual SA',
