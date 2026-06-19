@@ -4,6 +4,7 @@ const { query, withTransaction } = require('../../db')
 const { audit }                  = require('../../utils/audit')
 const { stampPaymentComplement, cancelComplement } = require('../invoicing/paymentComplementService')
 const { buildOrderBy } = require('../../utils/sortOrder')
+const logger = require('../../config/logger')
 
 // Orden de la lista CXC (default: vencimiento más próximo arriba = cobranza).
 const CXC_SORT_COLUMNS = {
@@ -186,7 +187,7 @@ async function registerPayment({
   amount, currency = 'MXN', bankAccountId = null, applications = [], notes,
   userId, ipAddress, userAgent,
 }) {
-  return withTransaction(async (client) => {
+  const txResult = await withTransaction(async (client) => {
     if (!amount || amount <= 0) throw createError(400, 'amount debe ser mayor a cero.')
     if (!partnerId) throw createError(400, 'partnerId es requerido.')
     if (method === 'check' && !reference) {
@@ -203,8 +204,10 @@ async function registerPayment({
     }
 
     let totalApplied = 0
-    const complementsIssued = []
     const complementsSkipped = []
+    // Complementos a timbrar DESPUÉS de confirmar el cobro (fuera de esta
+    // transacción). Así una caída de Facturapi NO tira abajo el pago.
+    const pendingStamps = []
 
     // Aplicar pago a documentos CXC
     for (const app of applications) {
@@ -255,12 +258,11 @@ async function registerPayment({
       // Decisión de complemento — solo factura PPD timbrada genera CFDI tipo P.
       // Si NO aplica (PUE, draft, remisión) lo dejamos asentado en
       // `complementsSkipped` con la razón para que el frontend pueda explicar
-      // qué pasó por cada documento. Si APLICA pero algo está mal (sin
-      // facturapi_id), el timbrado lanza error y rollbackea TODO.
-      // Si NO aplica complemento, asentar la razón y continuar. Si SÍ aplica
-      // pero algo está mal (sin facturapi_id, Facturapi rechaza, etc.) el
-      // timbrado lanza y rollbackea TODA la transacción — el pago no se
-      // registra y el operador ve el error explícito.
+      // qué pasó por cada documento. Si SÍ aplica, NO se timbra aquí: se
+      // encola en `pendingStamps` y se timbra DESPUÉS del COMMIT (ver abajo).
+      // De esa forma una caída transitoria de Facturapi/PAC no hace rollback
+      // del cobro ya recibido — el complemento queda "pendiente" y el operador
+      // lo puede timbrar luego con el botón de "Timbrar complemento faltante".
       const skipReasonByCase = (() => {
         if (ar.document_type !== 'invoice')      return 'no es factura (no requiere complemento)'
         if (ar.invoice_status === 'cancelled')   return 'factura cancelada'
@@ -278,23 +280,22 @@ async function registerPayment({
         })
       } else {
         const satForm = METHOD_TO_SAT_FORM[method] || '03'
-        const comp = await stampPaymentComplement(client, {
-          tenantId,
-          invoiceId:   ar.document_id,
-          paymentDate: paymentDate || new Date().toISOString().split('T')[0],
-          paymentForm: satForm,
-          amount:      toApply,
-          currency:    ar.currency || 'MXN',
-          reference,
-          exchangeRate: ar.currency === 'USD' ? parseFloat(ar.invoice_exchange_rate || 1) : undefined,
-          userId,
+        pendingStamps.push({
+          arPaymentId,
+          arId:           ar.id,
+          documentNumber: ar.document_number,
+          params: {
+            tenantId,
+            invoiceId:   ar.document_id,
+            paymentDate: paymentDate || new Date().toISOString().split('T')[0],
+            paymentForm: satForm,
+            amount:      toApply,
+            currency:    ar.currency || 'MXN',
+            reference,
+            exchangeRate: ar.currency === 'USD' ? parseFloat(ar.invoice_exchange_rate || 1) : undefined,
+            userId,
+          },
         })
-        // Liga determinista cobro ↔ complemento (para una reversa precisa).
-        await client.query(
-          `UPDATE ar_payments SET payment_complement_id = $1 WHERE id = $2`,
-          [comp.id, arPaymentId]
-        )
-        complementsIssued.push(comp)
       }
     }
 
@@ -314,29 +315,72 @@ async function registerPayment({
       advanceId = advRows[0].id
     }
 
-    await audit({
-      tenantId, userId, action: 'ar_payment.registered',
-      resource: 'accounts_receivable', resourceId: partnerId,
-      payload: {
-        amount, method, reference, totalApplied, advanceId, bankAccountId,
-        applications,
-        complementsIssued: complementsIssued.map(c => ({
-          invoice_number: c.invoice_number, uuid: c.uuid, amount: c.amount,
-        })),
-        complementsSkipped,
-      },
-      ipAddress, userAgent,
-    })
-
-    return {
-      amount,
-      totalApplied,
-      advanceGenerated: sinAplicar > 0.01 ? sinAplicar : 0,
-      advanceId,
-      complementsIssued,
-      complementsSkipped,
-    }
+    // El cobro queda COMMITeado aquí. El timbrado de complementos se hace
+    // fuera de esta transacción (ver más abajo).
+    return { totalApplied, sinAplicar, advanceId, pendingStamps, complementsSkipped }
   })
+
+  // ── Post-commit: timbrar complementos (best-effort) ─────────────────────────
+  // El cobro YA quedó registrado. Cada complemento se timbra en su propia
+  // transacción para que un fallo en uno no afecte a los demás ni al cobro.
+  // Si Facturapi falla (transitorio o por datos), el complemento queda
+  // PENDIENTE y se reporta al operador, que puede timbrarlo después con el
+  // botón de "Timbrar complemento faltante".
+  const { totalApplied, sinAplicar, advanceId, pendingStamps, complementsSkipped } = txResult
+  const complementsIssued = []
+  const complementsPending = []
+
+  for (const job of pendingStamps) {
+    try {
+      const comp = await withTransaction(async (client) => {
+        const c = await stampPaymentComplement(client, job.params)
+        // Liga determinista cobro ↔ complemento (para una reversa precisa).
+        await client.query(
+          `UPDATE ar_payments SET payment_complement_id = $1 WHERE id = $2`,
+          [c.id, job.arPaymentId]
+        )
+        return c
+      })
+      complementsIssued.push(comp)
+    } catch (err) {
+      complementsPending.push({
+        ar_id:           job.arId,
+        document_number: job.documentNumber,
+        amount:          job.params.amount,
+        reason:          err.message,
+        transient:       !!err.transient,
+      })
+      logger.warn('Complemento de pago quedó PENDIENTE tras registrar el cobro', {
+        tenantId, ar_id: job.arId, document_number: job.documentNumber,
+        transient: !!err.transient, error: err.message,
+      })
+    }
+  }
+
+  await audit({
+    tenantId, userId, action: 'ar_payment.registered',
+    resource: 'accounts_receivable', resourceId: partnerId,
+    payload: {
+      amount, method, reference, totalApplied, advanceId, bankAccountId,
+      applications,
+      complementsIssued: complementsIssued.map(c => ({
+        invoice_number: c.invoice_number, uuid: c.uuid, amount: c.amount,
+      })),
+      complementsPending,
+      complementsSkipped,
+    },
+    ipAddress, userAgent,
+  })
+
+  return {
+    amount,
+    totalApplied,
+    advanceGenerated: sinAplicar > 0.01 ? sinAplicar : 0,
+    advanceId,
+    complementsIssued,
+    complementsPending,
+    complementsSkipped,
+  }
 }
 
 /**

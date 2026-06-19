@@ -343,6 +343,10 @@ export default function CuentasPorCobrar() {
             if (res.complementsIssued?.length) {
               parts.push(`· ${res.complementsIssued.length} complemento(s) timbrado(s)`)
             }
+            if (res.complementsPending?.length) {
+              const pend = res.complementsPending.map(p => p.document_number).join(', ')
+              parts.push(`· ⚠️ ${res.complementsPending.length} complemento(s) PENDIENTE(S) de timbrar (${pend}). El cobro quedó registrado; timbra el complemento desde el detalle del documento cuando Facturapi esté disponible.`)
+            }
             if (res.complementsSkipped?.length) {
               const reasons = res.complementsSkipped
                 .map(s => `${s.document_number}: ${s.reason}`)
@@ -359,10 +363,14 @@ export default function CuentasPorCobrar() {
           onClose={() => setShowMatcherModal(false)}
           onSaved={(res) => {
             const m = res.match
-            setPaidMsg(
+            let msg =
               `Pago de ${fmtMXN(res.amount)} identificado para ${m.partner_name}: ` +
               `${m.invoices.map(i => i.document_number).join(', ')}.`
-            )
+            if (res.complementsPending?.length) {
+              const pend = res.complementsPending.map(p => p.document_number).join(', ')
+              msg += ` ⚠️ ${res.complementsPending.length} complemento(s) PENDIENTE(S) de timbrar (${pend}); el cobro quedó registrado, timbra el complemento desde el detalle cuando Facturapi esté disponible.`
+            }
+            setPaidMsg(msg)
           }}
         />
       )}

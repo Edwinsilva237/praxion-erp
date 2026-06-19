@@ -488,6 +488,10 @@ export function CxCDetallePanel({ arId, onClose }) {
             const parts = [`Pago de ${fmtMXN(res.amount)} registrado. Aplicado ${fmtMXN(res.totalApplied)}`]
             if (res.advanceGenerated) parts.push(`+ anticipo ${fmtMXN(res.advanceGenerated)}`)
             if (res.complementsIssued?.length) parts.push(`· ${res.complementsIssued.length} complemento(s) timbrado(s)`)
+            if (res.complementsPending?.length) {
+              const pend = res.complementsPending.map(p => p.document_number).join(', ')
+              parts.push(`· ⚠️ ${res.complementsPending.length} complemento(s) PENDIENTE(S) de timbrar (${pend}). El cobro quedó registrado; usa "Timbrar complemento" cuando Facturapi esté disponible.`)
+            }
             if (res.complementsSkipped?.length) {
               parts.push(`· Sin complemento: ${res.complementsSkipped.map(s => s.reason).join(' · ')}`)
             }

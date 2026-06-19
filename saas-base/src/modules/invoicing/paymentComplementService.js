@@ -4,6 +4,67 @@ const { query, withTransaction } = require('../../db')
 const { audit }     = require('../../utils/audit')
 const { enqueueEmail } = require('../../queues/emailQueue')
 const { getFacturapiForTenant } = require('./facturapiClient')
+const logger = require('../../config/logger')
+
+// ── Resiliencia ante caídas momentáneas de Facturapi/PAC ──────────────────────
+// Errores TRANSITORIOS: el CFDI NO llegó a generarse (gateway caído, PAC en
+// mantenimiento, rate-limit, corte de red). Reintentar es seguro porque no se
+// timbró nada. Los errores por DATOS (4xx, p.ej. 400/401/403/422) NO se
+// reintentan — se lanzan de inmediato para que el operador corrija el problema.
+const TRANSIENT_STATUS = new Set([429, 502, 503, 504])
+const TRANSIENT_CODES  = new Set([
+  'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EPIPE',
+])
+
+function facturapiStatus(err) {
+  return err?.status || err?.statusCode || err?.response?.status || null
+}
+
+function isTransientFacturapiError(err) {
+  const status = facturapiStatus(err)
+  if (status && TRANSIENT_STATUS.has(status)) return true
+  if (err?.code && TRANSIENT_CODES.has(err.code)) return true
+  const msg = (err?.message || '').toLowerCase()
+  return /service unavailable|bad gateway|gateway time-?out|timeout|temporarily unavailable|socket hang up|econnreset|too many requests/.test(msg)
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * Timbra un CFDI con Facturapi reintentando SOLO ante errores transitorios
+ * (503 Service Unavailable, 502/504, rate-limit, cortes de red). Los errores
+ * por datos se propagan sin reintentar. Backoff lineal: 800ms, 1600ms.
+ */
+async function createWithRetry(facturapi, payload, { attempts = 3, baseDelayMs = 800, label } = {}) {
+  let lastErr
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await facturapi.invoices.create(payload)
+    } catch (err) {
+      lastErr = err
+      if (i >= attempts || !isTransientFacturapiError(err)) throw err
+      const delay = baseDelayMs * i
+      logger.warn('Facturapi transitorio al timbrar complemento de pago; reintentando', {
+        label, attempt: i, of: attempts, status: facturapiStatus(err), message: err?.message, delay,
+      })
+      await sleep(delay)
+    }
+  }
+  throw lastErr
+}
+
+/**
+ * Construye el mensaje de error para el operador. Si fue transitorio, explica
+ * que es una caída momentánea de Facturapi y que el pago NO se guardó.
+ */
+function stampErrorMessage(err, docNumber) {
+  if (isTransientFacturapiError(err)) {
+    return `El servicio de timbrado de Facturapi no está disponible en este momento ` +
+      `(${err?.message || 'Service Unavailable'}). El pago NO se registró; ` +
+      `vuelve a intentarlo en unos minutos. Factura: ${docNumber}.`
+  }
+  return `Error al timbrar complemento de pago de ${docNumber}: ${err?.message || 'error desconocido'}`
+}
 
 /**
  * Genera un complemento de pago (CFDI tipo P) para una factura PPD.
@@ -92,12 +153,14 @@ async function createPaymentComplement({
       ],
     }
 
-    // Timbrar complemento de pago
+    // Timbrar complemento de pago (con reintentos ante caídas transitorias del PAC)
     let complement
     try {
-      complement = await facturapi.invoices.create(payload)
+      complement = await createWithRetry(facturapi, payload, { label: inv.document_number })
     } catch (err) {
-      throw createError(422, `Error al timbrar complemento de pago: ${err.message}`)
+      const e = createError(422, stampErrorMessage(err, inv.document_number))
+      e.transient = isTransientFacturapiError(err)
+      throw e
     }
 
     // Guardar referencia del complemento en BD — tabla payment_complements
@@ -227,9 +290,11 @@ async function stampPaymentComplement(client, {
 
   let complement
   try {
-    complement = await facturapi.invoices.create(payload)
+    complement = await createWithRetry(facturapi, payload, { label: inv.document_number })
   } catch (err) {
-    throw createError(422, `Error al timbrar complemento de pago de ${inv.document_number}: ${err.message}`)
+    const e = createError(422, stampErrorMessage(err, inv.document_number))
+    e.transient = isTransientFacturapiError(err)
+    throw e
   }
 
   const { rows: pcRows } = await client.query(
@@ -442,4 +507,6 @@ function createError(status, message) {
 module.exports = {
   createPaymentComplement, stampPaymentComplement, cancelComplement,
   downloadXML, downloadPDF, sendComplementByEmail,
+  // Exportados para pruebas unitarias de la resiliencia ante caídas del PAC.
+  _internal: { isTransientFacturapiError, createWithRetry, stampErrorMessage },
 }
