@@ -54,9 +54,17 @@ async function listReceipts({
   if (to)              { params.push(to);              filters.push(`sr.received_date <= $${params.length}`) }
   if (hasEvidence === 'yes')  filters.push(`sr.evidence_path IS NOT NULL`)
   if (hasEvidence === 'no')   filters.push(`sr.evidence_path IS NULL`)
-  // Estado de facturación: `invoiced_at` es la verdad del sistema (lo setea el
-  // registro de la factura; el endpoint pending-invoice usa el mismo criterio).
-  if (invoiceStatus === 'pending')  filters.push(`sr.invoiced_at IS NULL`)
+  // Estado de facturación. `invoiced_at` (lo setea registerInvoice/remisión SOLO
+  // cuando TODAS las líneas quedan cubiertas) es la verdad para "totalmente
+  // facturada". El estado PARCIAL (algunas líneas con factura REAL, otras no) se
+  // deriva por línea: invoiced_at sigue NULL pero existe ≥1 línea facturada.
+  const REAL_INVOICED_LINE = `EXISTS (
+    SELECT 1 FROM supplier_receipt_lines srl2
+      JOIN supplier_invoices ci2 ON ci2.id = srl2.invoiced_by_invoice_id
+     WHERE srl2.supplier_receipt_id = sr.id
+       AND ci2.status <> 'cancelled' AND ci2.type = 'invoice')`
+  if (invoiceStatus === 'pending')  filters.push(`sr.invoiced_at IS NULL AND NOT ${REAL_INVOICED_LINE}`)
+  if (invoiceStatus === 'partial')  filters.push(`sr.status = 'confirmed' AND sr.invoiced_at IS NULL AND ${REAL_INVOICED_LINE}`)
   if (invoiceStatus === 'invoiced') filters.push(`sr.invoiced_at IS NOT NULL`)
   if (search) {
     params.push(`%${search}%`)
@@ -95,6 +103,13 @@ async function listReceipts({
             u.full_name      AS created_by_name,
             cb.full_name     AS confirmed_by_name,
             COUNT(srl.id)    AS line_count,
+            -- Líneas cubiertas por una factura REAL y activa (type='invoice'):
+            -- si 0 < esto < line_count y la recepción NO está totalmente facturada
+            -- (invoiced_at NULL) → estado "parcialmente facturado" (chip ámbar).
+            COUNT(srl.id) FILTER (
+              WHERE srl.invoiced_by_invoice_id IS NOT NULL
+                AND cil.status <> 'cancelled' AND cil.type = 'invoice'
+            ) AS invoiced_line_count,
             COALESCE(SUM(srl.subtotal), 0) AS total_mxn
      FROM supplier_receipts sr
      LEFT JOIN purchase_orders    po  ON po.id  = sr.purchase_order_id
@@ -103,6 +118,7 @@ async function listReceipts({
      LEFT JOIN users              u   ON u.id   = sr.created_by
      LEFT JOIN users              cb  ON cb.id  = sr.confirmed_by
      LEFT JOIN supplier_receipt_lines srl ON srl.supplier_receipt_id = sr.id
+     LEFT JOIN supplier_invoices    cil ON cil.id = srl.invoiced_by_invoice_id
      WHERE sr.tenant_id = $1 ${where}
      GROUP BY sr.id, po.id, bp.id, w.id, u.id, cb.id
      ORDER BY ${orderBy}
@@ -118,7 +134,13 @@ async function listReceipts({
     params.slice(0, params.length - 2)
   )
 
-  return { data: rows, total: parseInt(countRows[0].count, 10), page, limit }
+  // Los COUNT de PG llegan como string (bigint) → a número para el chip "3/5".
+  const data = rows.map(r => ({
+    ...r,
+    line_count: parseInt(r.line_count, 10),
+    invoiced_line_count: parseInt(r.invoiced_line_count, 10),
+  }))
+  return { data, total: parseInt(countRows[0].count, 10), page, limit }
 }
 
 async function getReceipt({ tenantId, receiptId }) {

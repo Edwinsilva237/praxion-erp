@@ -129,4 +129,47 @@ describe('Facturación parcial por línea', () => {
       `SELECT status FROM supplier_invoices WHERE id = $1`, [rem.id]))
     expect(r[0].status).toBe('cancelled')
   })
+
+  test('listReceipts: estado "parcialmente facturado" (chip ámbar) + filtro partial', async () => {
+    const sid = await makeSupplier(0)
+    const rcpt = await makeReceipt(sid, [{ qty: 10, price: 60 }, { qty: 10, price: 40 }])
+    const [A] = rcpt.lineIds
+
+    // Sin factura aún → 0 de 2 líneas facturadas; aparece en filtro "pending".
+    let list = await client.get('/api/purchases/receipts').query({ partnerId: sid }).expect(200)
+    let row = list.body.data.find(x => x.id === rcpt.id)
+    expect(row.line_count).toBe(2)
+    expect(row.invoiced_line_count).toBe(0)
+    let pending = await client.get('/api/purchases/receipts').query({ partnerId: sid, invoiceStatus: 'pending' }).expect(200)
+    expect(pending.body.data.some(x => x.id === rcpt.id)).toBe(true)
+
+    // Factura SOLO la línea A → parcial (1 de 2), invoiced_at sigue NULL.
+    await registerInvoice({
+      tenantId, supplierId: sid, documentNumber: rnum('F'),
+      subtotal: 600, tax: 96, total: 696, receiptLineIds: [A], userId,
+    })
+    list = await client.get('/api/purchases/receipts').query({ partnerId: sid }).expect(200)
+    row = list.body.data.find(x => x.id === rcpt.id)
+    expect(row.invoiced_line_count).toBe(1)
+    expect(row.line_count).toBe(2)
+    expect(row.invoiced_at).toBeNull()
+
+    // Filtro "partial" la incluye; "pending" (sin factura) ya NO la cuenta.
+    const partial = await client.get('/api/purchases/receipts').query({ partnerId: sid, invoiceStatus: 'partial' }).expect(200)
+    expect(partial.body.data.some(x => x.id === rcpt.id)).toBe(true)
+    pending = await client.get('/api/purchases/receipts').query({ partnerId: sid, invoiceStatus: 'pending' }).expect(200)
+    expect(pending.body.data.some(x => x.id === rcpt.id)).toBe(false)
+
+    // Factura la línea B → totalmente facturada: ya NO es parcial.
+    await registerInvoice({
+      tenantId, supplierId: sid, documentNumber: rnum('F'),
+      subtotal: 400, tax: 64, total: 464, receiptLineIds: [rcpt.lineIds[1]], userId,
+    })
+    list = await client.get('/api/purchases/receipts').query({ partnerId: sid }).expect(200)
+    row = list.body.data.find(x => x.id === rcpt.id)
+    expect(row.invoiced_line_count).toBe(2)
+    expect(row.invoiced_at).toBeTruthy()
+    const partial2 = await client.get('/api/purchases/receipts').query({ partnerId: sid, invoiceStatus: 'partial' }).expect(200)
+    expect(partial2.body.data.some(x => x.id === rcpt.id)).toBe(false)
+  })
 })
