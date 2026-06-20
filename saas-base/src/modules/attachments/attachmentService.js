@@ -25,6 +25,10 @@ const MIME_BY_CATEGORY = {
   // Documento de la orden de compra del cliente adjuntado al pedido (sales_order):
   // el PDF o la foto de la OC que manda el cliente, para imprimirla al entregar.
   customer_po: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+  // Respaldo del CFDI recibido (por correo o subido) pegado a su gasto/factura
+  // de proveedor: el XML timbrado y/o su representación impresa en PDF. Único
+  // caso que acepta XML (los demás son imágenes/PDF).
+  cfdi: ['application/xml', 'text/xml', 'application/pdf'],
 }
 
 /**

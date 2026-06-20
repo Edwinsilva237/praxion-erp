@@ -92,6 +92,15 @@ export const purchasesApi = {
   expenseReceiptSuggestion: (id) => api.get(`${B}/expenses/${id}/receipt-suggestion`).then(r => r.data),
   createSupplierFromExpense: (id, body) =>
     api.post(`${B}/expenses/${id}/create-supplier`, body).then(r => r.data),
+  // Respaldo del CFDI (XML/PDF) del gasto: listar / subir / descargar.
+  listExpenseAttachments: (id) =>
+    api.get(`${B}/expenses/${id}/attachments`).then(r => r.data),
+  addExpenseAttachment: (id, formData) =>
+    api.post(`${B}/expenses/${id}/attachments`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(r => r.data),
+  downloadExpenseAttachment: (id, attId) =>
+    api.get(`${B}/expenses/${id}/attachments/${attId}/download`, { responseType: 'blob' }).then(r => r.data),
 
   // ── Devoluciones a proveedor (Fase 1) ──────────────────────────────────
   listReturnReasons: (includeInactive = false) =>

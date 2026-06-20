@@ -19,6 +19,7 @@ const { query } = require('../../db')
 const { unzipSync } = require('fflate')
 const documentParserService = require('../purchases/documentParserService')
 const supplierInvoiceService = require('../purchases/supplierInvoiceService')
+const attachmentService = require('../attachments/attachmentService')
 const logger = require('../../config/logger')
 
 function err(status, message) { const e = new Error(message); e.status = status; return e }
@@ -73,12 +74,78 @@ function expandAttachment(att) {
     })
   }
 
-  // Preferir XML: si hay al menos un XML, ignorar los PDF (versión impresa del
-  // mismo CFDI → evita procesar dos veces lo mismo; el anti-dup por UUID también
-  // lo cubriría, pero así no genera ruido de "duplicado").
+  // Preferir XML: si hay al menos un XML, NO lo procesamos dos veces con el PDF
+  // (versión impresa del mismo CFDI). Pero el PDF SÍ lo conservamos como respaldo
+  // adjunto: el caso común es 1 XML + su PDF → procesamos el XML (crea el gasto)
+  // y pegamos el PDF como `siblings` para que el gasto guarde ambos archivos.
+  // Con varios XML no podemos saber qué PDF corresponde a cuál → sin siblings.
+  const strip = ({ _isXml, ...a }) => a
   const xmls = inner.filter(a => a._isXml)
+  const pdfs = inner.filter(a => !a._isXml)
+  if (xmls.length === 1 && pdfs.length) {
+    return [{ ...strip(xmls[0]), siblings: pdfs.map(strip) }]
+  }
   const chosen = xmls.length ? xmls : inner
-  return chosen.map(({ _isXml, ...a }) => a)
+  return chosen.map(strip)
+}
+
+// ── Respaldo del CFDI (XML/PDF) pegado al gasto ─────────────────────────────
+// El buzón antes leía el CFDI y tiraba el archivo. Ahora lo guardamos como
+// adjunto (categoría 'cfdi') del supplier_invoice/gasto para consultarlo y
+// descargarlo después. Best-effort: si el storage falla NO rompe la ingesta —
+// el gasto ya existe y un respaldo faltante no es fatal.
+
+/** Normaliza el mimetype a partir de la extensión/mime (los correos a veces
+ *  mandan application/octet-stream) para que pase la validación de 'cfdi'. */
+function cfdiMime(filename, mimetype) {
+  const name = (filename || '').toLowerCase()
+  if (name.endsWith('.xml')) return 'application/xml'
+  if (name.endsWith('.pdf')) return 'application/pdf'
+  const mt = (mimetype || '').toLowerCase()
+  if (mt.includes('xml')) return 'application/xml'
+  if (mt.includes('pdf')) return 'application/pdf'
+  return null
+}
+
+/** Tipos de respaldo (xml/pdf) que el gasto YA tiene — para no duplicar si el
+ *  correo llega repetido (mismo XML dos veces) o llega el XML y luego el PDF. */
+async function loadExistingCfdiKinds(tenantId, invoiceId) {
+  const kinds = new Set()
+  try {
+    const { rows } = await query(
+      `SELECT mime_type, filename FROM attachments
+        WHERE tenant_id = $1 AND entity_type = 'supplier_invoice'
+          AND entity_id = $2 AND category = 'cfdi'`,
+      [tenantId, invoiceId])
+    for (const r of rows) {
+      const mt = (r.mime_type || '').toLowerCase()
+      const fn = (r.filename || '').toLowerCase()
+      if (mt.includes('xml') || fn.endsWith('.xml')) kinds.add('xml')
+      if (mt.includes('pdf') || fn.endsWith('.pdf')) kinds.add('pdf')
+    }
+  } catch { /* best-effort: si falla, intentamos guardar igual */ }
+  return kinds
+}
+
+/** Guarda UN archivo (XML/PDF) como respaldo del gasto, si su tipo no estaba ya. */
+async function storeCfdiBackup({ tenantId, invoiceId, filename, mimetype, contentBase64, userId, kinds }) {
+  const mime = cfdiMime(filename, mimetype)
+  if (!mime) return
+  const kind = mime.includes('xml') ? 'xml' : 'pdf'
+  if (kinds.has(kind)) return                 // ya hay un respaldo de ese tipo
+  try {
+    await attachmentService.saveAttachment({
+      tenantId, entityType: 'supplier_invoice', entityId: invoiceId,
+      category: 'cfdi',
+      originalFilename: filename || (kind === 'xml' ? 'cfdi.xml' : 'cfdi.pdf'),
+      buffer: Buffer.from(contentBase64, 'base64'),
+      mimeType: mime, uploadedBy: userId,
+    })
+    kinds.add(kind)
+  } catch (e) {
+    logger.warn('inbound: no se pudo guardar el respaldo del CFDI', {
+      tenantId, invoiceId, filename, error: e.message })
+  }
 }
 
 /** Expande una lista de adjuntos (descomprime los .zip). */
@@ -147,9 +214,11 @@ async function rotateInboxToken(tenantId) {
  * @param {string} p.mimetype      mime del adjunto
  * @param {string} p.contentBase64 contenido del adjunto en base64
  * @param {string} [p.from]        remitente del correo (solo para la nota)
+ * @param {Array}  [p.siblings]    archivos hermanos a guardar como respaldo junto
+ *                                 al mismo gasto (p.ej. el PDF impreso del XML).
  * @returns {{status:'created'|'duplicate', ...}}
  */
-async function ingestInboundDocument({ token, filename, mimetype, contentBase64, from = null }) {
+async function ingestInboundDocument({ token, filename, mimetype, contentBase64, from = null, siblings = [] }) {
   if (!token) throw err(400, 'token requerido.')
   if (!contentBase64) throw err(400, 'contenido del adjunto requerido.')
 
@@ -213,6 +282,8 @@ async function ingestInboundDocument({ token, filename, mimetype, contentBase64,
   const docNumber = [parsed?.serie, parsed?.folio].filter(Boolean).join('-') || `GASTO-${Date.now()}`
   const invoiceDate = parsed?.invoiceDate || new Date().toISOString().slice(0, 10)
 
+  let invoiceId = null
+  let result
   try {
     const expense = await supplierInvoiceService.registerInvoice({
       tenantId: tenant.id, supplierId, genericSupplier,
@@ -229,21 +300,43 @@ async function ingestInboundDocument({ token, filename, mimetype, contentBase64,
       notes: `Recibido por correo${from ? ` de ${from}` : ''}`,
       userId,
     })
+    invoiceId = expense.id
     logger.info('inbound: gasto creado', {
       tenant: tenant.slug, expenseId: expense.id, uuid: parsed?.uuid || null, supplierId })
-    return {
+    result = {
       status: 'created', expenseId: expense.id, tenant: tenant.slug,
       supplierMatched: !!supplierId, uuid: parsed?.uuid || null,
     }
   } catch (e) {
-    if (e.status === 409) {
-      // Duplicado por UUID → idempotente (el correo pudo llegar dos veces).
-      logger.info('inbound: documento duplicado (idempotente)', {
-        tenant: tenant.slug, uuid: parsed?.uuid || null })
-      return { status: 'duplicate', tenant: tenant.slug, uuid: parsed?.uuid || null }
+    if (e.status !== 409) throw e
+    // Duplicado por UUID → idempotente (el correo pudo llegar dos veces). Igual
+    // resolvemos el gasto existente para pegarle el respaldo si aún no lo tenía
+    // (p.ej. primero llegó el XML y ahora llega el PDF en otro correo).
+    logger.info('inbound: documento duplicado (idempotente)', {
+      tenant: tenant.slug, uuid: parsed?.uuid || null })
+    if (parsed?.uuid) {
+      const { rows } = await query(
+        `SELECT id FROM supplier_invoices WHERE tenant_id = $1 AND uuid_sat = $2 LIMIT 1`,
+        [tenant.id, parsed.uuid])
+      invoiceId = rows[0]?.id || null
     }
-    throw e
+    result = { status: 'duplicate', tenant: tenant.slug, uuid: parsed?.uuid || null }
   }
+
+  // Respaldo descargable del CFDI: guarda el archivo recibido (y su PDF hermano,
+  // si vino zippeado con el XML) pegado al gasto. Best-effort — no rompe la ingesta.
+  if (invoiceId) {
+    const kinds = await loadExistingCfdiKinds(tenant.id, invoiceId)
+    await storeCfdiBackup({ tenantId: tenant.id, invoiceId, filename, mimetype, contentBase64, userId, kinds })
+    for (const sib of (siblings || [])) {
+      await storeCfdiBackup({
+        tenantId: tenant.id, invoiceId,
+        filename: sib.filename, mimetype: sib.mimetype, contentBase64: sib.contentBase64,
+        userId, kinds,
+      })
+    }
+  }
+  return result
 }
 
 module.exports = {

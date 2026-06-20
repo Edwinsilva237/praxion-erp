@@ -951,6 +951,77 @@ router.post('/expenses/:id/link-receipt',
     } catch (err) { next(err) }
   })
 
+// ─── Respaldo del CFDI de un gasto (XML/PDF descargable) ─────────────────────
+// Un gasto ES un supplier_invoice (is_expense=true), así que el respaldo se
+// guarda como attachment de entity_type='supplier_invoice', categoría 'cfdi'.
+// Gateado por `expenses` (no por `attachments`) para mantener el módulo de
+// Gastos autocontenido en permisos. El buzón de correo guarda estos archivos
+// solo; aquí van el listado/descarga + la subida manual desde el detalle.
+
+/**
+ * GET /api/purchases/expenses/:id/attachments
+ * Lista los respaldos (XML/PDF) del gasto.
+ */
+router.get('/expenses/:id/attachments', checkPermission('expenses', 'read'), async (req, res, next) => {
+  try {
+    const files = await attachmentService.listAttachments({
+      tenantId: req.tenant.id, entityType: 'supplier_invoice', entityId: req.params.id,
+      category: 'cfdi',
+    })
+    res.json(files)
+  } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/expenses/:id/attachments
+ * Sube un respaldo XML/PDF al gasto (form-data: file). Acepta XML (uploadDoc).
+ */
+router.post('/expenses/:id/attachments',
+  checkPermission('expenses', 'create'),
+  uploadDoc.single('file'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'Se requiere un archivo XML o PDF.' })
+      // El gasto debe existir y ser del tenant (getExpense filtra is_expense=true).
+      const exp = await supplierInvoiceService.getExpense({ tenantId: req.tenant.id, id: req.params.id })
+      if (!exp) return res.status(404).json({ error: 'Gasto no encontrado.' })
+
+      const attachment = await attachmentService.saveAttachment({
+        tenantId: req.tenant.id,
+        entityType: 'supplier_invoice', entityId: req.params.id,
+        category: 'cfdi',
+        originalFilename: req.file.originalname,
+        buffer: req.file.buffer, mimeType: req.file.mimetype,
+        uploadedBy: req.auth.userId,
+      })
+      res.status(201).json(attachment)
+    } catch (err) { next(err) }
+  }
+)
+
+/**
+ * GET /api/purchases/expenses/:id/attachments/:attachmentId/download
+ */
+router.get('/expenses/:id/attachments/:attachmentId/download',
+  checkPermission('expenses', 'read'),
+  async (req, res, next) => {
+    try {
+      const file = await attachmentService.getAttachmentInfo({
+        tenantId: req.tenant.id, attachmentId: req.params.attachmentId,
+      })
+      if (!file) return res.status(404).json({ error: 'Archivo no encontrado.' })
+      // proxy:true → el backend transmite los bytes en vez de redirigir a R2
+      // (mismo patrón que la evidencia: el CORS de R2 no permite el webview móvil).
+      await storage.serve(res, file.storage_path, {
+        filename:    file.filename,
+        mimeType:    file.mime_type,
+        disposition: 'inline',
+        proxy:       true,
+      })
+    } catch (err) { next(err) }
+  }
+)
+
 /**
  * GET /api/purchases/invoices
  * Query: type, status, supplierId, from, to, page, limit

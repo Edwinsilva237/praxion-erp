@@ -74,11 +74,13 @@ function GastoModal({ categories, onClose, onSaved }) {
   const [parsing, setParsing]         = useState(false)
   const [parsedFrom, setParsedFrom]   = useState(null)   // { name, rfc, matched, method }
   const [xmlContent, setXmlContent]   = useState(null)
+  const [sourceFile, setSourceFile]   = useState(null)   // archivo original → respaldo descargable
   const [currency, setCurrency]       = useState('MXN')
   const fileRef = useRef(null)
 
   async function handleFile(file) {
     if (!file) return
+    setSourceFile(file)
     setParsing(true); setError(null)
     try {
       const fd = new FormData(); fd.append('file', file)
@@ -126,14 +128,14 @@ function GastoModal({ categories, onClose, onSaved }) {
   const total = +(sub + iva).toFixed(2)
 
   const mut = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!supplierId) throw new Error('Selecciona el proveedor.')
       if (!categoryId) throw new Error('Selecciona la categoría de gasto.')
       if (total <= 0) throw new Error('Captura el monto del gasto.')
       if (markPaid && paymentMethod === 'check' && !paymentReference.trim()) {
         throw new Error('El número de cheque es requerido.')
       }
-      return purchasesApi.createExpense({
+      const created = await purchasesApi.createExpense({
         supplierId,
         expenseCategoryId: categoryId,
         documentNumber: docNumber.trim() || undefined,
@@ -149,6 +151,15 @@ function GastoModal({ categories, onClose, onSaved }) {
         paymentCreditCardId:  markPaid && paymentMethod === 'credit_card' ? (paymentCreditCardId  || undefined) : undefined,
         notes: notes.trim() || undefined,
       })
+      // Guarda el archivo original (XML/PDF) como respaldo descargable del gasto.
+      // Best-effort: si la subida del respaldo falla, el gasto YA quedó creado.
+      if (sourceFile && created?.id) {
+        try {
+          const fd = new FormData(); fd.append('file', sourceFile)
+          await purchasesApi.addExpenseAttachment(created.id, fd)
+        } catch { /* respaldo opcional: no bloquea el alta del gasto */ }
+      }
+      return created
     },
     onSuccess: () => { onSaved(); onClose() },
     onError: (e) => setError(e.response?.data?.error || e.message),
@@ -373,6 +384,93 @@ function GastoModal({ categories, onClose, onSaved }) {
       </form>
     </div>,
     document.body
+  )
+}
+
+// ── Respaldo del CFDI (XML/PDF) del gasto: ver, descargar, adjuntar ──────────
+function fileSizeLabel(bytes) {
+  if (bytes == null) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function ExpenseAttachments({ expenseId, canEdit }) {
+  const qc = useQueryClient()
+  const fileRef = useRef(null)
+  const [error, setError] = useState(null)
+  const [downloadingId, setDownloadingId] = useState(null)
+
+  const { data: files = [], isLoading } = useQuery({
+    queryKey: ['expense-attachments', expenseId],
+    queryFn:  () => purchasesApi.listExpenseAttachments(expenseId),
+  })
+
+  const upload = useMutation({
+    mutationFn: (file) => {
+      const fd = new FormData(); fd.append('file', file)
+      return purchasesApi.addExpenseAttachment(expenseId, fd)
+    },
+    onSuccess: () => { setError(null); qc.invalidateQueries({ queryKey: ['expense-attachments', expenseId] }) },
+    onError: (e) => setError(e.response?.data?.error || 'No se pudo subir el archivo.'),
+  })
+
+  async function download(f) {
+    setError(null); setDownloadingId(f.id)
+    try {
+      const blob = await purchasesApi.downloadExpenseAttachment(expenseId, f.id)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = f.filename || 'comprobante'
+      document.body.appendChild(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch {
+      setError('No se pudo descargar el archivo.')
+    } finally { setDownloadingId(null) }
+  }
+
+  const isXml = (f) => (f.mime_type || '').includes('xml') || (f.filename || '').toLowerCase().endsWith('.xml')
+
+  return (
+    <div className="border-t border-line-subtle pt-3 flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <label className="label mb-0">Comprobante (XML / PDF)</label>
+        {canEdit && (
+          <Can do="expenses:create">
+            <button type="button" className="btn-ghost text-xs" disabled={upload.isPending}
+              onClick={() => fileRef.current?.click()}>
+              {upload.isPending ? <Spinner size="sm" /> : '+ Adjuntar'}
+            </button>
+            <input ref={fileRef} type="file" accept=".xml,application/xml,text/xml,application/pdf"
+              className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) upload.mutate(f); if (fileRef.current) fileRef.current.value = '' }} />
+          </Can>
+        )}
+      </div>
+
+      {isLoading ? (
+        <Spinner size="sm" />
+      ) : files.length === 0 ? (
+        <p className="text-xs text-ink-muted">
+          Sin respaldo guardado.{canEdit ? ' Adjunta el XML o PDF del CFDI.' : ''}
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {files.map(f => (
+            <li key={f.id} className="flex items-center gap-2 bg-surface-elevated/40 rounded-lg px-3 py-2">
+              <span className={isXml(f) ? 'badge-blue' : 'badge-gray'}>{isXml(f) ? 'XML' : 'PDF'}</span>
+              <span className="flex-1 text-xs text-ink-secondary truncate" title={f.filename}>{f.filename}</span>
+              <span className="text-[10px] text-ink-muted tabular-nums whitespace-nowrap">{fileSizeLabel(f.file_size_bytes)}</span>
+              <button type="button" className="btn-ghost text-xs whitespace-nowrap" disabled={downloadingId === f.id}
+                onClick={() => download(f)}>
+                {downloadingId === f.id ? <Spinner size="sm" /> : 'Descargar'}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {error && <p className="field-error text-xs">{error}</p>}
+    </div>
   )
 }
 
@@ -995,6 +1093,10 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
                 <input className="input" value={form.notes} onChange={e => set('notes', e.target.value)} />
               </div>
             </fieldset>
+
+            {/* Respaldo del CFDI (XML/PDF): lo guarda el buzón de correo y la carga
+                manual; aquí se consulta, descarga y se puede adjuntar más. */}
+            <ExpenseAttachments expenseId={id} canEdit={!isCancelled} />
 
             {error && <p className="field-error">{error}</p>}
 

@@ -54,6 +54,7 @@ router.post('/expense', async (req, res, next) => {
       try {
         const r = await inboundEmailService.ingestInboundDocument({
           token, from, filename: a.filename, mimetype: a.mimetype, contentBase64: a.contentBase64,
+          siblings: a.siblings,
         })
         results.push(r)
       } catch (e) {

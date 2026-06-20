@@ -176,7 +176,7 @@ describe('adjuntos comprimidos (.zip)', () => {
     curToken = rows[0].inbound_email_token
   })
 
-  test('expandAttachments: zip con XML+PDF → solo el XML (ignora el PDF redundante)', () => {
+  test('expandAttachments: zip con XML+PDF → procesa el XML y conserva el PDF como respaldo (siblings)', () => {
     const zb64 = zipB64({
       'factura.xml': cfdiXml({ uuid: 'aaaaaaaa-0000-0000-0000-000000000001', folio: 'Z1' }),
       'factura.pdf': '%PDF-1.4 contenido falso',
@@ -187,6 +187,9 @@ describe('adjuntos comprimidos (.zip)', () => {
     expect(out).toHaveLength(1)
     expect(out[0].filename).toBe('factura.xml')
     expect(out[0].mimetype).toBe('application/xml')
+    // El PDF impreso del mismo CFDI viaja como respaldo, no se tira.
+    expect(out[0].siblings).toHaveLength(1)
+    expect(out[0].siblings[0].mimetype).toBe('application/pdf')
   })
 
   test('expandAttachments: zip con dos XML → ambos; basura de macOS y no-CFDI se ignoran', () => {
@@ -236,6 +239,66 @@ describe('adjuntos comprimidos (.zip)', () => {
         { filename: 'cosas.zip', mimetype: 'application/zip', contentBase64: zb64 },
       ] })
     expect(res.status).toBe(422)
+  })
+})
+
+// ── Respaldo del CFDI (XML/PDF) guardado pegado al gasto (mig 213) ──────────
+describe('respaldo del CFDI guardado', () => {
+  let curToken
+  beforeAll(async () => {
+    const { rows } = await withBypass(() => query(
+      `SELECT inbound_email_token FROM tenants WHERE id = $1`, [tenantId]))
+    curToken = rows[0].inbound_email_token
+  })
+
+  const cfdiAttachments = (invoiceId) => withBypass(() => query(
+    `SELECT mime_type, filename FROM attachments
+      WHERE entity_type = 'supplier_invoice' AND entity_id = $1 AND category = 'cfdi'
+      ORDER BY created_at`, [invoiceId])).then(r => r.rows)
+
+  test('XML recibido → se guarda el respaldo XML pegado al gasto', async () => {
+    const r = await inboundEmailService.ingestInboundDocument({
+      token: curToken, filename: 'resp.xml', mimetype: 'application/xml',
+      contentBase64: b64(cfdiXml({ uuid: 'bb000001-0000-0000-0000-000000000001', folio: 'R1' })),
+    })
+    expect(r.status).toBe('created')
+    const atts = await cfdiAttachments(r.expenseId)
+    expect(atts).toHaveLength(1)
+    expect(atts[0].mime_type).toContain('xml')
+  })
+
+  test('mismo XML otra vez → NO duplica el respaldo (sigue habiendo uno)', async () => {
+    const uuid = 'bb000002-0000-0000-0000-000000000002'
+    const first = await inboundEmailService.ingestInboundDocument({
+      token: curToken, filename: 'dup.xml', mimetype: 'application/xml',
+      contentBase64: b64(cfdiXml({ uuid, folio: 'R2' })),
+    })
+    await inboundEmailService.ingestInboundDocument({
+      token: curToken, filename: 'dup.xml', mimetype: 'application/xml',
+      contentBase64: b64(cfdiXml({ uuid, folio: 'R2' })),
+    })
+    const atts = await cfdiAttachments(first.expenseId)
+    expect(atts).toHaveLength(1)
+  })
+
+  test('ruta: zip con XML+PDF → guarda AMBOS respaldos en el mismo gasto', async () => {
+    const zb64 = zipB64({
+      'factura.xml': cfdiXml({ uuid: 'bb000003-0000-0000-0000-000000000003', folio: 'R3' }),
+      'factura.pdf': '%PDF-1.4 respaldo impreso',
+    })
+    const res = await request(app)
+      .post('/api/inbound/expense')
+      .set('X-Ingest-Secret', 'test-ingest-secret-123')
+      .send({ token: curToken, from: 'contador@correo.mx', attachments: [
+        { filename: 'cfdi.zip', mimetype: 'application/zip', contentBase64: zb64 },
+      ] })
+    expect(res.status).toBe(200)
+    expect(res.body.results[0].status).toBe('created')
+
+    const atts = await cfdiAttachments(res.body.results[0].expenseId)
+    expect(atts).toHaveLength(2)
+    const kinds = atts.map(a => a.mime_type.includes('xml') ? 'xml' : 'pdf').sort()
+    expect(kinds).toEqual(['pdf', 'xml'])
   })
 })
 
