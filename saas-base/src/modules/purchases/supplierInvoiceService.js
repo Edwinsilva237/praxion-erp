@@ -1019,7 +1019,7 @@ async function assignExpenseSupplier({
 async function updateExpense({
   tenantId, id, userId,
   expenseCategoryId, supplierId, invoiceDate,
-  subtotal, tax, paymentMethod, documentNumber, uuidSat, notes,
+  subtotal, tax, paymentMethod, documentNumber, uuidSat, notes, currency,
   ipAddress, userAgent,
 }) {
   return withTransaction(async (client) => {
@@ -1036,9 +1036,16 @@ async function updateExpense({
     if (inv.status === 'cancelled') throw createError(409, 'No se puede editar un gasto cancelado.')
 
     const amountPaid = parseFloat(inv.ap_amount_paid || 0)
+    if (currency !== undefined && !['MXN', 'USD'].includes(currency)) {
+      throw createError(400, 'currency inválido (MXN | USD).')
+    }
+    const newCurrency = (currency !== undefined) ? currency : inv.currency
+    const wantsCurrencyChange = newCurrency !== inv.currency
     const wantsAmountChange = subtotal !== undefined || tax !== undefined
-    if (wantsAmountChange && amountPaid > 0) {
-      throw createError(409, 'No se puede cambiar el monto de un gasto con un pago aplicado. Reversa el pago primero.')
+    // Cambiar la moneda recalcula total_mxn (y la CXP), igual que cambiar el importe.
+    const affectsMxn = wantsAmountChange || wantsCurrencyChange
+    if (affectsMxn && amountPaid > 0) {
+      throw createError(409, 'No se puede cambiar el monto o la moneda de un gasto con un pago aplicado. Reversa el pago primero.')
     }
 
     if (paymentMethod && !['transfer', 'cash', 'check', 'credit_card'].includes(paymentMethod)) {
@@ -1066,17 +1073,9 @@ async function updateExpense({
       if (dup.length) throw createError(409, `Ya existe una factura registrada con UUID ${newUuid}.`)
     }
 
-    // Recalcular montos (preserva el TC ya guardado; gasto típico es MXN, rate=1)
-    let newSubtotal = parseFloat(inv.subtotal || 0)
-    let newTax      = parseFloat(inv.tax || 0)
-    if (subtotal !== undefined) newSubtotal = parseFloat(subtotal) || 0
-    if (tax !== undefined)      newTax      = parseFloat(tax) || 0
-    const newTotal = parseFloat((newSubtotal + newTax).toFixed(2))
-    if (wantsAmountChange && newTotal <= 0) throw createError(400, 'El total del gasto debe ser mayor a cero.')
-    const rate = inv.currency === 'USD' ? parseFloat(inv.exchange_rate_value || 1) : 1
-    const newTotalMxn = parseFloat((newTotal * rate).toFixed(2))
-
-    // Fecha + vencimiento (preserva la ventana de crédito original)
+    // Fecha + vencimiento (preserva la ventana de crédito original).
+    // Se calcula ANTES del tipo de cambio porque, si la moneda pasa a USD,
+    // el TC se resuelve para la fecha del documento.
     let newIssue = inv.invoice_date
     let newDue   = inv.due_date
     if (invoiceDate !== undefined && invoiceDate) {
@@ -1087,6 +1086,32 @@ async function updateExpense({
       const d = new Date(invoiceDate); d.setTime(d.getTime() + creditMs)
       newDue = d.toISOString().split('T')[0]
     }
+
+    // Recalcular montos. El `total` vive en la moneda del documento; `total_mxn`
+    // es su conversión a pesos. Un gasto típico es MXN (rate=1).
+    let newSubtotal = parseFloat(inv.subtotal || 0)
+    let newTax      = parseFloat(inv.tax || 0)
+    if (subtotal !== undefined) newSubtotal = parseFloat(subtotal) || 0
+    if (tax !== undefined)      newTax      = parseFloat(tax) || 0
+    const newTotal = parseFloat((newSubtotal + newTax).toFixed(2))
+    if (affectsMxn && newTotal <= 0) throw createError(400, 'El total del gasto debe ser mayor a cero.')
+
+    // Tipo de cambio según la moneda RESULTANTE. MXN → sin TC (rate=1). USD →
+    // si cambió la moneda (o estaba en USD sin TC guardado) se resuelve el TC del
+    // día del documento; si sigue en USD sin tocar la moneda, se preserva el TC.
+    let newExchangeRateId    = inv.exchange_rate_id || null
+    let newExchangeRateValue = inv.exchange_rate_value || null
+    if (newCurrency === 'MXN') {
+      newExchangeRateId = null
+      newExchangeRateValue = null
+    } else if (wantsCurrencyChange || !newExchangeRateValue) {
+      const rate = await getRateForDate({ tenantId, date: newIssue, currency: 'USD' })
+      if (!rate) throw createError(400, 'No hay tipo de cambio USD disponible para la fecha del documento.')
+      newExchangeRateId    = rate.id
+      newExchangeRateValue = parseFloat(rate.rate_mxn)
+    }
+    const rate = newCurrency === 'USD' ? parseFloat(newExchangeRateValue || 1) : 1
+    const newTotalMxn = parseFloat((newTotal * rate).toFixed(2))
 
     const set = []; const p = []; let i = 1
     if (expenseCategoryId !== undefined) { set.push(`expense_category_id = $${i++}`); p.push(expenseCategoryId || null) }
@@ -1099,10 +1124,17 @@ async function updateExpense({
       set.push(`invoice_date = $${i++}::date`); p.push(newIssue)
       set.push(`due_date = $${i++}::date`);     p.push(newDue)
     }
+    if (wantsCurrencyChange) {
+      set.push(`currency = $${i++}`);            p.push(newCurrency)
+      set.push(`exchange_rate_id = $${i++}`);    p.push(newExchangeRateId)
+      set.push(`exchange_rate_value = $${i++}`); p.push(newExchangeRateValue)
+    }
     if (wantsAmountChange) {
       set.push(`subtotal = $${i++}`);  p.push(newSubtotal)
       set.push(`tax = $${i++}`);       p.push(newTax)
       set.push(`total = $${i++}`);     p.push(newTotal)
+    }
+    if (affectsMxn) {
       set.push(`total_mxn = $${i++}`); p.push(newTotalMxn)
       set.push(`balance = $${i++}`);   p.push(newTotalMxn)   // sin pagos → balance = total
     }
@@ -1117,7 +1149,11 @@ async function updateExpense({
     // Sync del CXP (monto, proveedor, folio, fechas)
     if (inv.ap_id) {
       const apSet = []; const ap = []; let j = 1
-      if (wantsAmountChange)            { apSet.push(`amount_total = $${j++}`);    ap.push(newTotalMxn) }
+      if (affectsMxn)                   { apSet.push(`amount_total = $${j++}`);    ap.push(newTotalMxn) }
+      if (wantsCurrencyChange) {
+        apSet.push(`currency = $${j++}`);      ap.push(newCurrency)
+        apSet.push(`exchange_rate = $${j++}`); ap.push(newExchangeRateValue || 1)
+      }
       if (supplierId !== undefined)     { apSet.push(`partner_id = $${j++}`);      ap.push(supplierId || null) }
       if (documentNumber !== undefined) { apSet.push(`document_number = $${j++}`); ap.push(documentNumber || inv.invoice_number) }
       if (invoiceDate !== undefined) {

@@ -25,6 +25,33 @@ async function parseSupplierDocument(buffer, mimetype, originalname) {
   }
 }
 
+/**
+ * Detecta la moneda de un CFDI a partir del TEXTO del PDF (fallback cuando no hay
+ * XML ni extracción por IA).
+ *
+ * El SAT imprime el código ISO de la moneda junto a la etiqueta "Moneda"
+ * ("Moneda: MXN", "Moneda: USD") — ese dato MANDA. Sólo si no aparece se recurre
+ * a señales de moneda nacional (M.N., "Moneda Nacional", "Pesos") y, en último
+ * lugar, a una mención de dólares.
+ *
+ * OJO: NO basta con cazar la palabra "dólares" suelta. Muchas facturas EN PESOS
+ * traen leyendas legales del tipo "…las cotizaciones serán realizadas en Dólares.
+ * Para clientes nacionales… en Moneda Nacional…", lo que hacía que un CFDI en
+ * MXN se marcara como USD y su total se multiplicara por el tipo de cambio.
+ */
+function detectCurrency(text) {
+  const t = text || ''
+  // 1) Código ISO junto a la etiqueta "Moneda" (lo que imprime el SAT).
+  const labeled = t.match(/Moneda\b[^A-Za-z]{0,4}(MXN|USD)\b/i)
+  if (labeled) return labeled[1].toUpperCase()
+  // 2) Sin etiqueta clara: señal de moneda nacional manda (evita el falso
+  //    positivo por "Dólares" en notas legales de facturas en pesos).
+  if (/\bMXN\b|\bM\.?\s*N\.?\b|moneda\s+nacional|\bpesos?\b/i.test(t)) return 'MXN'
+  // 3) Última instancia: mención explícita de USD/dólares.
+  if (/\bUSD\b|\b(d[oó]lares?|dolar)\b/i.test(t)) return 'USD'
+  return 'MXN'
+}
+
 // ─── XML CFDI ────────────────────────────────────────────────────────────────
 
 /**
@@ -303,8 +330,8 @@ async function extractPDFByText(buffer) {
     }
   }
 
-  // Moneda: por defecto MXN, pero si el texto menciona USD/dólares lo marcamos.
-  const currency = /\b(USD|d[oó]lares?|dolar)\b/i.test(text) ? 'USD' : 'MXN'
+  // Moneda del documento (ver detectCurrency).
+  const currency = detectCurrency(text)
 
   return {
     documentType: 'pdf',

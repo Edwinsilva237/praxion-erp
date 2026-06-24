@@ -524,6 +524,7 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
         uuid:              exp.uuid_sat || '',
         subtotal:          breakdownMissing ? estSub : (exp.subtotal ?? ''),
         tax:               breakdownMissing ? +(stTotal - estSub).toFixed(2) : (exp.tax ?? ''),
+        currency:          exp.currency || 'MXN',
         notes:             exp.notes || '',
       })
     }
@@ -544,10 +545,12 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
         uuidSat:           form.hasCfdi ? (form.uuid.trim() || undefined) : '',
         notes:             form.notes.trim(),
       }
-      // Montos solo si NO está pagado (el backend igual lo rechazaría con 409).
+      // Montos y moneda solo si NO está pagado (el backend igual lo rechazaría
+      // con 409: cambiar la moneda recalcula total_mxn y la cuenta por pagar).
       if (!isPaid) {
         body.subtotal = parseFloat(form.subtotal) || 0
         body.tax      = parseFloat(form.tax) || 0
+        body.currency = form.currency
       }
       return purchasesApi.updateExpense(id, body)
     },
@@ -1067,6 +1070,20 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
                   tasa, luego <strong>Guardar cambios</strong>.
                 </div>
               )}
+
+              <div className="sm:max-w-[calc(50%-0.375rem)]">
+                <label className="label">Moneda</label>
+                <select className="select" value={form.currency} disabled={isPaid}
+                  onChange={e => set('currency', e.target.value)}>
+                  <option value="MXN">MXN — Pesos</option>
+                  <option value="USD">USD — Dólares</option>
+                </select>
+                {form.currency === 'USD' && (
+                  <p className="text-[10px] text-ink-muted mt-1">
+                    El total en pesos se calcula con el tipo de cambio de la fecha del documento.
+                  </p>
+                )}
+              </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>

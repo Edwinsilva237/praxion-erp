@@ -246,6 +246,43 @@ describe('documentParserService — PDF escaneado (imagen, sin texto)', () => {
   })
 })
 
+describe('documentParserService — detección de moneda (bug "Dólares" en notas)', () => {
+  const parsePdf = (lines) => {
+    delete process.env.ANTHROPIC_API_KEY
+    mockGetText = jest.fn().mockResolvedValue({ text: lines.join('\n') })
+    return parseSupplierDocument(Buffer.from('pdf'), 'application/pdf', 'f.pdf')
+  }
+
+  test('CFDI en MXN con leyenda "…en Dólares…" en notas → MXN (no USD)', async () => {
+    // Bug reportado (DeltaTrak): la nota legal disparaba USD y el total se
+    // multiplicaba por el tipo de cambio.
+    const r = await parsePdf([
+      'DELTATRAK INTERNACIONAL MEXICO',
+      'RFC: DIM1207131N0',
+      'Subtotal: $5,463.95  IVA: $874.23  Total: $6,338.18',
+      'Moneda: MXN - MXN',
+      'las cotizaciones serán realizadas en Dólares. Para clientes nacionales',
+      'cuya forma de pago sea en Moneda Nacional la facturación se realiza.',
+    ])
+    expect(r.currency).toBe('MXN')
+  })
+
+  test('etiqueta "Moneda: USD" → USD', async () => {
+    const r = await parsePdf(['Total: 100.00', 'Moneda: USD'])
+    expect(r.currency).toBe('USD')
+  })
+
+  test('sin etiqueta, sólo mención de dólares → USD', async () => {
+    const r = await parsePdf(['Total: 100.00', 'Pago en dólares americanos'])
+    expect(r.currency).toBe('USD')
+  })
+
+  test('sin etiqueta, importe con letra "Pesos … M.N." → MXN', async () => {
+    const r = await parsePdf(['Total: 100.00', 'Importe con letra: cien Pesos 00/100 M.N.'])
+    expect(r.currency).toBe('MXN')
+  })
+})
+
 describe('documentParserService — formato no soportado', () => {
   test('rechaza un .txt', async () => {
     await expect(

@@ -828,8 +828,9 @@ router.get('/expenses/:id', checkPermission('expenses', 'read'), async (req, res
 /**
  * PATCH /api/purchases/expenses/:id
  * Edita un gasto. Body (todos opcionales): { expenseCategoryId, supplierId,
- * invoiceDate, subtotal, tax, paymentMethod, documentNumber, uuidSat, notes }.
- * Los montos solo se editan si el gasto NO tiene pago aplicado.
+ * invoiceDate, subtotal, tax, currency, paymentMethod, documentNumber, uuidSat,
+ * notes }. Los montos y la MONEDA solo se editan si el gasto NO tiene pago
+ * aplicado (cambiar la moneda recalcula total_mxn y la cuenta por pagar).
  */
 router.patch('/expenses/:id', checkPermission('expenses', 'create'), async (req, res, next) => {
   try {

@@ -130,6 +130,46 @@ describe('Gastos — detalle, edición y cancelación', () => {
       .rejects.toMatchObject({ status: 409 })
   })
 
+  // ── Corrección de moneda mal detectada (bug "Dólares" en notas del PDF) ───
+  test('corregir moneda USD→MXN recalcula total_mxn y la CXP', async () => {
+    // Simula un CFDI en pesos que el parser marcó USD: el total 6,338.18 se
+    // infló al multiplicarse por el tipo de cambio del día.
+    const date = '2026-05-20'
+    await withBypass(() => query(
+      `INSERT INTO exchange_rates (tenant_id, rate_date, currency, rate_mxn, source)
+       VALUES ($1,$2,'USD',17.3480,'dof_auto')
+       ON CONFLICT (tenant_id, rate_date, currency) DO NOTHING`, [tenantId, date]))
+
+    const exp = await registerInvoice({
+      tenantId, supplierId, documentNumber: `USD-${crypto.randomUUID().slice(0, 8)}`,
+      currency: 'USD', subtotal: 5463.95, tax: 874.23, total: 6338.18,
+      invoiceDate: date, isExpense: true, expenseCategoryId: categoryId, userId,
+    })
+    const before = await getExpense({ tenantId, id: exp.id })
+    expect(before.currency).toBe('USD')
+    expect(parseFloat(before.total_mxn)).toBeCloseTo(6338.18 * 17.348, 1)  // inflado
+
+    // Corregir a MXN: total_mxn y la CXP vuelven al importe del documento.
+    await updateExpense({ tenantId, id: exp.id, userId, currency: 'MXN' })
+    const after = await getExpense({ tenantId, id: exp.id })
+    expect(after.currency).toBe('MXN')
+    expect(parseFloat(after.total)).toBeCloseTo(6338.18)
+    expect(parseFloat(after.total_mxn)).toBeCloseTo(6338.18)
+    const ap = await getAp(exp.ap_id)
+    expect(parseFloat(ap.amount_total)).toBeCloseTo(6338.18)
+  })
+
+  test('no se puede cambiar la moneda de un gasto con pago aplicado', async () => {
+    const exp = await makeExpense({ subtotal: 500, tax: 80 })
+    await registerPayment({
+      tenantId, supplierId, method: 'transfer', reference: 'TR-CUR',
+      amount: 580, currency: 'MXN',
+      applications: [{ apId: exp.ap_id, amountApplied: 580 }], userId,
+    })
+    await expect(updateExpense({ tenantId, id: exp.id, userId, currency: 'USD' }))
+      .rejects.toMatchObject({ status: 409 })
+  })
+
   // ── Fase 2: alta de gasto desde CFDI XML ──────────────────────────────────
   test('parsear un CFDI XML y crear el gasto desde sus datos + respaldo + anti-dup', async () => {
     const uuid = crypto.randomUUID()
