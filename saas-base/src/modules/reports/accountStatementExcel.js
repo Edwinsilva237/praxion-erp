@@ -99,10 +99,13 @@ function addResumenSheet(wb, { tenantName, data, labels }) {
 
 function addDocsSheet(wb, data, labels) {
   const ws = wb.addWorksheet('Documentos pendientes')
+  // La OC es del cliente: solo aplica a cuentas por cobrar.
+  const showPO = data.direction === 'in'
   ws.columns = [
     { header: 'Estado',          key: 'aging_status',     width: 18 },
     { header: 'Documento',       key: 'document_number',  width: 22 },
     { header: 'Tipo',            key: 'document_type',    width: 14 },
+    ...(showPO ? [{ header: 'Orden de compra', key: 'po_number', width: 20 }] : []),
     { header: labels.partnerCol, key: 'partner_name',     width: 36 },
     { header: 'RFC',             key: 'partner_rfc',      width: 16 },
     { header: 'F. emisión',      key: 'issue_date',       width: 14, style: { numFmt: 'yyyy-mm-dd' } },

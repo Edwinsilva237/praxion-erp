@@ -273,50 +273,92 @@ function drawPartnerDocuments(doc, data, t, labels) {
     return
   }
 
-  // Headers
-  let y = doc.y
-  doc.fillColor('#606060').font('Helvetica-Bold').fontSize(8)
-  doc.text('DOCUMENTO',  40,  y, { width: 100 })
-  doc.text('EMISIÓN',    150, y, { width: 60 })
-  doc.text('VENCE',      215, y, { width: 60 })
-  doc.text('ESTADO',     275, y, { width: 80 })
-  doc.text('TOTAL',      360, y, { width: 70, align: 'right' })
-  doc.text('PAGADO',     435, y, { width: 70, align: 'right' })
-  doc.text('PENDIENTE',  510, y, { width: 60, align: 'right' })
-  doc.moveTo(40, y + 14).lineTo(570, y + 14).strokeColor('#E5E7EB').stroke()
-  doc.y = y + 20
+  // La columna "Orden de compra" es la OC del cliente; solo aplica a CXC.
+  const showPO = data.direction === 'in'
+
+  // Layout de columnas (x, ancho). El fondo del renglón abarca de 38 a 572.
+  const cols = showPO
+    ? {
+        doc:     { x: 40,  w: 84 },
+        po:      { x: 124, w: 70 },
+        issue:   { x: 196, w: 48 },
+        due:     { x: 246, w: 48 },
+        status:  { x: 296, w: 66 },
+        total:   { x: 364, w: 64 },
+        paid:    { x: 430, w: 64 },
+        pending: { x: 496, w: 72 },
+      }
+    : {
+        doc:     { x: 40,  w: 100 },
+        issue:   { x: 150, w: 60 },
+        due:     { x: 215, w: 60 },
+        status:  { x: 275, w: 80 },
+        total:   { x: 360, w: 70 },
+        paid:    { x: 435, w: 70 },
+        pending: { x: 510, w: 60 },
+      }
+
+  const drawHeaders = () => {
+    const y = doc.y
+    doc.fillColor('#606060').font('Helvetica-Bold').fontSize(8)
+    doc.text('DOCUMENTO', cols.doc.x, y, { width: cols.doc.w })
+    if (showPO) doc.text('ORDEN COMPRA', cols.po.x, y, { width: cols.po.w })
+    doc.text('EMISIÓN',   cols.issue.x,  y, { width: cols.issue.w })
+    doc.text('VENCE',     cols.due.x,    y, { width: cols.due.w })
+    doc.text('ESTADO',    cols.status.x, y, { width: cols.status.w })
+    doc.text('TOTAL',     cols.total.x,   y, { width: cols.total.w,   align: 'right' })
+    doc.text('PAGADO',    cols.paid.x,    y, { width: cols.paid.w,    align: 'right' })
+    doc.text('PENDIENTE', cols.pending.x, y, { width: cols.pending.w, align: 'right' })
+    doc.moveTo(40, y + 14).lineTo(570, y + 14).strokeColor('#E5E7EB').stroke()
+    doc.y = y + 20
+  }
+
+  drawHeaders()
 
   for (const d of data.documents) {
     if (doc.y > doc.page.height - 80) {
       doc.addPage()
       drawInternalHeader(doc, t, `${capitalize(labels.partnerNoun)}: ${data.partner.name}`)
+      drawHeaders()
     }
     const ry = doc.y
     const bg = COLOR[d.aging_status + 'Bg']
     if (bg) doc.rect(38, ry - 2, 534, 22).fill(bg)
-    doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(9).text(d.document_number, 40, ry + 2, { width: 100 })
+    // Barra de semáforo en el borde izquierdo según el vencimiento.
+    const bar = COLOR[d.aging_status]
+    if (bar) doc.rect(38, ry - 2, 3, 22).fill(bar)
+
+    doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(9)
+       .text(d.document_number, cols.doc.x, ry + 2, { width: cols.doc.w, ellipsis: true })
+
+    if (showPO) {
+      doc.font('Helvetica').fontSize(8).fillColor(d.po_number ? '#374151' : '#9CA3AF')
+         .text(d.po_number || '—', cols.po.x, ry + 3, { width: cols.po.w, ellipsis: true })
+    }
+
     doc.font('Helvetica').fontSize(9).fillColor('#374151')
-    doc.text(fmtDate(d.issue_date), 150, ry + 2, { width: 60 })
+       .text(fmtDate(d.issue_date), cols.issue.x, ry + 2, { width: cols.issue.w })
     doc.fillColor(d.aging_status === 'overdue' ? COLOR.overdue : '#374151')
-    doc.text(fmtDate(d.due_date),   215, ry + 2, { width: 60 })
+       .text(fmtDate(d.due_date), cols.due.x, ry + 2, { width: cols.due.w })
     doc.fillColor(COLOR[d.aging_status] || '#374151').font('Helvetica-Bold').fontSize(8)
     let statusText = STATUS_LABEL[d.aging_status] || ''
     if (d.days_overdue != null && d.days_overdue > 0) statusText += ` (${d.days_overdue}d)`
-    doc.text(statusText, 275, ry + 4, { width: 80 })
+    doc.text(statusText, cols.status.x, ry + 4, { width: cols.status.w })
     doc.fillColor('#374151').font('Helvetica').fontSize(9)
-    doc.text(fmtMXN(d.amount_total), 360, ry + 2, { width: 70, align: 'right' })
-    doc.text(fmtMXN(d.amount_paid),  435, ry + 2, { width: 70, align: 'right' })
-    doc.font('Helvetica-Bold').text(fmtMXN(d.amount_pending), 510, ry + 2, { width: 60, align: 'right' })
+    doc.text(fmtMXN(d.amount_total), cols.total.x, ry + 2, { width: cols.total.w, align: 'right' })
+    doc.text(fmtMXN(d.amount_paid),  cols.paid.x,  ry + 2, { width: cols.paid.w,  align: 'right' })
+    doc.font('Helvetica-Bold')
+       .text(fmtMXN(d.amount_pending), cols.pending.x, ry + 2, { width: cols.pending.w, align: 'right' })
     doc.y = ry + 22
   }
 
   // Total
   const ry = doc.y
   doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(10)
-  doc.text('TOTAL', 275, ry + 4, { width: 80 })
-  doc.text(fmtMXN(data.documents.reduce((s, d) => s + d.amount_total, 0)),   360, ry + 4, { width: 70, align: 'right' })
-  doc.text(fmtMXN(data.documents.reduce((s, d) => s + d.amount_paid, 0)),    435, ry + 4, { width: 70, align: 'right' })
-  doc.text(fmtMXN(data.summary.total_pending_amount),                         510, ry + 4, { width: 60, align: 'right' })
+  doc.text('TOTAL', cols.status.x, ry + 4, { width: cols.status.w })
+  doc.text(fmtMXN(data.documents.reduce((s, d) => s + d.amount_total, 0)), cols.total.x, ry + 4, { width: cols.total.w, align: 'right' })
+  doc.text(fmtMXN(data.documents.reduce((s, d) => s + d.amount_paid, 0)),  cols.paid.x,  ry + 4, { width: cols.paid.w,  align: 'right' })
+  doc.text(fmtMXN(data.summary.total_pending_amount),                       cols.pending.x, ry + 4, { width: cols.pending.w, align: 'right' })
   doc.y = ry + 24
 }
 

@@ -25,6 +25,12 @@ function getConfig(direction) {
       hasCreditNotes:   true,
       partnerNoun:      'cliente',
       partnerNounPlural:'clientes',
+      // OC del cliente: vive en la factura/remisión origen del documento CXC.
+      poSelect:         `COALESCE(inv.po_number, dn.po_number)`,
+      poJoins:          `
+        LEFT JOIN invoices       inv ON inv.id = d.document_id AND d.document_type = 'invoice'
+        LEFT JOIN delivery_notes dn  ON dn.id  = d.document_id AND d.document_type = 'remission'
+      `,
     }
   }
   if (direction === 'out') {
@@ -35,6 +41,9 @@ function getConfig(direction) {
       hasCreditNotes:   false,
       partnerNoun:      'proveedor',
       partnerNounPlural:'proveedores',
+      // CXP no referencia una OC de cliente.
+      poSelect:         `NULL::varchar`,
+      poJoins:          ``,
     }
   }
   const err = new Error(`direction debe ser 'in' u 'out' (recibió '${direction}')`)
@@ -159,6 +168,7 @@ async function getOpenDocuments(tenantId, cfg, filters) {
            d.issue_date, d.due_date,
            d.amount_total, d.amount_paid, d.amount_pending,
            d.status AS doc_status,
+           ${cfg.poSelect} AS po_number,
            ${STATUS_CASE} AS aging_status,
            (CASE
              WHEN d.due_date IS NULL THEN NULL
@@ -166,6 +176,7 @@ async function getOpenDocuments(tenantId, cfg, filters) {
            END)::int AS days_overdue
       FROM ${cfg.docsTable} d
       JOIN business_partners bp ON bp.id = d.partner_id
+      ${cfg.poJoins}
      WHERE ${conditions.join(' AND ')}
      ORDER BY
        CASE ${STATUS_CASE}
@@ -191,6 +202,7 @@ async function getOpenDocuments(tenantId, cfg, filters) {
     amount_paid:     parseFloat(r.amount_paid)    || 0,
     amount_pending:  parseFloat(r.amount_pending) || 0,
     doc_status:      r.doc_status,
+    po_number:       r.po_number || null,
     aging_status:    r.aging_status,
     days_overdue:    r.days_overdue,
   }))
