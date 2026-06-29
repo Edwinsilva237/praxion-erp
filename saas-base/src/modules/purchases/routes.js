@@ -1150,6 +1150,22 @@ router.post('/payments', checkPermission('purchases', 'create'), async (req, res
 })
 
 /**
+ * POST /api/purchases/payments/:id/reverse
+ * Reversa un pago a proveedor: revierte el saldo de la CXP de las facturas que
+ * liquidó. Body: { reason }
+ */
+router.post('/payments/:id/reverse', checkPermission('purchases', 'reverse_payment'), async (req, res, next) => {
+  try {
+    const result = await supplierInvoiceService.reverseSupplierPayment({
+      tenantId: req.tenant.id, paymentId: req.params.id,
+      reason: req.body?.reason,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
  * GET /api/purchases/suppliers/:id/statement
  * Estado de cuenta de un proveedor.
  * Query: from?, to?

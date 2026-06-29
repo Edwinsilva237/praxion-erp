@@ -19,6 +19,10 @@ export const cxpApi = {
   //         applications: [{ apId, amountApplied }], notes? }
   registerPayment: (body) => api.post(`${B}/payments`, body).then(r => r.data),
 
+  // Reversa un pago a proveedor (revierte el saldo de la CXP que liquidó).
+  reversePayment: (paymentId, reason) =>
+    api.post(`${B}/payments/${paymentId}/reverse`, { reason }).then(r => r.data),
+
   // ── Evidencias (attachments) de la factura proveedor ──────────────────
   // El :id acepta supplier_invoice.id O accounts_payable.id
   listAttachments: (id) =>

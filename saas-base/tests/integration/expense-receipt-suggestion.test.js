@@ -94,9 +94,9 @@ test('±2%: $1,015 contra recepción de $1,000 sí se sugiere', async () => {
   expect(s.suggestion?.id).toBe(rid)                                 // |1015-1000| = 15 ≤ 20.3
 })
 
-test('gasto con pago aplicado → sin sugerencia', async () => {
+test('gasto con pago aplicado → AÚN se sugiere (el pago no impide vincular)', async () => {
   const sid = await makeSupplier()
-  await makeReceipt({ partnerId: sid })
+  const rid = await makeReceipt({ partnerId: sid })
   const g = await makeExpense({ supplierId: sid, subtotal: 1000, tax: 160 })
   await registerPayment({
     tenantId, supplierId: sid, method: 'transfer', reference: 'TR',
@@ -104,5 +104,5 @@ test('gasto con pago aplicado → sin sugerencia', async () => {
     applications: [{ apId: g.ap_id, amountApplied: 100 }], userId,
   })
   const s = await suggestReceiptForExpense({ tenantId, expenseId: g.id })
-  expect(s.suggestion).toBeNull()
+  expect(s.suggestion?.id).toBe(rid)
 })

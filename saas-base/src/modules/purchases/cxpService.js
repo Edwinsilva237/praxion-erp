@@ -184,7 +184,8 @@ async function getCXP({ tenantId, apId }) {
 async function listPayments({ tenantId, partnerId, from, to, method, sortBy, sortDir, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
-  const filters = []
+  // Los pagos reversados no son movimientos reales de dinero → fuera del historial.
+  const filters = ['sp.reversed_at IS NULL']
   const orderBy = buildOrderBy({
     sortBy, sortDir, columns: SP_PAYMENT_SORT_COLUMNS, defaultKey: 'fecha',
     tiebreaker: 'sp.created_at DESC, sp.id DESC',

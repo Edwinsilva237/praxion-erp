@@ -610,8 +610,10 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const canPay = exp && exp.is_expense !== false && exp.status !== 'cancelled'
     && !!exp.ap_id && exp.ap_status === 'pending'
 
+  // Un gasto pagado SÍ se puede vincular: su CXP y pago viajan con el registro al
+  // convertirse en factura de compra (backend lo permite).
   const canLink = exp && exp.is_expense !== false && exp.status !== 'cancelled'
-    && !['paid', 'partial'].includes(exp.ap_status) && !!exp.partner_id
+    && !!exp.partner_id
 
   // Sugerencia: ¿este gasto cuadra con una recepción pendiente? (no liga sola).
   const { data: suggestion } = useQuery({

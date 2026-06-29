@@ -114,7 +114,7 @@ test('si la recepción tenía remisión-CXP, vincular la SUSTITUYE (sin doble CX
   expect(live[0].n).toBe(1)
 })
 
-test('gasto con pago aplicado → 409', async () => {
+test('gasto YA PAGADO → se vincula y el pago se conserva en el mismo registro', async () => {
   const sid = await makeSupplier()
   const rid = await makeReceipt({ partnerId: sid })
   const gasto = await makeExpense({ supplierId: sid, subtotal: 1000, tax: 160 })
@@ -123,8 +123,19 @@ test('gasto con pago aplicado → 409', async () => {
     amount: 100, currency: 'MXN',
     applications: [{ apId: gasto.ap_id, amountApplied: 100 }], userId,
   })
-  await expect(linkExpenseToReceipt({ tenantId, expenseId: gasto.id, receiptId: rid, userId }))
-    .rejects.toMatchObject({ status: 409 })
+
+  // Antes esto daba 409; ahora se permite (la CXP y el pago viajan con el registro).
+  const r = await linkExpenseToReceipt({ tenantId, expenseId: gasto.id, receiptId: rid, userId })
+  expect(r.receiptId).toBe(rid)
+
+  // Se reclasificó a factura de compra y la MISMA CXP conserva su pago.
+  const { rows: si } = await withBypass(() => query(
+    `SELECT is_expense FROM supplier_invoices WHERE id = $1`, [gasto.id]))
+  expect(si[0].is_expense).toBe(false)
+  const { rows: ap } = await withBypass(() => query(
+    `SELECT amount_paid, status FROM accounts_payable WHERE id = $1`, [gasto.ap_id]))
+  expect(parseFloat(ap[0].amount_paid)).toBeCloseTo(100, 2)
+  expect(ap[0].status).not.toBe('cancelled')
 })
 
 test('facturación PARCIAL: cubrir solo una línea → la otra queda pendiente', async () => {

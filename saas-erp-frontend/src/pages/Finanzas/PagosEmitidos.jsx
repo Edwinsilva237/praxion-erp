@@ -1,11 +1,13 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { createPortal } from 'react-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTableSort } from '@/hooks/useTableSort'
 import { SortableHeader } from '@/components/ui/SortableHeader'
 import { cxpApi } from '@/api/cxp'
 import { partnersApi } from '@/api/partners'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
+import Can from '@/components/auth/Can'
 import { fmtMXN, fmtDateOnly } from '@/utils/fmt'
 
 const METHOD_OPTS = [
@@ -34,6 +36,7 @@ export default function PagosEmitidos() {
   const [to, setTo]           = useState('')
   const [method, setMethod]   = useState('')
   const [page, setPage]       = useState(1)
+  const [reverseTarget, setReverseTarget] = useState(null) // pago a reversar
 
   const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')
   useEffect(() => { setPage(1) }, [partner, from, to, method, sortBy, sortDir])
@@ -167,6 +170,16 @@ export default function PagosEmitidos() {
                       <span>· {r.bank_alias || r.bank_name}</span>
                     )}
                   </div>
+                  {r.payment_method !== 'advance_application' && (
+                    <Can do="purchases:reverse_payment">
+                      <div className="mt-2">
+                        <button onClick={() => setReverseTarget(r)}
+                          className="btn-ghost btn-sm text-status-danger">
+                          Reversar
+                        </button>
+                      </div>
+                    </Can>
+                  )}
                 </div>
               ))}
             </div>
@@ -182,6 +195,7 @@ export default function PagosEmitidos() {
                     <SortableHeader sortKey="metodo"    sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Método</SortableHeader>
                     <th>Banco</th>
                     <SortableHeader sortKey="monto"     sortBy={sortBy} sortDir={sortDir} onSort={onSort} align="right">Monto</SortableHeader>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -199,6 +213,16 @@ export default function PagosEmitidos() {
                       <td className="text-xs text-ink-secondary">{r.bank_alias || r.bank_name || '—'}</td>
                       <td className="text-right font-mono tabular-nums font-semibold text-ink-primary">
                         {fmtMXN(r.amount_mxn)}
+                      </td>
+                      <td className="text-right">
+                        {r.payment_method !== 'advance_application' && (
+                          <Can do="purchases:reverse_payment">
+                            <button onClick={() => setReverseTarget(r)}
+                              className="btn-ghost btn-sm text-status-danger">
+                              Reversar
+                            </button>
+                          </Can>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -230,6 +254,69 @@ export default function PagosEmitidos() {
           </>
         )}
       </div>
+
+      {reverseTarget && (
+        <ReversePaymentModal
+          payment={reverseTarget}
+          onClose={() => setReverseTarget(null)}
+        />
+      )}
     </div>
+  )
+}
+
+// ── Modal: reversar un pago a proveedor ──────────────────────────────────────
+function ReversePaymentModal({ payment, onClose }) {
+  const qc = useQueryClient()
+  const [reason, setReason] = useState('')
+  const [error, setError]   = useState(null)
+
+  const mutation = useMutation({
+    mutationFn: () => cxpApi.reversePayment(payment.id, reason.trim()),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pagos-emitidos'] })
+      qc.invalidateQueries({ queryKey: ['cxp'] })
+      onClose()
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al reversar'),
+  })
+
+  const partnerName = payment.partner_name || payment.generic_supplier || 'proveedor'
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}>
+      <div className="card w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="text-base font-semibold text-ink-primary">Reversar pago</h3>
+          <button onClick={onClose} className="text-ink-muted hover:text-ink-secondary">×</button>
+        </div>
+        <p className="text-xs text-ink-muted mb-4">
+          Se revertirá el pago de <strong>{fmtMXN(payment.amount_mxn)}</strong> a {partnerName}
+          {payment.applied_docs ? <> aplicado a <strong>{payment.applied_docs}</strong></> : null}.
+          El saldo de esas cuentas por pagar volverá a quedar pendiente. El pago queda registrado como reversado.
+        </p>
+
+        <label className="block text-xs text-ink-muted mb-1">Razón de la reversa</label>
+        <textarea className="input min-h-[72px]" value={reason}
+          onChange={e => setReason(e.target.value)}
+          placeholder="Ej. pago aplicado al documento equivocado" />
+
+        {error && <p className="field-error mt-3">{error}</p>}
+
+        <div className="flex gap-2 mt-4">
+          <button onClick={onClose} className="btn-secondary flex-1" disabled={mutation.isPending}>
+            Cancelar
+          </button>
+          <button
+            onClick={() => { setError(null); mutation.mutate() }}
+            disabled={mutation.isPending || !reason.trim()}
+            className="btn-primary flex-1 !bg-status-danger hover:!bg-status-danger/90">
+            {mutation.isPending ? <Spinner size="sm" /> : 'Reversar pago'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
   )
 }

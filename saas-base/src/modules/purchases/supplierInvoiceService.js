@@ -660,6 +660,111 @@ async function registerPayment({
 }
 
 /**
+ * Reversa un pago a proveedor (supplier_payments). Deshace su efecto en las CXP
+ * que liquidó: restaura amount_paid/status de cada accounts_payable y el balance/
+ * status de cada supplier_invoice. El pago NO se borra: queda marcado
+ * (reversed_at/by/reason) para auditoría y se excluye de saldos e historial.
+ *
+ * Espejo de cxcService.reversePayment. Para corregir un pago mal aplicado, el
+ * operador lo reversa y vuelve a registrarlo en el documento correcto.
+ *
+ * Si el sobrante del pago se guardó como ANTICIPO y este YA se aplicó a otras
+ * facturas, se aborta pidiendo reversar esas aplicaciones primero (el anticipo
+ * sin aplicar se elimina al reversar).
+ */
+async function reverseSupplierPayment({ tenantId, paymentId, reason, userId, ipAddress, userAgent }) {
+  if (!reason || !String(reason).trim()) {
+    throw createError(400, 'La razón de la reversa es requerida.')
+  }
+  const reasonTrim = String(reason).trim()
+
+  return withTransaction(async (client) => {
+    const { rows: payRows } = await client.query(
+      `SELECT id, amount, reversed_at FROM supplier_payments
+        WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+      [paymentId, tenantId]
+    )
+    if (!payRows.length) throw createError(404, 'Pago no encontrado.')
+    if (payRows[0].reversed_at) throw createError(409, 'Este pago ya fue reversado.')
+
+    // Anticipo nacido del sobrante de este pago. Si ya se aplicó → bloquear.
+    const { rows: adv } = await client.query(
+      `SELECT id, amount_applied FROM ap_advances
+        WHERE supplier_payment_id = $1 AND tenant_id = $2 FOR UPDATE`,
+      [paymentId, tenantId]
+    )
+    for (const a of adv) {
+      if (parseFloat(a.amount_applied || 0) > 0) {
+        throw createError(409,
+          'El sobrante de este pago se guardó como anticipo y ya fue aplicado a otras facturas. Reversa esas aplicaciones antes.')
+      }
+    }
+
+    // Revertir cada aplicación: CXP (accounts_payable) + factura (supplier_invoices).
+    const { rows: apps } = await client.query(
+      `SELECT supplier_invoice_id, amount_applied
+         FROM supplier_payment_applications WHERE supplier_payment_id = $1`,
+      [paymentId]
+    )
+    for (const app of apps) {
+      const applied = parseFloat(app.amount_applied)
+      const { rows: apRows } = await client.query(
+        `SELECT id, amount_total, amount_paid FROM accounts_payable
+          WHERE tenant_id = $1 AND document_id = $2 FOR UPDATE`,
+        [tenantId, app.supplier_invoice_id]
+      )
+      if (apRows.length) {
+        const ap = apRows[0]
+        const newPaid = Math.max(0, +(parseFloat(ap.amount_paid) - applied).toFixed(2))
+        const total = parseFloat(ap.amount_total)
+        const newStatus = newPaid <= 0.001 ? 'pending' : (newPaid >= total - 0.001 ? 'paid' : 'partial')
+        await client.query(
+          `UPDATE accounts_payable SET amount_paid = $1, status = $2 WHERE id = $3`,
+          [newPaid, newStatus, ap.id]
+        )
+      }
+      // balance se recompone (cap a total_mxn por el CHECK si_balance_valid).
+      await client.query(
+        `UPDATE supplier_invoices
+            SET balance = LEAST(total_mxn, balance + $1),
+                status = CASE
+                  WHEN status = 'cancelled' THEN status
+                  WHEN LEAST(total_mxn, balance + $1) >= total_mxn - 0.001 THEN 'pending'::supplier_invoice_status
+                  WHEN LEAST(total_mxn, balance + $1) <= 0.001            THEN 'paid'::supplier_invoice_status
+                  ELSE 'partial'::supplier_invoice_status END,
+                updated_at = NOW()
+          WHERE id = $2 AND tenant_id = $3`,
+        [applied, app.supplier_invoice_id, tenantId]
+      )
+    }
+
+    // El anticipo sin aplicar nacido de este pago se elimina.
+    if (adv.length) {
+      await client.query(
+        `DELETE FROM ap_advances WHERE supplier_payment_id = $1 AND tenant_id = $2`,
+        [paymentId, tenantId]
+      )
+    }
+
+    await client.query(
+      `UPDATE supplier_payments
+          SET reversed_at = NOW(), reversed_by = $1, reversal_reason = $2
+        WHERE id = $3`,
+      [userId, reasonTrim, paymentId]
+    )
+
+    await audit({
+      tenantId, userId, action: 'supplier_payment.reversed',
+      resource: 'supplier_payments', resourceId: paymentId,
+      payload: { reason: reasonTrim, reversedApplications: apps.length, advanceRemoved: adv.length },
+      ipAddress, userAgent,
+    })
+
+    return { reversed: true, paymentId, reversedApplications: apps.length, advanceRemoved: adv.length }
+  })
+}
+
+/**
  * Estado de cuenta de un proveedor.
  */
 async function getSupplierStatement({ tenantId, supplierId, from, to }) {
@@ -1265,9 +1370,9 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLin
     if (!exp.length) throw createError(404, 'Gasto no encontrado.')
     const e = exp[0]
     if (e.status === 'cancelled') throw createError(409, 'El gasto está cancelado.')
-    if (parseFloat(e.ap_amount_paid || 0) > 0) {
-      throw createError(409, 'El gasto ya tiene un pago aplicado. Reversa el pago antes de vincularlo.')
-    }
+    // Un gasto YA PAGADO sí se puede vincular: la reclasificación ocurre sobre el
+    // MISMO registro (su CXP y su pago viajan con él al volverse factura de compra).
+    // La remisión-CXP de la recepción solo se sustituye si está SIN pagar (guard abajo).
     if (!e.partner_id) throw createError(400, 'El gasto no tiene proveedor del catálogo; no se puede vincular a una recepción.')
 
     // 2. La recepción: confirmada, mismo proveedor.
@@ -1420,8 +1525,9 @@ async function suggestReceiptForExpense({ tenantId, expenseId }) {
   if (!exp.length) throw createError(404, 'Gasto no encontrado.')
   const e = exp[0]
   const subtotal = parseFloat(e.subtotal || 0)
-  // Solo para gastos vivos, sin pago, MXN, con proveedor y subtotal > 0.
-  if (!e.is_expense || e.status === 'cancelled' || parseFloat(e.ap_amount_paid || 0) > 0
+  // Gastos vivos (incluso ya pagados — se pueden vincular), MXN, con proveedor y
+  // subtotal > 0. El pago no impide vincular (viaja con el registro).
+  if (!e.is_expense || e.status === 'cancelled'
       || e.currency !== 'MXN' || !e.partner_id || !(subtotal > 0)) {
     return { suggestion: null, candidateCount: 0 }
   }
@@ -1540,5 +1646,5 @@ module.exports = {
   registerInvoice, generateReceiptRemission, listInvoices, getInvoice, listExpenses,
   listExpensesSummary, getExpense, updateExpense, cancelExpense, linkExpenseToReceipt,
   assignExpenseSupplier, payExpense,
-  suggestReceiptForExpense, requestExpenseInvoice, registerPayment, getSupplierStatement,
+  suggestReceiptForExpense, requestExpenseInvoice, registerPayment, reverseSupplierPayment, getSupplierStatement,
 }
