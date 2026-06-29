@@ -2,7 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit }                  = require('../../utils/audit')
-const { stampPaymentComplement, cancelComplement } = require('../invoicing/paymentComplementService')
+const { stampPaymentComplement, stampPaymentComplementGroup, cancelComplement } = require('../invoicing/paymentComplementService')
 const { buildOrderBy } = require('../../utils/sortOrder')
 const logger = require('../../config/logger')
 
@@ -321,37 +321,65 @@ async function registerPayment({
   })
 
   // ── Post-commit: timbrar complementos (best-effort) ─────────────────────────
-  // El cobro YA quedó registrado. Cada complemento se timbra en su propia
+  // El cobro YA quedó registrado. Como un mismo pago puede liquidar VARIAS
+  // facturas PPD, las que comparten moneda se agrupan en UN solo REP (CFDI tipo
+  // P con un DoctoRelacionado por factura). Cada grupo se timbra en su propia
   // transacción para que un fallo en uno no afecte a los demás ni al cobro.
-  // Si Facturapi falla (transitorio o por datos), el complemento queda
-  // PENDIENTE y se reporta al operador, que puede timbrarlo después con el
-  // botón de "Timbrar complemento faltante".
+  // Si Facturapi falla (transitorio o por datos), el grupo queda PENDIENTE y se
+  // reporta al operador, que puede timbrarlo luego con "Timbrar complemento
+  // faltante".
   const { totalApplied, sinAplicar, advanceId, pendingStamps, complementsSkipped } = txResult
   const complementsIssued = []
   const complementsPending = []
 
+  // Agrupar por moneda — un REP no puede mezclar monedas en su Pago.
+  const groupsByCurrency = new Map()
   for (const job of pendingStamps) {
+    const cur = job.params.currency || 'MXN'
+    if (!groupsByCurrency.has(cur)) groupsByCurrency.set(cur, [])
+    groupsByCurrency.get(cur).push(job)
+  }
+
+  for (const [currency, jobs] of groupsByCurrency) {
+    const first = jobs[0].params
     try {
-      const comp = await withTransaction(async (client) => {
-        const c = await stampPaymentComplement(client, job.params)
-        // Liga determinista cobro ↔ complemento (para una reversa precisa).
-        await client.query(
-          `UPDATE ar_payments SET payment_complement_id = $1 WHERE id = $2`,
-          [c.id, job.arPaymentId]
-        )
-        return c
+      const rows = await withTransaction(async (client) => {
+        const res = await stampPaymentComplementGroup(client, {
+          tenantId,
+          documents:    jobs.map(j => ({ invoiceId: j.params.invoiceId, amount: j.params.amount })),
+          paymentDate:  first.paymentDate,
+          paymentForm:  first.paymentForm,
+          currency,
+          reference:    first.reference,
+          exchangeRate: first.exchangeRate,
+          userId,
+        })
+        // Liga determinista cada cobro ↔ su fila de complemento (reversa precisa).
+        const rowByInvoice = new Map(res.map(r => [r.invoice_id, r]))
+        for (const j of jobs) {
+          const row = rowByInvoice.get(j.params.invoiceId)
+          if (row) {
+            await client.query(
+              `UPDATE ar_payments SET payment_complement_id = $1 WHERE id = $2`,
+              [row.id, j.arPaymentId]
+            )
+          }
+        }
+        return res
       })
-      complementsIssued.push(comp)
+      complementsIssued.push(...rows)
     } catch (err) {
-      complementsPending.push({
-        ar_id:           job.arId,
-        document_number: job.documentNumber,
-        amount:          job.params.amount,
-        reason:          err.message,
-        transient:       !!err.transient,
-      })
-      logger.warn('Complemento de pago quedó PENDIENTE tras registrar el cobro', {
-        tenantId, ar_id: job.arId, document_number: job.documentNumber,
+      for (const j of jobs) {
+        complementsPending.push({
+          ar_id:           j.arId,
+          document_number: j.documentNumber,
+          amount:          j.params.amount,
+          reason:          err.message,
+          transient:       !!err.transient,
+        })
+      }
+      logger.warn('Complemento de pago (grupo) quedó PENDIENTE tras registrar el cobro', {
+        tenantId, currency, documents: jobs.map(j => j.documentNumber),
         transient: !!err.transient, error: err.message,
       })
     }
@@ -661,12 +689,20 @@ async function listPayments({ tenantId, partnerId, from, to, method, sortBy, sor
             ar.id AS ar_id, ar.document_type, ar.document_number,
             bp.id AS partner_id, bp.name AS partner_name, bp.tax_name AS partner_tax_name,
             ba.bank_name, ba.alias AS bank_alias,
-            u.full_name AS created_by_name
+            u.full_name AS created_by_name,
+            -- Complemento de pago (CFDI tipo P) ligado al cobro, si lo hubo y
+            -- sigue vigente. Permite que la lista ofrezca su PDF+XML en vez del
+            -- recibo no fiscal del sistema.
+            pc.facturapi_id AS complement_facturapi_id,
+            pc.cfdi_uuid    AS complement_uuid,
+            pc.status       AS complement_status
        FROM ar_payments arp
        JOIN accounts_receivable ar ON ar.id = arp.ar_id
        JOIN business_partners bp   ON bp.id = ar.partner_id
        LEFT JOIN bank_accounts ba  ON ba.id = arp.bank_account_id
        LEFT JOIN users u           ON u.id  = arp.created_by
+       LEFT JOIN payment_complements pc
+              ON pc.id = arp.payment_complement_id AND pc.status <> 'cancelled'
       WHERE arp.tenant_id = $1 ${where}
       ORDER BY ${orderBy}
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -687,6 +723,43 @@ async function listPayments({ tenantId, partnerId, from, to, method, sortBy, sor
     totalAmount: parseFloat(countRows[0].total) || 0,
     page, limit,
   }
+}
+
+/**
+ * Detalle de un cobro recibido (ar_payments) para el panel que abre al hacer
+ * clic en una fila de "Pagos recibidos": datos del cobro, documento al que se
+ * aplicó, cliente y el complemento de pago (CFDI tipo P) ligado, si lo hubo.
+ */
+async function getPaymentDetail({ tenantId, paymentId }) {
+  const { rows } = await query(
+    `SELECT arp.id, arp.amount, arp.payment_method, arp.reference, arp.payment_date,
+            arp.notes, arp.created_at, arp.advance_id,
+            arp.reversed_at, arp.reversal_reason,
+            ar.id AS ar_id, ar.document_type, ar.document_id, ar.document_number,
+            ar.currency, ar.amount_total, ar.amount_paid, ar.amount_pending, ar.status AS ar_status,
+            bp.id AS partner_id, bp.name AS partner_name, bp.tax_name AS partner_tax_name,
+            bp.rfc AS partner_rfc,
+            ba.bank_name, ba.alias AS bank_alias, ba.account_number AS bank_account_number,
+            u.full_name AS created_by_name,
+            pc.id           AS complement_id,
+            pc.facturapi_id AS complement_facturapi_id,
+            pc.cfdi_uuid    AS complement_uuid,
+            pc.amount       AS complement_amount,
+            pc.currency     AS complement_currency,
+            pc.payment_form AS complement_payment_form,
+            pc.payment_date AS complement_payment_date,
+            pc.status       AS complement_status
+       FROM ar_payments arp
+       JOIN accounts_receivable ar ON ar.id = arp.ar_id
+       JOIN business_partners bp   ON bp.id = ar.partner_id
+       LEFT JOIN bank_accounts ba  ON ba.id = arp.bank_account_id
+       LEFT JOIN users u           ON u.id  = arp.created_by
+       LEFT JOIN payment_complements pc ON pc.id = arp.payment_complement_id
+      WHERE arp.id = $1 AND arp.tenant_id = $2`,
+    [paymentId, tenantId]
+  )
+  if (!rows.length) return null
+  return rows[0]
 }
 
 /**
@@ -744,9 +817,17 @@ async function reversePayment({ tenantId, paymentId, reason, userId, ipAddress, 
     }
 
     let complementCancelled = null
+    // Si el complemento cancelado cubría OTRAS facturas (REP agrupado, mig 214),
+    // esas quedan sin complemento vigente → requieren re-timbrado. Se informa.
+    let complementDocsAffected = 0
     if (complementId) {
       const res = await cancelComplement(client, { tenantId, complementId, motive: '02' })
       if (res?.cancelled || res?.alreadyCancelled) complementCancelled = res.cfdi_uuid
+      if (Array.isArray(res?.cancelledRows) && res.cancelledRows.length > 1) {
+        // Filas hermanas distintas a la factura de ESTE cobro.
+        complementDocsAffected = res.cancelledRows
+          .filter(r => r.invoice_id !== pay.document_id).length
+      }
     }
 
     // 2. Revertir el saldo de la CXC (amount_pending es columna generada).
@@ -786,6 +867,7 @@ async function reversePayment({ tenantId, paymentId, reason, userId, ipAddress, 
         ar_id: pay.ar_id, document_number: pay.document_number,
         amount, method: pay.payment_method, reason: reasonTrim,
         new_status: newStatus, complement_cancelled: complementCancelled,
+        complement_docs_affected: complementDocsAffected,
       },
       ipAddress, userAgent,
     })
@@ -796,11 +878,12 @@ async function reversePayment({ tenantId, paymentId, reason, userId, ipAddress, 
       amount,
       newStatus,
       complementCancelled,
+      complementDocsAffected,
     }
   })
 }
 
 module.exports = {
-  listCXC, getCXC, getCustomerStatement, listPayments,
+  listCXC, getCXC, getCustomerStatement, listPayments, getPaymentDetail,
   registerPayment, applyAdvance, stampMissingComplement, reversePayment,
 }

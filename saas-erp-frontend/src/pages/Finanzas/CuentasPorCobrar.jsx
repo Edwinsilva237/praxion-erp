@@ -341,7 +341,10 @@ export default function CuentasPorCobrar() {
             const parts = [`Pago de ${fmtMXN(res.amount)} registrado. Aplicado ${fmtMXN(res.totalApplied)}`]
             if (res.advanceGenerated) parts.push(`+ anticipo ${fmtMXN(res.advanceGenerated)}`)
             if (res.complementsIssued?.length) {
-              parts.push(`· ${res.complementsIssued.length} complemento(s) timbrado(s)`)
+              // Un REP puede cubrir varias facturas → contar CFDI distintos, no filas.
+              const reps = new Set(res.complementsIssued.map(c => c.uuid)).size
+              const docs = res.complementsIssued.length
+              parts.push(`· ${reps} complemento(s) timbrado(s)${docs > reps ? ` (${docs} facturas)` : ''}`)
             }
             if (res.complementsPending?.length) {
               const pend = res.complementsPending.map(p => p.document_number).join(', ')

@@ -59,6 +59,13 @@ async function complementCount(invoiceId) {
   return rows[0].n
 }
 
+async function complementRow(invoiceId) {
+  const { rows } = await withBypass(() => query(
+    `SELECT facturapi_id, cfdi_uuid, amount FROM payment_complements
+      WHERE invoice_id = $1 AND status <> 'cancelled' ORDER BY created_at DESC LIMIT 1`, [invoiceId]))
+  return rows[0]
+}
+
 describe('Desacople cobro ↔ complemento (registerPayment)', () => {
   beforeAll(async () => {
     const info = await createTenant({ label: 'cxcdec', planSlug: 'owner' })
@@ -129,5 +136,54 @@ describe('Desacople cobro ↔ complemento (registerPayment)', () => {
 
     const pay = await paymentRow(arId)
     expect(pay.payment_complement_id).not.toBeNull()  // cobro ↔ complemento ligados
+  }, 30000)
+
+  test('Un pago que liquida 2 facturas PPD → UN solo REP con 2 documentos', async () => {
+    // Facturapi se llama UNA sola vez (un timbre) y devuelve un REP.
+    const create = jest.fn(async () => ({
+      id: 'fa_comp_group', uuid: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    }))
+    facturapiClient.getFacturapiForTenant.mockResolvedValue({ invoices: { create } })
+
+    const a = await newPpdInvoiceAR(1160)
+    const b = await newPpdInvoiceAR(2320)
+
+    const res = await cxcService.registerPayment({
+      tenantId, partnerId, method: 'transfer', reference: 'SPEI-GROUP',
+      amount: 3480,
+      applications: [
+        { arId: a.arId, amountApplied: 1160 },
+        { arId: b.arId, amountApplied: 2320 },
+      ],
+      userId,
+    })
+
+    // UN timbre para las dos facturas.
+    expect(create).toHaveBeenCalledTimes(1)
+    // El payload llevó 2 documentos relacionados.
+    const payload = create.mock.calls[0][0]
+    expect(payload.type).toBe('P')
+    expect(payload.complements[0].data.related_documents).toHaveLength(2)
+
+    // Dos filas (una por factura), ambas con el MISMO facturapi_id/uuid.
+    expect(await complementCount(a.invoiceId)).toBe(1)
+    expect(await complementCount(b.invoiceId)).toBe(1)
+    const rowA = await complementRow(a.invoiceId)
+    const rowB = await complementRow(b.invoiceId)
+    expect(rowA.facturapi_id).toBe('fa_comp_group')
+    expect(rowB.facturapi_id).toBe('fa_comp_group')
+    expect(rowA.cfdi_uuid).toBe(rowB.cfdi_uuid)
+    expect(parseFloat(rowA.amount)).toBeCloseTo(1160, 2)
+    expect(parseFloat(rowB.amount)).toBeCloseTo(2320, 2)
+
+    // Cada cobro quedó ligado a su fila de complemento.
+    const payA = await paymentRow(a.arId)
+    const payB = await paymentRow(b.arId)
+    expect(payA.payment_complement_id).not.toBeNull()
+    expect(payB.payment_complement_id).not.toBeNull()
+    expect(payA.payment_complement_id).not.toBe(payB.payment_complement_id)
+
+    expect(res.complementsPending).toHaveLength(0)
+    expect(res.complementsIssued).toHaveLength(2)
   }, 30000)
 })

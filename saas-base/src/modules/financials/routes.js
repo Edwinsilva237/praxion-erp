@@ -54,6 +54,20 @@ router.get('/payments', checkPermission('financials', 'read'), async (req, res, 
 })
 
 /**
+ * GET /api/financials/payments/:id — Detalle de un cobro recibido (panel que
+ * abre al hacer clic en una fila de "Pagos recibidos").
+ */
+router.get('/payments/:id', checkPermission('financials', 'read'), async (req, res, next) => {
+  try {
+    const payment = await cxcService.getPaymentDetail({
+      tenantId: req.tenant.id, paymentId: req.params.id,
+    })
+    if (!payment) return res.status(404).json({ error: 'Cobro no encontrado.' })
+    res.json(payment)
+  } catch (err) { next(err) }
+})
+
+/**
  * GET /api/financials/cxc/:id
  * Detalle de un documento CXC con pagos aplicados y datos del documento origen.
  */

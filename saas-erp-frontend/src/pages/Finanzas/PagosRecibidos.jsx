@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import { financialsApi } from '@/api/financials'
 import { partnersApi } from '@/api/partners'
@@ -8,6 +9,11 @@ import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
 import { fmtMXN, fmtDateOnly } from '@/utils/fmt'
 import { downloadBlob } from '@/utils/downloadBlob'
+
+// Un cobro tiene complemento (CFDI tipo P) descargable cuando llega su
+// facturapi_id y el complemento NO está cancelado.
+const hasComplement = (row) =>
+  !!row?.complement_facturapi_id && row?.complement_status !== 'cancelled'
 
 const METHOD_OPTS = [
   ['',         'Todos'],
@@ -33,6 +39,8 @@ export default function PagosRecibidos() {
   const [to, setTo]           = useState('')
   const [method, setMethod]   = useState('')
   const [page, setPage]       = useState(1)
+  const [detailId, setDetailId] = useState(null) // cobro abierto en el panel de detalle
+  const [busyRow, setBusyRow]   = useState(null)  // id de la fila descargando
 
   const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')
   useEffect(() => { setPage(1) }, [partner, from, to, method, sortBy, sortDir])
@@ -57,12 +65,30 @@ export default function PagosRecibidos() {
     return (res.data || res).map(p => ({ id: p.id, label: p.name, sub: p.rfc || '' }))
   }, [])
 
-  async function downloadReceipt(row) {
+  // Descarga el comprobante del cobro. Si el cobro generó un complemento de pago
+  // (CFDI tipo P, factura PPD) baja el PDF + XML fiscal de Facturapi; si no, baja
+  // el recibo no fiscal del sistema.
+  async function downloadDoc(row) {
+    if (busyRow) return
+    setBusyRow(row.id)
     try {
-      const r = await financialsApi.downloadReceiptPdf(row.id)
-      await downloadBlob(r.data, `recibo-${row.document_number}.pdf`)
+      if (hasComplement(row)) {
+        const fid  = row.complement_facturapi_id
+        const base = `complemento-${row.complement_uuid || row.document_number || fid}`
+        const [pdf, xml] = await Promise.all([
+          financialsApi.downloadComplementPdf(fid),
+          financialsApi.downloadComplementXml(fid),
+        ])
+        await downloadBlob(pdf.data, `${base}.pdf`)
+        await downloadBlob(xml.data, `${base}.xml`)
+      } else {
+        const r = await financialsApi.downloadReceiptPdf(row.id)
+        await downloadBlob(r.data, `recibo-${row.document_number}.pdf`)
+      }
     } catch {
-      // Ignorar errores de descarga del recibo.
+      // Ignorar errores de descarga del comprobante.
+    } finally {
+      setBusyRow(null)
     }
   }
 
@@ -151,7 +177,8 @@ export default function PagosRecibidos() {
             <div className="md:hidden flex flex-col gap-3 p-3">
               {rows.map(r => (
                 <div key={r.id}
-                  className="border border-line-subtle rounded-xl bg-surface-primary px-3 py-2.5">
+                  onClick={() => setDetailId(r.id)}
+                  className="border border-line-subtle rounded-xl bg-surface-primary px-3 py-2.5 cursor-pointer active:bg-surface-elevated/40">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="font-medium text-ink-primary truncate">{r.partner_name}</p>
@@ -174,8 +201,13 @@ export default function PagosRecibidos() {
                     )}
                   </div>
                   <div className="mt-2">
-                    <button onClick={() => downloadReceipt(r)} className="btn-secondary btn-sm">
-                      Recibo
+                    <button
+                      onClick={(e) => { e.stopPropagation(); downloadDoc(r) }}
+                      disabled={busyRow === r.id}
+                      className="btn-secondary btn-sm">
+                      {busyRow === r.id
+                        ? <Spinner size="sm" />
+                        : hasComplement(r) ? 'Complemento' : 'Recibo'}
                     </button>
                   </div>
                 </div>
@@ -198,7 +230,9 @@ export default function PagosRecibidos() {
                 </thead>
                 <tbody>
                   {rows.map(r => (
-                    <tr key={r.id} className="hover:bg-surface-elevated/40">
+                    <tr key={r.id}
+                      onClick={() => setDetailId(r.id)}
+                      className="hover:bg-surface-elevated/40 cursor-pointer">
                       <td className="text-xs text-ink-secondary whitespace-nowrap">{fmtDateOnly(r.payment_date)}</td>
                       <td>
                         <p className="font-medium text-ink-primary">{r.partner_name}</p>
@@ -213,8 +247,13 @@ export default function PagosRecibidos() {
                         {fmtMXN(r.amount)}
                       </td>
                       <td className="text-right">
-                        <button onClick={() => downloadReceipt(r)} className="btn-secondary btn-sm">
-                          Recibo
+                        <button
+                          onClick={(e) => { e.stopPropagation(); downloadDoc(r) }}
+                          disabled={busyRow === r.id}
+                          className="btn-secondary btn-sm">
+                          {busyRow === r.id
+                            ? <Spinner size="sm" />
+                            : hasComplement(r) ? 'Complemento' : 'Recibo'}
                         </button>
                       </td>
                     </tr>
@@ -247,6 +286,136 @@ export default function PagosRecibidos() {
           </>
         )}
       </div>
+
+      {detailId && (
+        <PaymentDetailModal paymentId={detailId} onClose={() => setDetailId(null)} />
+      )}
+    </div>
+  )
+}
+
+// ── Detalle de un cobro recibido ─────────────────────────────────────────────
+function PaymentDetailModal({ paymentId, onClose }) {
+  const [busy, setBusy] = useState(null) // 'pdf' | 'xml' | 'receipt'
+
+  const { data: p, isLoading, error } = useQuery({
+    queryKey: ['pago-detalle', paymentId],
+    queryFn:  () => financialsApi.getPayment(paymentId),
+    enabled:  !!paymentId,
+  })
+
+  const withComplement = p && hasComplement(p)
+
+  async function download(kind) {
+    if (busy) return
+    setBusy(kind)
+    try {
+      if (kind === 'receipt') {
+        const r = await financialsApi.downloadReceiptPdf(p.id)
+        await downloadBlob(r.data, `recibo-${p.document_number}.pdf`)
+      } else {
+        const fid  = p.complement_facturapi_id
+        const base = `complemento-${p.complement_uuid || p.document_number || fid}`
+        const r = kind === 'pdf'
+          ? await financialsApi.downloadComplementPdf(fid)
+          : await financialsApi.downloadComplementXml(fid)
+        await downloadBlob(r.data, `${base}.${kind}`)
+      }
+    } catch {
+      // Ignorar errores de descarga.
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const docTypeLabel = p?.document_type === 'invoice' ? 'Factura'
+                     : p?.document_type === 'remission' ? 'Remisión'
+                     : 'Documento'
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}>
+      <div className="card w-full max-w-lg p-5" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-base font-semibold text-ink-primary">Detalle del cobro</h3>
+          <button onClick={onClose} className="text-ink-muted hover:text-ink-secondary">×</button>
+        </div>
+
+        {isLoading ? (
+          <div className="flex justify-center py-10"><Spinner /></div>
+        ) : error ? (
+          <p className="text-sm text-status-danger py-6 text-center">
+            {error.response?.data?.error || error.message || 'Error al cargar el cobro'}
+          </p>
+        ) : p ? (
+          <div className="flex flex-col gap-3">
+            <div className="flex items-baseline justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-medium text-ink-primary truncate">{p.partner_name}</p>
+                {p.partner_tax_name && p.partner_tax_name !== p.partner_name && (
+                  <p className="text-[11px] text-ink-muted truncate">{p.partner_tax_name}</p>
+                )}
+                {p.partner_rfc && <p className="text-[11px] text-ink-muted font-mono">{p.partner_rfc}</p>}
+              </div>
+              <p className="font-mono tabular-nums text-lg font-semibold text-status-success shrink-0">
+                {fmtMXN(p.amount, p.currency)}
+              </p>
+            </div>
+
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+              <Field label="Fecha del cobro" value={fmtDateOnly(p.payment_date)} />
+              <Field label="Método" value={methodLabel(p.payment_method)} />
+              <Field label={docTypeLabel} value={p.document_number || '—'} mono />
+              <Field label="Referencia" value={p.reference || '—'} mono />
+              {(p.bank_alias || p.bank_name) && (
+                <Field label="Banco" value={p.bank_alias || p.bank_name} />
+              )}
+              {p.created_by_name && <Field label="Registró" value={p.created_by_name} />}
+              {p.notes && <div className="col-span-2"><Field label="Notas" value={p.notes} /></div>}
+            </dl>
+
+            {/* Comprobante fiscal / recibo */}
+            {withComplement ? (
+              <div className="rounded-lg border border-teal-500/40 bg-teal-500/5 px-3 py-2.5">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="badge-teal text-[10px]">Complemento de pago</span>
+                  <span className="text-[11px] text-ink-muted">CFDI tipo P timbrado</span>
+                </div>
+                {p.complement_uuid && (
+                  <p className="text-[10px] text-ink-muted font-mono break-all mb-2">UUID: {p.complement_uuid}</p>
+                )}
+                <div className="flex gap-2">
+                  <button onClick={() => download('pdf')} disabled={!!busy} className="btn-secondary btn-sm">
+                    {busy === 'pdf' ? <Spinner size="sm" /> : 'PDF'}
+                  </button>
+                  <button onClick={() => download('xml')} disabled={!!busy} className="btn-ghost btn-sm">
+                    {busy === 'xml' ? <Spinner size="sm" /> : 'XML'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-line-subtle bg-surface-elevated/30 px-3 py-2.5">
+                <p className="text-[11px] text-ink-muted mb-2">
+                  Recibo de pago interno (sin efectos fiscales).
+                </p>
+                <button onClick={() => download('receipt')} disabled={!!busy} className="btn-secondary btn-sm">
+                  {busy === 'receipt' ? <Spinner size="sm" /> : 'Descargar recibo'}
+                </button>
+              </div>
+            )}
+          </div>
+        ) : null}
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function Field({ label, value, mono }) {
+  return (
+    <div>
+      <dt className="text-[10px] uppercase tracking-wide text-ink-muted">{label}</dt>
+      <dd className={`text-ink-primary ${mono ? 'font-mono' : ''}`}>{value}</dd>
     </div>
   )
 }

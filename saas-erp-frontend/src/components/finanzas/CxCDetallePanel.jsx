@@ -487,7 +487,12 @@ export function CxCDetallePanel({ arId, onClose }) {
           onSaved={(res) => {
             const parts = [`Pago de ${fmtMXN(res.amount)} registrado. Aplicado ${fmtMXN(res.totalApplied)}`]
             if (res.advanceGenerated) parts.push(`+ anticipo ${fmtMXN(res.advanceGenerated)}`)
-            if (res.complementsIssued?.length) parts.push(`· ${res.complementsIssued.length} complemento(s) timbrado(s)`)
+            if (res.complementsIssued?.length) {
+              // Un REP puede cubrir varias facturas → contar CFDI distintos, no filas.
+              const reps = new Set(res.complementsIssued.map(c => c.uuid)).size
+              const docs = res.complementsIssued.length
+              parts.push(`· ${reps} complemento(s) timbrado(s)${docs > reps ? ` (${docs} facturas)` : ''}`)
+            }
             if (res.complementsPending?.length) {
               const pend = res.complementsPending.map(p => p.document_number).join(', ')
               parts.push(`· ⚠️ ${res.complementsPending.length} complemento(s) PENDIENTE(S) de timbrar (${pend}). El cobro quedó registrado; usa "Timbrar complemento" cuando Facturapi esté disponible.`)

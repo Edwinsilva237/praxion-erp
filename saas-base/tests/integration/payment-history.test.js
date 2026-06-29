@@ -75,4 +75,38 @@ describe('Historial de pagos (recibidos / emitidos)', () => {
     const res = await cxcService.listPayments({ tenantId, method: 'cash' })
     expect(res.total).toBe(0)  // el único cobro fue 'transfer'
   })
+
+  test('listPayments y getPaymentDetail exponen el complemento de pago ligado', async () => {
+    const { rows: inv } = await withBypass(() => query(
+      `INSERT INTO invoices (tenant_id, type, document_number, partner_id, status,
+                             payment_method, currency, cfdi_uuid, total, total_mxn, notes)
+       VALUES ($1,'issued','F-COMP-1',$2,'stamped','PPD','MXN',uuid_generate_v4(),1160,1160,'[facturapi_id:fa_x]')
+       RETURNING id`, [tenantId, partnerId]))
+    const { rows: ar } = await withBypass(() => query(
+      `INSERT INTO accounts_receivable
+         (tenant_id, partner_id, document_type, document_id, document_number,
+          currency, exchange_rate, amount_total, issue_date, created_by)
+       VALUES ($1,$2,'invoice',$3,'F-COMP-1','MXN',1,1160,CURRENT_DATE,$4) RETURNING id`,
+      [tenantId, partnerId, inv[0].id, userId]))
+    const { rows: pc } = await withBypass(() => query(
+      `INSERT INTO payment_complements
+         (tenant_id, invoice_id, facturapi_id, cfdi_uuid, payment_date, payment_form, amount, currency, status, created_by)
+       VALUES ($1,$2,'fa_comp_hist','12345678-90ab-cdef-1234-567890abcdef',CURRENT_DATE,'03',1160,'MXN','stamped',$3)
+       RETURNING id`, [tenantId, inv[0].id, userId]))
+    const { rows: pay } = await withBypass(() => query(
+      `INSERT INTO ar_payments (tenant_id, ar_id, amount, payment_method, payment_date, created_by, payment_complement_id)
+       VALUES ($1,$2,1160,'transfer',CURRENT_DATE,$3,$4) RETURNING id`,
+      [tenantId, ar[0].id, userId, pc[0].id]))
+
+    const list = await cxcService.listPayments({ tenantId, method: 'transfer' })
+    const row = list.data.find(r => r.id === pay[0].id)
+    expect(row.complement_facturapi_id).toBe('fa_comp_hist')
+    expect(row.complement_status).toBe('stamped')
+
+    const detail = await cxcService.getPaymentDetail({ tenantId, paymentId: pay[0].id })
+    expect(detail.complement_facturapi_id).toBe('fa_comp_hist')
+    expect(detail.complement_uuid).toBe('12345678-90ab-cdef-1234-567890abcdef')
+    expect(detail.document_number).toBe('F-COMP-1')
+    expect(parseFloat(detail.amount)).toBeCloseTo(1160, 2)
+  })
 })

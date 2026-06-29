@@ -221,47 +221,78 @@ async function createPaymentComplement({
 }
 
 /**
- * Timbra el CFDI tipo P en Facturapi e inserta en `payment_complements`,
- * SIN tocar AR ni ar_payments. Pensado para invocarse desde otros flujos
- * (p.ej. cxcService.registerPayment) que ya hacen ese trabajo. Trabaja
- * sobre el `client` de la transacción del llamador.
+ * Timbra UN complemento de pago (CFDI tipo P) que liquida VARIAS facturas PPD
+ * en un solo REP — un `DoctoRelacionado` por factura. Es lo correcto ante el
+ * SAT cuando un mismo pago recibido cubre varios documentos.
+ *
+ * El timbre es uno solo (un `facturapi_id`/`cfdi_uuid`), pero se inserta UNA
+ * fila por factura en `payment_complements` (todas comparten ese
+ * facturapi_id/uuid) para conservar el modelo por-factura del que dependen las
+ * vistas y cálculos de complemento. Devuelve un arreglo con la fila local de
+ * cada factura para que el llamador ligue cada cobro a su fila.
+ *
+ * @param {object[]} documents - [{ invoiceId, amount }] facturas que liquida el pago.
+ *   Todas deben ser del mismo cliente y compartir la `currency` del pago.
+ * SIN tocar AR ni ar_payments. Trabaja sobre el `client` de la transacción del
+ * llamador (p.ej. cxcService.registerPayment).
  */
-async function stampPaymentComplement(client, {
-  tenantId, invoiceId,
-  paymentDate, paymentForm, amount, currency = 'MXN',
+async function stampPaymentComplementGroup(client, {
+  tenantId, documents,
+  paymentDate, paymentForm, currency = 'MXN',
   reference, exchangeRate,
   userId,
 }) {
+  const docs = (documents || []).filter(d => d && d.invoiceId && parseFloat(d.amount) > 0)
+  if (!docs.length) throw createError(400, 'No hay documentos para el complemento de pago.')
+
+  const invoiceIds = docs.map(d => d.invoiceId)
   const { rows: invRows } = await client.query(
-    `SELECT inv.*,
+    `SELECT inv.id, inv.document_number, inv.cfdi_uuid, inv.total, inv.currency, inv.notes,
             bp.name AS partner_name, bp.rfc AS partner_rfc,
             bp.facturapi_id AS partner_facturapi_id,
             bp.tax_regime_code AS partner_tax_regime,
             bp.zip_code AS partner_zip_code
      FROM invoices inv
      JOIN business_partners bp ON bp.id = inv.partner_id
-     WHERE inv.id = $1 AND inv.tenant_id = $2
+     WHERE inv.id = ANY($1::uuid[]) AND inv.tenant_id = $2
        AND inv.status = 'stamped' AND inv.payment_method = 'PPD'`,
-    [invoiceId, tenantId]
+    [invoiceIds, tenantId]
   )
-  if (!invRows.length) throw createError(404, 'Factura PPD timbrada no encontrada.')
-  const inv = invRows[0]
+  const invById = new Map(invRows.map(r => [r.id, r]))
+  // Validar que todas existan y estén timbradas en Facturapi.
+  for (const d of docs) {
+    const inv = invById.get(d.invoiceId)
+    if (!inv) throw createError(404, 'Factura PPD timbrada no encontrada.')
+    if (!/\[facturapi_id:([^\]]+)\]/.test(inv.notes || '')) {
+      throw createError(500, `No se encontró el ID de Facturapi en la factura ${inv.document_number}.`)
+    }
+  }
 
-  const match = (inv.notes || '').match(/\[facturapi_id:([^\]]+)\]/)
-  if (!match) throw createError(500, 'No se encontró el ID de Facturapi en la factura.')
-
+  const head = invById.get(docs[0].invoiceId)
   const facturapi = await getFacturapiForTenant(tenantId)
-  const amountNum = parseFloat(amount)
   const taxRate   = 0.16
-  const base      = parseFloat((amountNum / (1 + taxRate)).toFixed(2))
+
+  const relatedDocuments = docs.map((d, i) => {
+    const inv       = invById.get(d.invoiceId)
+    const amountNum = parseFloat(d.amount)
+    const base      = parseFloat((amountNum / (1 + taxRate)).toFixed(2))
+    return {
+      uuid:         inv.cfdi_uuid,
+      installment:  1,
+      last_balance: parseFloat(inv.total),
+      amount:       amountNum,
+      currency:     inv.currency,
+      taxes: [{ base, type: 'IVA', rate: taxRate }],
+    }
+  })
 
   const payload = {
     type: 'P',
-    customer: inv.partner_facturapi_id || {
-      legal_name: inv.partner_name.toUpperCase(),
-      tax_id:     inv.partner_rfc,
-      tax_system: inv.partner_tax_regime || '601',
-      address: { zip: inv.partner_zip_code || '60000', country: 'MEX' },
+    customer: head.partner_facturapi_id || {
+      legal_name: head.partner_name.toUpperCase(),
+      tax_id:     head.partner_rfc,
+      tax_system: head.partner_tax_regime || '601',
+      address: { zip: head.partner_zip_code || '60000', country: 'MEX' },
     },
     complements: [
       {
@@ -273,51 +304,71 @@ async function stampPaymentComplement(client, {
           date:         paymentDate
             ? new Date(paymentDate + 'T12:00:00').toISOString()
             : new Date().toISOString(),
-          related_documents: [
-            {
-              uuid:         inv.cfdi_uuid,
-              installment:  1,
-              last_balance: parseFloat(inv.total),
-              amount:       amountNum,
-              currency:     inv.currency,
-              taxes: [{ base, type: 'IVA', rate: taxRate }],
-            },
-          ],
+          related_documents: relatedDocuments,
         },
       },
     ],
   }
 
+  const label = docs.length === 1
+    ? head.document_number
+    : `${head.document_number} (+${docs.length - 1})`
+
   let complement
   try {
-    complement = await createWithRetry(facturapi, payload, { label: inv.document_number })
+    complement = await createWithRetry(facturapi, payload, { label })
   } catch (err) {
-    const e = createError(422, stampErrorMessage(err, inv.document_number))
+    const e = createError(422, stampErrorMessage(err, label))
     e.transient = isTransientFacturapiError(err)
     throw e
   }
 
-  const { rows: pcRows } = await client.query(
-    `INSERT INTO payment_complements
-       (tenant_id, invoice_id, facturapi_id, cfdi_uuid,
-        payment_date, payment_form, amount, currency,
-        reference, status, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'stamped',$10)
-     RETURNING id`,
-    [tenantId, invoiceId, complement.id, complement.uuid,
-     paymentDate || new Date().toISOString().split('T')[0],
-     paymentForm || '03', amount, currency,
-     reference || null, userId]
-  )
-
-  return {
-    id:           pcRows[0].id,    // id local en payment_complements (para ligar al cobro)
-    facturapi_id: complement.id,
-    uuid:         complement.uuid,
-    invoice_id:   invoiceId,
-    invoice_number: inv.document_number,
-    amount:       amountNum,
+  // Una fila por factura, todas con el MISMO facturapi_id/cfdi_uuid (un timbre).
+  const results = []
+  for (const d of docs) {
+    const inv       = invById.get(d.invoiceId)
+    const amountNum = parseFloat(d.amount)
+    const { rows: pcRows } = await client.query(
+      `INSERT INTO payment_complements
+         (tenant_id, invoice_id, facturapi_id, cfdi_uuid,
+          payment_date, payment_form, amount, currency,
+          reference, status, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'stamped',$10)
+       RETURNING id`,
+      [tenantId, d.invoiceId, complement.id, complement.uuid,
+       paymentDate || new Date().toISOString().split('T')[0],
+       paymentForm || '03', amountNum, currency,
+       reference || null, userId]
+    )
+    results.push({
+      id:             pcRows[0].id,    // id local en payment_complements (para ligar al cobro)
+      facturapi_id:   complement.id,
+      uuid:           complement.uuid,
+      invoice_id:     d.invoiceId,
+      invoice_number: inv.document_number,
+      amount:         amountNum,
+    })
   }
+  return results
+}
+
+/**
+ * Timbra un complemento de pago para UNA sola factura PPD. Conserva la firma
+ * histórica (la usa `cxcService.stampMissingComplement`). Internamente delega
+ * en `stampPaymentComplementGroup` con un solo documento y devuelve su fila.
+ */
+async function stampPaymentComplement(client, {
+  tenantId, invoiceId,
+  paymentDate, paymentForm, amount, currency = 'MXN',
+  reference, exchangeRate,
+  userId,
+}) {
+  const [row] = await stampPaymentComplementGroup(client, {
+    tenantId,
+    documents: [{ invoiceId, amount }],
+    paymentDate, paymentForm, currency, reference, exchangeRate, userId,
+  })
+  return row
 }
 
 /**
@@ -345,6 +396,9 @@ async function cancelComplement(client, { tenantId, complementId, motive = '02' 
     return { alreadyCancelled: true, cfdi_uuid: pc.cfdi_uuid }
   }
 
+  // Un REP puede cubrir VARIAS facturas (mig 214): todas sus filas comparten el
+  // mismo facturapi_id. Cancelar el CFDI ante el SAT lo anula por completo, así
+  // que se marcan TODAS las filas hermanas como canceladas en un solo timbre.
   const facturapi = await getFacturapiForTenant(tenantId)
   try {
     await facturapi.invoices.cancel(pc.facturapi_id, { motive: motive || '02' })
@@ -353,12 +407,23 @@ async function cancelComplement(client, { tenantId, complementId, motive = '02' 
       `Error al cancelar el complemento de pago ${pc.cfdi_uuid} ante el SAT: ${err.message}`)
   }
 
-  await client.query(
-    `UPDATE payment_complements SET status = 'cancelled' WHERE id = $1 AND tenant_id = $2`,
-    [pc.id, tenantId]
+  const { rows: cancelledRows } = await client.query(
+    `UPDATE payment_complements
+        SET status = 'cancelled'
+      WHERE tenant_id = $1 AND facturapi_id = $2 AND status <> 'cancelled'
+      RETURNING id, invoice_id`,
+    [tenantId, pc.facturapi_id]
   )
 
-  return { cancelled: true, cfdi_uuid: pc.cfdi_uuid, facturapi_id: pc.facturapi_id, motive: motive || '02' }
+  return {
+    cancelled: true,
+    cfdi_uuid: pc.cfdi_uuid,
+    facturapi_id: pc.facturapi_id,
+    motive: motive || '02',
+    // Filas (facturas) que perdieron su complemento al anular el REP — el
+    // llamador puede usarlas para avisar que requieren re-timbrado.
+    cancelledRows,
+  }
 }
 
 /**
@@ -505,7 +570,7 @@ function createError(status, message) {
 }
 
 module.exports = {
-  createPaymentComplement, stampPaymentComplement, cancelComplement,
+  createPaymentComplement, stampPaymentComplement, stampPaymentComplementGroup, cancelComplement,
   downloadXML, downloadPDF, sendComplementByEmail,
   // Exportados para pruebas unitarias de la resiliencia ante caídas del PAC.
   _internal: { isTransientFacturapiError, createWithRetry, stampErrorMessage },
