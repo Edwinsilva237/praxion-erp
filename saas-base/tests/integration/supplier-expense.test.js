@@ -130,6 +130,34 @@ describe('Gastos — detalle, edición y cancelación', () => {
       .rejects.toMatchObject({ status: 409 })
   })
 
+  test('tras CANCELAR se puede RECARGAR la factura con el mismo UUID y folio', async () => {
+    const uuid = crypto.randomUUID()
+    const folio = `GASTO-${crypto.randomUUID().slice(0, 8)}`
+    // Carga inicial (mal cargada) → se cancela.
+    const bad = await registerInvoice({
+      tenantId, supplierId, documentNumber: folio,
+      subtotal: 1000, tax: 160, total: 1160,
+      isExpense: true, expenseCategoryId: categoryId, uuidSat: uuid, userId,
+    })
+    await cancelExpense({ tenantId, id: bad.id, userId, reason: 'mal cargada' })
+
+    // Recarga con el MISMO UUID + MISMO folio → ya no la bloquea.
+    const good = await registerInvoice({
+      tenantId, supplierId, documentNumber: folio,
+      subtotal: 1000, tax: 160, total: 1160,
+      isExpense: true, expenseCategoryId: categoryId, uuidSat: uuid, userId,
+    })
+    expect(good.id).toBeTruthy()
+    expect(good.id).not.toBe(bad.id)
+
+    // Y una SEGUNDA viva con el mismo UUID sí se bloquea (anti-dup sigue activo).
+    await expect(registerInvoice({
+      tenantId, supplierId, documentNumber: `${folio}-2`,
+      subtotal: 1000, tax: 160, total: 1160,
+      isExpense: true, expenseCategoryId: categoryId, uuidSat: uuid, userId,
+    })).rejects.toMatchObject({ status: 409 })
+  })
+
   // ── Corrección de moneda mal detectada (bug "Dólares" en notas del PDF) ───
   test('corregir moneda USD→MXN recalcula total_mxn y la CXP', async () => {
     // Simula un CFDI en pesos que el parser marcó USD: el total 6,338.18 se

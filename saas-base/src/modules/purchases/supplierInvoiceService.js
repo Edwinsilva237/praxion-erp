@@ -56,10 +56,11 @@ async function registerInvoice({
       throw createError(400, 'paymentMethod inválido (transfer | cash | check | credit_card).')
     }
 
-    // Verificar duplicado por UUID SAT
+    // Verificar duplicado por UUID SAT — las CANCELADAS no cuentan (se permite
+    // recargar una factura que se canceló por estar mal cargada).
     if (uuidSat) {
       const { rows: dup } = await client.query(
-        `SELECT id FROM supplier_invoices WHERE uuid_sat = $1`,
+        `SELECT id FROM supplier_invoices WHERE uuid_sat = $1 AND status <> 'cancelled'`,
         [uuidSat]
       )
       if (dup.length > 0) throw createError(409, `Ya existe una factura registrada con UUID ${uuidSat}.`)
@@ -1064,11 +1065,11 @@ async function updateExpense({
       if (!rows.length) throw createError(400, 'El proveedor no existe en este tenant.')
     }
 
-    // UUID nuevo → anti-duplicado (excluye este mismo gasto)
+    // UUID nuevo → anti-duplicado (excluye este mismo gasto y las canceladas)
     const newUuid = uuidSat !== undefined ? (uuidSat ? String(uuidSat).trim() : null) : undefined
     if (newUuid) {
       const { rows: dup } = await client.query(
-        `SELECT id FROM supplier_invoices WHERE uuid_sat = $1 AND id <> $2`,
+        `SELECT id FROM supplier_invoices WHERE uuid_sat = $1 AND id <> $2 AND status <> 'cancelled'`,
         [newUuid, id])
       if (dup.length) throw createError(409, `Ya existe una factura registrada con UUID ${newUuid}.`)
     }
