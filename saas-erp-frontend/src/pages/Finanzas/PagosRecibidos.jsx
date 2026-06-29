@@ -9,6 +9,7 @@ import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
 import { fmtMXN, fmtDateOnly } from '@/utils/fmt'
 import { downloadBlob } from '@/utils/downloadBlob'
+import SendDocEmailModal from '@/components/finanzas/SendDocEmailModal'
 
 // Un cobro tiene complemento (CFDI tipo P) descargable cuando llega su
 // facturapi_id y el complemento NO está cancelado.
@@ -297,6 +298,7 @@ export default function PagosRecibidos() {
 // ── Detalle de un cobro recibido ─────────────────────────────────────────────
 function PaymentDetailModal({ paymentId, onClose }) {
   const [busy, setBusy] = useState(null) // 'pdf' | 'xml' | 'receipt'
+  const [showSend, setShowSend] = useState(false)
 
   const { data: p, isLoading, error } = useQuery({
     queryKey: ['pago-detalle', paymentId],
@@ -384,12 +386,15 @@ function PaymentDetailModal({ paymentId, onClose }) {
                 {p.complement_uuid && (
                   <p className="text-[10px] text-ink-muted font-mono break-all mb-2">UUID: {p.complement_uuid}</p>
                 )}
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   <button onClick={() => download('pdf')} disabled={!!busy} className="btn-secondary btn-sm">
                     {busy === 'pdf' ? <Spinner size="sm" /> : 'PDF'}
                   </button>
                   <button onClick={() => download('xml')} disabled={!!busy} className="btn-ghost btn-sm">
                     {busy === 'xml' ? <Spinner size="sm" /> : 'XML'}
+                  </button>
+                  <button onClick={() => setShowSend(true)} className="btn-ghost btn-sm text-brand-300">
+                    Enviar por correo
                   </button>
                 </div>
               </div>
@@ -398,14 +403,34 @@ function PaymentDetailModal({ paymentId, onClose }) {
                 <p className="text-[11px] text-ink-muted mb-2">
                   Recibo de pago interno (sin efectos fiscales).
                 </p>
-                <button onClick={() => download('receipt')} disabled={!!busy} className="btn-secondary btn-sm">
-                  {busy === 'receipt' ? <Spinner size="sm" /> : 'Descargar recibo'}
-                </button>
+                <div className="flex gap-2 flex-wrap">
+                  <button onClick={() => download('receipt')} disabled={!!busy} className="btn-secondary btn-sm">
+                    {busy === 'receipt' ? <Spinner size="sm" /> : 'Descargar recibo'}
+                  </button>
+                  <button onClick={() => setShowSend(true)} className="btn-ghost btn-sm text-brand-300">
+                    Enviar por correo
+                  </button>
+                </div>
               </div>
             )}
           </div>
         ) : null}
       </div>
+
+      {showSend && p && (
+        <SendDocEmailModal
+          partnerId={p.partner_id}
+          title={withComplement ? 'Enviar complemento de pago' : 'Enviar recibo de pago'}
+          description={withComplement
+            ? `Se enviará el PDF + XML del complemento de ${fmtMXN(p.amount, p.currency)} a los destinatarios seleccionados.`
+            : `Se enviará el PDF del recibo de ${fmtMXN(p.amount, p.currency)} a los destinatarios seleccionados.`}
+          sendFn={(emails) => withComplement
+            ? financialsApi.sendComplementEmail(p.complement_id, emails)
+            : financialsApi.sendReceiptEmail(p.id, emails)}
+          onClose={() => setShowSend(false)}
+          onSent={() => setShowSend(false)}
+        />
+      )}
     </div>,
     document.body
   )

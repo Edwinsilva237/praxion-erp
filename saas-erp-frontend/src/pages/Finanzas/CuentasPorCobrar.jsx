@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useDebounced } from '@/hooks/useDebounced'
 import { useTableSort } from '@/hooks/useTableSort'
 import { SortableHeader } from '@/components/ui/SortableHeader'
 import { financialsApi } from '@/api/financials'
@@ -53,17 +54,20 @@ export default function CuentasPorCobrar() {
   const [selectedArId, setSelectedArId]   = useState(null)
   const [paidMsg, setPaidMsg]             = useState(null)
 
+  const searchDebounced = useDebounced(search, 300)
+
   const { sortBy, sortDir, onSort } = useTableSort('vencimiento', 'asc')
-  useEffect(() => { setPage(1) }, [statusFilter, partner, from, to, sortBy, sortDir])
+  useEffect(() => { setPage(1) }, [statusFilter, partner, from, to, searchDebounced, sortBy, sortDir])
 
   const queryParams = useMemo(() => {
     const p = { page, limit: PAGE_SIZE, sortBy, sortDir }
-    if (statusFilter)  p.status    = statusFilter
-    if (partner?.id)   p.partnerId = partner.id
-    if (from)          p.from      = from
-    if (to)            p.to        = to
+    if (statusFilter)         p.status    = statusFilter
+    if (partner?.id)          p.partnerId = partner.id
+    if (from)                 p.from      = from
+    if (to)                   p.to        = to
+    if (searchDebounced.trim()) p.search  = searchDebounced.trim()
     return p
-  }, [statusFilter, partner, from, to, page, sortBy, sortDir])
+  }, [statusFilter, partner, from, to, searchDebounced, page, sortBy, sortDir])
 
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['cxc', queryParams],
@@ -76,39 +80,28 @@ export default function CuentasPorCobrar() {
     return (res.data || res).map(p => ({ id: p.id, label: p.name, sub: [p.rfc, p.tax_name && p.tax_name !== p.name ? p.tax_name : null].filter(Boolean).join(' · ') }))
   }, [])
 
-  // Filtro local por búsqueda libre
-  const docs = useMemo(() => {
-    const list = data?.data || []
-    if (!search.trim()) return list
-    const q = search.trim().toLowerCase()
-    return list.filter(d =>
-      (d.document_number || '').toLowerCase().includes(q) ||
-      (d.partner_name    || '').toLowerCase().includes(q) ||
-      (d.partner_rfc     || '').toLowerCase().includes(q)
-    )
-  }, [data, search])
+  // La búsqueda es server-side (sobre toda la cartera, no solo la página).
+  const docs = data?.data || []
 
   const total = data?.total || 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
-  // Resumen sobre los documentos en la página actual
-  const summary = useMemo(() => {
-    const arr = data?.data || []
-    return {
-      count:    arr.length,
-      total:    arr.reduce((s, d) => s + parseFloat(d.amount_total || 0), 0),
-      paid:     arr.reduce((s, d) => s + parseFloat(d.amount_paid || 0), 0),
-      pending:  arr.reduce((s, d) => s + parseFloat(d.amount_pending || 0), 0),
-      overdue:  arr.filter(d => d.is_overdue).length,
-    }
-  }, [data])
+  // Resumen sobre TODA la cartera filtrada (agregados del servidor), no solo la
+  // página visible — `total` es el conteo real y `summary` los montos completos.
+  const summary = useMemo(() => ({
+    count:   data?.total || 0,
+    total:   data?.summary?.total_invoiced || 0,
+    paid:    data?.summary?.total_paid     || 0,
+    pending: data?.summary?.total_pending  || 0,
+    overdue: data?.summary?.docs_overdue   || 0,
+  }), [data])
 
   return (
     <div className="page-enter flex flex-col gap-4">
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-xl font-semibold text-ink-primary">Pagos recibidos</h1>
+          <h1 className="text-xl font-semibold text-ink-primary">Cuentas por cobrar</h1>
           <p className="text-xs text-ink-muted mt-0.5">Documentos pendientes de cobro, aplicación de pagos y anticipos</p>
         </div>
         <div className="flex gap-2">
@@ -223,7 +216,7 @@ export default function CuentasPorCobrar() {
         ) : error ? (
           <div className="p-8 text-center">
             <p className="text-sm text-status-danger">
-              {error.response?.data?.error || error.message || 'Error al cargar pagos recibidos'}
+              {error.response?.data?.error || error.message || 'Error al cargar cuentas por cobrar'}
             </p>
           </div>
         ) : docs.length === 0 ? (
@@ -234,7 +227,7 @@ export default function CuentasPorCobrar() {
               </svg>
             </div>
             <p className="text-sm font-medium text-ink-secondary">
-              {search || statusFilter || from || to || partner ? 'Sin resultados para los filtros aplicados' : 'No hay pagos pendientes de recibir'}
+              {search || statusFilter || from || to || partner ? 'Sin resultados para los filtros aplicados' : 'No hay cuentas por cobrar pendientes'}
             </p>
           </div>
         ) : (

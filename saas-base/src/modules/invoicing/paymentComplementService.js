@@ -563,6 +563,57 @@ async function sendComplementByEmail({
   return { sent: true, recipients, bcc: copyEmail, uuid: pc.cfdi_uuid }
 }
 
+/**
+ * Si el cliente está marcado con `auto_send_invoice=true`, envía el complemento
+ * de pago (CFDI tipo P) recién timbrado por Facturapi a sus contactos con
+ * correo — espejo de `maybeAutoSendStampedInvoice` para facturas. Best-effort:
+ * cualquier error se reporta pero no debe romper el flujo del cobro.
+ *
+ * @param {string} complementFacturapiId - facturapi_id del REP (un solo timbre,
+ *   aunque cubra varias facturas).
+ */
+async function maybeAutoSendComplement({ tenantId, partnerId, complementFacturapiId, userId, ipAddress, userAgent }) {
+  const { rows: bpRows } = await query(
+    `SELECT auto_send_invoice FROM business_partners WHERE id = $1 AND tenant_id = $2`,
+    [partnerId, tenantId]
+  )
+  if (!bpRows.length || !bpRows[0].auto_send_invoice) {
+    return { sent: false, reason: 'auto_send_invoice=false' }
+  }
+
+  const { rows: contacts } = await query(
+    `SELECT email FROM business_partner_contacts
+      WHERE business_partner_id = $1 AND email IS NOT NULL AND email <> ''
+      ORDER BY is_primary DESC NULLS LAST, id ASC`,
+    [partnerId]
+  )
+  const emails = contacts.map(r => r.email).filter(Boolean)
+  if (!emails.length) {
+    return { sent: false, reason: 'sin_contactos_con_email' }
+  }
+
+  // Copia institucional (tenants.notification_email) o, si no, del usuario.
+  let copyEmail = null
+  const { rows: t } = await query(`SELECT notification_email FROM tenants WHERE id = $1`, [tenantId])
+  if (t[0]?.notification_email) copyEmail = t[0].notification_email
+  else if (userId) {
+    const { rows: u } = await query(`SELECT email FROM users WHERE id = $1 AND tenant_id = $2`, [userId, tenantId])
+    copyEmail = u[0]?.email || null
+  }
+  if (copyEmail && !emails.includes(copyEmail)) emails.push(copyEmail)
+
+  const facturapi = await getFacturapiForTenant(tenantId)
+  await facturapi.invoices.sendByEmail(complementFacturapiId, { email: emails })
+
+  await audit({
+    tenantId, userId, action: 'payment_complement.auto_sent_by_email',
+    resource: 'payment_complements', resourceId: complementFacturapiId,
+    payload: { emails }, ipAddress, userAgent,
+  })
+
+  return { sent: true, emails }
+}
+
 function createError(status, message) {
   const err = new Error(message)
   err.status = status
@@ -571,7 +622,7 @@ function createError(status, message) {
 
 module.exports = {
   createPaymentComplement, stampPaymentComplement, stampPaymentComplementGroup, cancelComplement,
-  downloadXML, downloadPDF, sendComplementByEmail,
+  downloadXML, downloadPDF, sendComplementByEmail, maybeAutoSendComplement,
   // Exportados para pruebas unitarias de la resiliencia ante caídas del PAC.
   _internal: { isTransientFacturapiError, createWithRetry, stampErrorMessage },
 }

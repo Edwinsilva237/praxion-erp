@@ -2,7 +2,7 @@
 
 const { query, withTransaction } = require('../../db')
 const { audit }                  = require('../../utils/audit')
-const { stampPaymentComplement, stampPaymentComplementGroup, cancelComplement } = require('../invoicing/paymentComplementService')
+const { stampPaymentComplement, stampPaymentComplementGroup, cancelComplement, maybeAutoSendComplement } = require('../invoicing/paymentComplementService')
 const { buildOrderBy } = require('../../utils/sortOrder')
 const logger = require('../../config/logger')
 
@@ -102,7 +102,7 @@ async function getCustomerStatement({ tenantId, partnerId, from, to }) {
  *   - 'partial'        → suma de complementos < amount_paid
  *   - 'complete'       → suma de complementos cubre amount_paid (con tolerancia 0.01)
  */
-async function listCXC({ tenantId, status, partnerId, from, to, sortBy, sortDir, page = 1, limit = 50 }) {
+async function listCXC({ tenantId, status, partnerId, from, to, search, sortBy, sortDir, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
@@ -120,6 +120,14 @@ async function listCXC({ tenantId, status, partnerId, from, to, sortBy, sortDir,
   if (partnerId) { params.push(partnerId); filters.push(`ar.partner_id = $${params.length}`) }
   if (from)      { params.push(from);      filters.push(`ar.issue_date >= $${params.length}`) }
   if (to)        { params.push(to);        filters.push(`ar.issue_date <= $${params.length}`) }
+  // Búsqueda libre server-side (folio / cliente / RFC) sobre TODA la cartera,
+  // no solo la página cargada.
+  if (search && String(search).trim()) {
+    params.push(`%${String(search).trim()}%`)
+    filters.push(`(ar.document_number ILIKE $${params.length}
+                   OR bp.name ILIKE $${params.length}
+                   OR bp.rfc ILIKE $${params.length})`)
+  }
 
   const where = filters.length ? `AND ${filters.join(' AND ')}` : ''
   params.push(limit, offset)
@@ -158,12 +166,33 @@ async function listCXC({ tenantId, status, partnerId, from, to, sortBy, sortDir,
     params
   )
 
+  // Conteo + agregados sobre TODO el conjunto filtrado (no solo la página),
+  // para que las tarjetas de resumen reflejen la cartera completa.
   const { rows: countRows } = await query(
-    `SELECT COUNT(*) FROM accounts_receivable ar WHERE ar.tenant_id = $1 ${where}`,
+    `SELECT COUNT(*)                                                            AS count,
+            COALESCE(SUM(ar.amount_total),   0)                                 AS total_invoiced,
+            COALESCE(SUM(ar.amount_paid),    0)                                 AS total_paid,
+            COALESCE(SUM(ar.amount_pending), 0)                                 AS total_pending,
+            COUNT(*) FILTER (WHERE ar.due_date < CURRENT_DATE
+                               AND ar.status NOT IN ('paid','cancelled'))       AS docs_overdue
+       FROM accounts_receivable ar
+       JOIN business_partners bp ON bp.id = ar.partner_id
+      WHERE ar.tenant_id = $1 ${where}`,
     params.slice(0, params.length - 2)
   )
+  const c = countRows[0]
 
-  return { data: rows, total: parseInt(countRows[0].count, 10), page, limit }
+  return {
+    data: rows,
+    total: parseInt(c.count, 10),
+    summary: {
+      total_invoiced: parseFloat(c.total_invoiced) || 0,
+      total_paid:     parseFloat(c.total_paid)     || 0,
+      total_pending:  parseFloat(c.total_pending)  || 0,
+      docs_overdue:   parseInt(c.docs_overdue, 10) || 0,
+    },
+    page, limit,
+  }
 }
 
 // ─── Pagos de clientes ────────────────────────────────────────────────────────
@@ -368,6 +397,22 @@ async function registerPayment({
         return res
       })
       complementsIssued.push(...rows)
+
+      // Auto-envío del complemento si el cliente lo tiene activado (espejo del
+      // auto-send de facturas). Un grupo = un REP = un facturapi_id. Best-effort.
+      if (rows.length) {
+        try {
+          await maybeAutoSendComplement({
+            tenantId, partnerId,
+            complementFacturapiId: rows[0].facturapi_id,
+            userId, ipAddress, userAgent,
+          })
+        } catch (err) {
+          logger.warn('Auto-envío de complemento falló', {
+            tenantId, facturapi_id: rows[0].facturapi_id, error: err.message,
+          })
+        }
+      }
     } catch (err) {
       for (const j of jobs) {
         complementsPending.push({
@@ -591,9 +636,9 @@ async function stampMissingComplement({
   paymentDate, paymentForm, amount, reference, exchangeRate,
   userId, ipAddress, userAgent,
 }) {
-  return withTransaction(async (client) => {
+  const result = await withTransaction(async (client) => {
     const { rows: arRows } = await client.query(
-      `SELECT ar.id, ar.document_type, ar.document_id, ar.document_number,
+      `SELECT ar.id, ar.partner_id, ar.document_type, ar.document_id, ar.document_number,
               ar.currency, ar.amount_paid,
               inv.status              AS invoice_status,
               inv.payment_method      AS invoice_payment_method,
@@ -659,8 +704,24 @@ async function stampMissingComplement({
       amount:         toStamp,
       missing_before: missing,
       missing_after:  +(missing - toStamp).toFixed(2),
+      partner_id:     ar.partner_id,
     }
   })
+
+  // Auto-envío post-commit si el cliente lo tiene activado. Best-effort.
+  try {
+    await maybeAutoSendComplement({
+      tenantId, partnerId: result.partner_id,
+      complementFacturapiId: result.facturapi_id,
+      userId, ipAddress, userAgent,
+    })
+  } catch (err) {
+    logger.warn('Auto-envío de complemento (timbrado manual) falló', {
+      tenantId, facturapi_id: result.facturapi_id, error: err.message,
+    })
+  }
+
+  return result
 }
 
 /**

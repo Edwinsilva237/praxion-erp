@@ -26,10 +26,10 @@ router.use(requireActiveTenant)
  */
 router.get('/cxc', checkPermission('financials', 'read'), async (req, res, next) => {
   try {
-    const { status, partnerId, from, to, sortBy, sortDir, page, limit } = req.query
+    const { status, partnerId, from, to, search, sortBy, sortDir, page, limit } = req.query
     const result = await cxcService.listCXC({
       tenantId: req.tenant.id,
-      status, partnerId, from, to, sortBy, sortDir,
+      status, partnerId, from, to, search, sortBy, sortDir,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })

@@ -186,4 +186,36 @@ describe('Desacople cobro ↔ complemento (registerPayment)', () => {
     expect(res.complementsPending).toHaveLength(0)
     expect(res.complementsIssued).toHaveLength(2)
   }, 30000)
+
+  test('auto_send_invoice=true → el complemento se auto-envía por Facturapi', async () => {
+    const create = jest.fn(async () => ({
+      id: 'fa_comp_autosend', uuid: 'ffffffff-1111-2222-3333-444444444444',
+    }))
+    const sendByEmail = jest.fn(async () => ({ ok: true }))
+    facturapiClient.getFacturapiForTenant.mockResolvedValue({
+      invoices: { create, sendByEmail },
+    })
+
+    // Activar auto-envío en el cliente + un contacto con correo.
+    await withBypass(() => query(
+      `UPDATE business_partners SET auto_send_invoice = true WHERE id = $1`, [partnerId]))
+    await withBypass(() => query(
+      `INSERT INTO business_partner_contacts (business_partner_id, name, email, is_primary)
+       VALUES ($1,'Contacto Auto','auto@cliente.com',true)`, [partnerId]))
+
+    const { arId } = await newPpdInvoiceAR(1160)
+
+    await cxcService.registerPayment({
+      tenantId, partnerId, method: 'transfer', reference: 'SPEI-AUTO',
+      amount: 1160, applications: [{ arId, amountApplied: 1160 }], userId,
+    })
+
+    expect(sendByEmail).toHaveBeenCalledTimes(1)
+    expect(sendByEmail.mock.calls[0][0]).toBe('fa_comp_autosend')
+    expect(sendByEmail.mock.calls[0][1].email).toContain('auto@cliente.com')
+
+    // Limpieza para no afectar a otros casos.
+    await withBypass(() => query(
+      `UPDATE business_partners SET auto_send_invoice = false WHERE id = $1`, [partnerId]))
+  }, 30000)
 })
