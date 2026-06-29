@@ -89,6 +89,9 @@ export const purchasesApi = {
   rotateExpenseInbox: () => api.post(`${B}/expenses/inbox/rotate`).then(r => r.data),
   linkExpenseToReceipt: (id, receiptId, receiptLineIds) =>
     api.post(`${B}/expenses/${id}/link-receipt`, { receiptId, receiptLineIds }).then(r => r.data),
+  // Desvincula una factura de su recepción y la revierte a gasto.
+  unlinkExpenseFromReceipt: (id) =>
+    api.post(`${B}/expenses/${id}/unlink-receipt`).then(r => r.data),
   expenseReceiptSuggestion: (id) => api.get(`${B}/expenses/${id}/receipt-suggestion`).then(r => r.data),
   createSupplierFromExpense: (id, body) =>
     api.post(`${B}/expenses/${id}/create-supplier`, body).then(r => r.data),

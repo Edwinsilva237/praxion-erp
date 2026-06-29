@@ -1503,6 +1503,111 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLin
   })
 }
 
+/**
+ * DESVINCULA una factura de compra de su(s) recepción(es) y la revierte a GASTO
+ * — el inverso de linkExpenseToReceipt. Útil cuando se vinculó a la recepción
+ * EQUIVOCADA: se desvincula y luego se vuelve a vincular a la correcta.
+ *
+ * Deshace todo lo que hizo el enlace:
+ *   - libera las líneas que cubría (invoiced_by_invoice_id → NULL),
+ *   - RESTAURA las remisiones-CXP que el enlace había sustituido (las re-activa y
+ *     re-marca las líneas de su recepción),
+ *   - borra los invoice_receipt_links de la factura,
+ *   - vuelve el registro a gasto (is_expense=true, sin recepción, sin conciliación),
+ *   - recomputa invoiced_at de las recepciones afectadas.
+ *
+ * El pago (si lo hubiera) viaja con el MISMO registro, igual que al vincular.
+ */
+async function unlinkInvoiceFromReceipt({ tenantId, expenseId, userId, ipAddress, userAgent }) {
+  return withTransaction(async (client) => {
+    const { rows: invRows } = await client.query(
+      `SELECT id, status FROM supplier_invoices
+        WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+      [expenseId, tenantId]
+    )
+    if (!invRows.length) throw createError(404, 'Factura no encontrada.')
+    if (invRows[0].status === 'cancelled') throw createError(409, 'La factura está cancelada.')
+
+    const { rows: links } = await client.query(
+      `SELECT supplier_receipt_id FROM invoice_receipt_links
+        WHERE tenant_id = $1 AND supplier_invoice_id = $2`,
+      [tenantId, expenseId]
+    )
+    if (!links.length) throw createError(409, 'Esta factura no está vinculada a ninguna recepción.')
+    const affectedReceiptIds = links.map(l => l.supplier_receipt_id)
+
+    // 1. Liberar las líneas que cubría esta factura.
+    await client.query(
+      `UPDATE supplier_receipt_lines SET invoiced_by_invoice_id = NULL WHERE invoiced_by_invoice_id = $1`,
+      [expenseId]
+    )
+
+    // 2. Restaurar las remisiones-CXP que ESTA factura había sustituido al vincularse.
+    const { rows: rems } = await client.query(
+      `SELECT id FROM supplier_invoices
+        WHERE tenant_id = $1 AND type = 'remission'
+          AND replaced_by_invoice_id = $2 AND status = 'cancelled'`,
+      [tenantId, expenseId]
+    )
+    const restoredRemissionIds = []
+    for (const rem of rems) {
+      await client.query(
+        `UPDATE supplier_invoices SET status = 'pending', replaced_by_invoice_id = NULL, updated_at = NOW()
+          WHERE id = $1 AND tenant_id = $2`, [rem.id, tenantId])
+      await client.query(
+        `UPDATE accounts_payable SET status = 'pending'
+          WHERE tenant_id = $1 AND document_type = 'remission' AND document_id = $2`, [tenantId, rem.id])
+      // La remisión vuelve a cubrir las líneas (ahora libres) de su recepción.
+      await client.query(
+        `UPDATE supplier_receipt_lines srl
+            SET invoiced_by_invoice_id = $1
+           FROM invoice_receipt_links irl
+          WHERE irl.supplier_invoice_id = $1
+            AND irl.supplier_receipt_id = srl.supplier_receipt_id
+            AND srl.invoiced_by_invoice_id IS NULL`, [rem.id])
+      restoredRemissionIds.push(rem.id)
+    }
+
+    // 3. Quitar los enlaces de la factura.
+    await client.query(
+      `DELETE FROM invoice_receipt_links WHERE tenant_id = $1 AND supplier_invoice_id = $2`,
+      [tenantId, expenseId]
+    )
+
+    // 4. Revertir el registro → GASTO (el usuario lo re-vincula o reclasifica).
+    await client.query(
+      `UPDATE supplier_invoices
+          SET is_expense = true, supplier_receipt_id = NULL,
+              reconciliation_status = 'pending', reconciliation_diff = NULL, updated_at = NOW()
+        WHERE id = $1 AND tenant_id = $2`, [expenseId, tenantId]
+    )
+
+    // 5. Recomputar invoiced_at de cada recepción afectada.
+    for (const rid of affectedReceiptIds) {
+      await client.query(
+        `UPDATE supplier_receipts sr
+            SET invoiced_at = CASE WHEN NOT EXISTS (
+                  SELECT 1 FROM supplier_receipt_lines srl
+                   LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+                  WHERE srl.supplier_receipt_id = sr.id
+                    AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled')
+                ) THEN COALESCE(sr.invoiced_at, NOW()) ELSE NULL END
+          WHERE sr.id = $1 AND sr.tenant_id = $2`,
+        [rid, tenantId]
+      )
+    }
+
+    await audit({
+      tenantId, userId, action: 'supplier_expense.unlinked_from_receipt',
+      resource: 'supplier_invoices', resourceId: expenseId,
+      payload: { receiptIds: affectedReceiptIds, restoredRemissionIds },
+      ipAddress, userAgent,
+    })
+
+    return { id: expenseId, receiptIds: affectedReceiptIds, restoredRemissionIds }
+  })
+}
+
 // Tolerancia de monto para SUGERIR que un gasto cuadra con una recepción (±2%).
 const RECEIPT_SUGGEST_TOLERANCE = 0.02
 
@@ -1647,4 +1752,5 @@ module.exports = {
   listExpensesSummary, getExpense, updateExpense, cancelExpense, linkExpenseToReceipt,
   assignExpenseSupplier, payExpense,
   suggestReceiptForExpense, requestExpenseInvoice, registerPayment, reverseSupplierPayment, getSupplierStatement,
+  unlinkInvoiceFromReceipt,
 }

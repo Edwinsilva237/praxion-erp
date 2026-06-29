@@ -386,6 +386,22 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
     onError: (e) => setActErr(e.response?.data?.error || 'Error al generar la CXP'),
   })
 
+  // Desvincular una factura ligada por error a esta recepción → vuelve a gasto.
+  const [unlinkTarget, setUnlinkTarget] = useState(null) // { id, folio }
+  const unlinkMutation = useMutation({
+    mutationFn: (invoiceId) => purchasesApi.unlinkExpenseFromReceipt(invoiceId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['purchase-receipts'] })
+      qc.invalidateQueries({ queryKey: ['receipt-detail', receiptId] })
+      qc.invalidateQueries({ queryKey: ['receipts-pending'] })
+      qc.invalidateQueries({ queryKey: ['supplier-invoices'] })
+      qc.invalidateQueries({ queryKey: ['accounts-payable'] })
+      qc.invalidateQueries({ queryKey: ['expenses'] })  // vuelve a aparecer como gasto
+      setUnlinkTarget(null)
+    },
+    onError: (e) => setActErr(e.response?.data?.error || 'Error al desvincular'),
+  })
+
   async function handlePDF() {
     if (!receipt) return
     setGenPdf(true)
@@ -655,7 +671,56 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
                 </button>
               </Can>
             )}
+            {/* Desvincular una factura REAL ligada por error a esta recepción. */}
+            {(() => {
+              const seen = new Map()
+              for (const l of (receipt.lines || [])) {
+                if (l.invoiced_type === 'invoice' && l.invoiced_status !== 'cancelled' && l.invoiced_by_invoice_id) {
+                  seen.set(l.invoiced_by_invoice_id, l.invoiced_number || l.invoiced_by_invoice_id)
+                }
+              }
+              return [...seen.entries()].map(([invId, folio]) => (
+                <Can key={invId} do="purchases:create">
+                  <button onClick={() => { setActErr(null); setUnlinkTarget({ id: invId, folio }) }}
+                    className="btn-secondary btn-sm text-status-danger hover:bg-status-danger/10"
+                    title="Desvincula esta factura de la recepción (vuelve a gasto) para vincularla a la correcta">
+                    🔗 Desvincular {folio}
+                  </button>
+                </Can>
+              ))
+            })()}
           </div>
+        )}
+
+        {/* Modal: confirmar desvinculación */}
+        {unlinkTarget && createPortal(
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4"
+            onClick={() => { if (!unlinkMutation.isPending) setUnlinkTarget(null) }}>
+            <div className="card w-full max-w-md p-5 space-y-4" onClick={e => e.stopPropagation()}>
+              <h2 className="text-base font-semibold text-ink-primary">Desvincular factura</h2>
+              <p className="text-sm text-ink-secondary">
+                La factura <strong>{unlinkTarget.folio}</strong> se desvinculará de esta recepción y
+                volverá a quedar como <strong>gasto</strong> (conserva su pago si lo tenía). La recepción
+                quedará pendiente de facturar y, si tenía CXP sin factura, se restaura. Luego podrás
+                vincular la factura a la recepción correcta desde <strong>Gastos</strong>.
+              </p>
+              {actionErr && (
+                <div className="rounded-lg bg-status-danger/10 border border-status-danger/40 px-3 py-2 text-sm text-status-danger">
+                  {actionErr}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <button onClick={() => { setUnlinkTarget(null); setActErr(null) }}
+                  disabled={unlinkMutation.isPending} className="btn-secondary flex-1">Cancelar</button>
+                <button onClick={() => unlinkMutation.mutate(unlinkTarget.id)}
+                  disabled={unlinkMutation.isPending}
+                  className="btn-primary flex-1 !bg-status-danger hover:!bg-status-danger/90">
+                  {unlinkMutation.isPending ? <Spinner size="sm" /> : 'Desvincular'}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
         )}
 
         {/* Modal: confirmar "no se espera factura" */}

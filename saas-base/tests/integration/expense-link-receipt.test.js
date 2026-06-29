@@ -11,6 +11,7 @@ const { createTenant, cleanupTestTenants } = require('../helpers/factory')
 const { pool, query, withBypass } = require('../../src/db')
 const {
   registerInvoice, generateReceiptRemission, linkExpenseToReceipt, registerPayment,
+  unlinkInvoiceFromReceipt,
 } = require('../../src/modules/purchases/supplierInvoiceService')
 
 let tenantId, userId, warehouseId
@@ -157,6 +158,64 @@ test('facturación PARCIAL: cubrir solo una línea → la otra queda pendiente',
   const { rows: rc } = await withBypass(() => query(
     `SELECT invoiced_at FROM supplier_receipts WHERE id = $1`, [rid]))
   expect(rc[0].invoiced_at).toBeNull()                           // recepción NO totalmente facturada
+})
+
+test('DESVINCULAR: vuelve a gasto, libera líneas y la recepción deja de estar facturada', async () => {
+  const sid = await makeSupplier()
+  const rid = await makeReceipt({ partnerId: sid })
+  const gasto = await makeExpense({ supplierId: sid, subtotal: 1000, tax: 160 })
+  await linkExpenseToReceipt({ tenantId, expenseId: gasto.id, receiptId: rid, userId })
+
+  const r = await unlinkInvoiceFromReceipt({ tenantId, expenseId: gasto.id, userId })
+  expect(r.receiptIds).toContain(rid)
+
+  const { rows: si } = await withBypass(() => query(
+    `SELECT is_expense, supplier_receipt_id FROM supplier_invoices WHERE id = $1`, [gasto.id]))
+  expect(si[0].is_expense).toBe(true)             // volvió a ser gasto
+  expect(si[0].supplier_receipt_id).toBeNull()
+  const { rows: link } = await withBypass(() => query(
+    `SELECT 1 FROM invoice_receipt_links WHERE supplier_invoice_id = $1`, [gasto.id]))
+  expect(link.length).toBe(0)
+  const { rows: lines } = await withBypass(() => query(
+    `SELECT 1 FROM supplier_receipt_lines WHERE supplier_receipt_id = $1 AND invoiced_by_invoice_id = $2`, [rid, gasto.id]))
+  expect(lines.length).toBe(0)
+  const { rows: rc } = await withBypass(() => query(
+    `SELECT invoiced_at FROM supplier_receipts WHERE id = $1`, [rid]))
+  expect(rc[0].invoiced_at).toBeNull()
+
+  // Y se puede re-vincular a otra recepción (la correcta).
+  const rid2 = await makeReceipt({ partnerId: sid })
+  const r2 = await linkExpenseToReceipt({ tenantId, expenseId: gasto.id, receiptId: rid2, userId })
+  expect(r2.receiptId).toBe(rid2)
+})
+
+test('DESVINCULAR restaura la remisión-CXP que el enlace había sustituido', async () => {
+  const sid = await makeSupplier(30)
+  const rid = await makeReceipt({ partnerId: sid })
+  const rem = await generateReceiptRemission({ tenantId, receiptId: rid, userId })
+  const gasto = await makeExpense({ supplierId: sid, subtotal: 1000, tax: 160 })
+  await linkExpenseToReceipt({ tenantId, expenseId: gasto.id, receiptId: rid, userId })   // sustituye la remisión
+
+  await unlinkInvoiceFromReceipt({ tenantId, expenseId: gasto.id, userId })
+
+  // La remisión vuelve a estar viva y a cubrir la recepción.
+  const { rows: remRow } = await withBypass(() => query(
+    `SELECT status, replaced_by_invoice_id FROM supplier_invoices WHERE id = $1`, [rem.id]))
+  expect(remRow[0].status).toBe('pending')
+  expect(remRow[0].replaced_by_invoice_id).toBeNull()
+  const { rows: remAp } = await withBypass(() => query(
+    `SELECT status FROM accounts_payable WHERE document_type = 'remission' AND document_id = $1`, [rem.id]))
+  expect(remAp[0].status).toBe('pending')
+  const { rows: lines } = await withBypass(() => query(
+    `SELECT 1 FROM supplier_receipt_lines WHERE supplier_receipt_id = $1 AND invoiced_by_invoice_id = $2`, [rid, rem.id]))
+  expect(lines.length).toBeGreaterThan(0)
+})
+
+test('desvincular una factura SIN enlace → 409', async () => {
+  const sid = await makeSupplier()
+  const gasto = await makeExpense({ supplierId: sid, subtotal: 1000, tax: 160 })
+  await expect(unlinkInvoiceFromReceipt({ tenantId, expenseId: gasto.id, userId }))
+    .rejects.toMatchObject({ status: 409 })
 })
 
 test('recepción de OTRO proveedor → 400', async () => {
