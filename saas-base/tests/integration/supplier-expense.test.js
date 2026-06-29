@@ -14,7 +14,7 @@ const { createTenant, cleanupTestTenants } = require('../helpers/factory')
 const { pool, query, withBypass } = require('../../src/db')
 const {
   registerInvoice, getExpense, updateExpense, cancelExpense, registerPayment,
-  listExpensesSummary,
+  listExpensesSummary, getExpenseConceptos,
 } = require('../../src/modules/purchases/supplierInvoiceService')
 const { parseSupplierDocument } = require('../../src/modules/purchases/documentParserService')
 
@@ -128,6 +128,39 @@ describe('Gastos — detalle, edición y cancelación', () => {
     expect(ap.status).toBe('cancelled')
     await expect(updateExpense({ tenantId, id: exp.id, userId, notes: 'x' }))
       .rejects.toMatchObject({ status: 409 })
+  })
+
+  test('getExpenseConceptos parsea los conceptos del XML guardado', async () => {
+    const uuid = crypto.randomUUID()
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>` +
+      `<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0" ` +
+      `Serie="A" Folio="77" Fecha="2026-06-15T10:00:00" SubTotal="1000" Total="1160" Moneda="MXN">` +
+      `<cfdi:Emisor Rfc="AAA010101AAA" Nombre="PROV" RegimenFiscal="601"/>` +
+      `<cfdi:Receptor Rfc="XAXX010101000" Nombre="MI EMPRESA"/>` +
+      `<cfdi:Conceptos>` +
+      `<cfdi:Concepto Cantidad="2" ClaveUnidad="H87" Descripcion="Tornillos" ValorUnitario="500" Importe="1000"/>` +
+      `</cfdi:Conceptos>` +
+      `<cfdi:Complemento><tfd:TimbreFiscalDigital ` +
+      `xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" UUID="${uuid}"/></cfdi:Complemento>` +
+      `</cfdi:Comprobante>`
+    const exp = await registerInvoice({
+      tenantId, supplierId, documentNumber: `G-XML-${crypto.randomUUID().slice(0, 6)}`,
+      subtotal: 1000, tax: 160, total: 1160,
+      isExpense: true, expenseCategoryId: categoryId, uuidSat: uuid, xmlContent: xml, userId,
+    })
+    const res = await getExpenseConceptos({ tenantId, id: exp.id })
+    expect(res.hasXml).toBe(true)
+    expect(res.lines).toHaveLength(1)
+    expect(res.lines[0].description).toBe('Tornillos')
+    expect(res.lines[0].quantity).toBe(2)
+    expect(res.lines[0].amount).toBeCloseTo(1000, 2)
+  })
+
+  test('gasto manual sin XML → conceptos vacío (hasXml=false)', async () => {
+    const exp = await makeExpense()
+    const res = await getExpenseConceptos({ tenantId, id: exp.id })
+    expect(res.hasXml).toBe(false)
+    expect(res.lines).toHaveLength(0)
   })
 
   test('tras CANCELAR se puede RECARGAR la factura con el mismo UUID y folio', async () => {

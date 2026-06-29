@@ -7,6 +7,9 @@ const { getRateForDate }         = require('../exchange-rates/exchangeRateServic
 const { enqueueEmail }           = require('../../queues/emailQueue')
 const { expenseInvoiceRequestEmail } = require('../email/templates/sales')
 const partnerService             = require('../business-partners/partnerService')
+const documentParserService      = require('./documentParserService')
+const attachmentService          = require('../attachments/attachmentService')
+const storage                    = require('../../utils/storage')
 
 /**
  * Registra una factura o remisión de proveedor y genera CXP automáticamente.
@@ -1354,15 +1357,29 @@ async function cancelExpense({ tenantId, id, userId, reason, ipAddress, userAgen
  * fuente de verdad) pero aplicado a una supplier_invoice que YA existe (no crea
  * una nueva → no choca con el anti-dup por UUID). Si las dos divergen, cuadrarlas.
  */
-async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLineIds = [], userId, ipAddress, userAgent }) {
+async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLineIds = [], receipts = null, userId, ipAddress, userAgent }) {
+  // Normalizar a una LISTA de recepciones. Compat hacia atrás: si llega
+  // `receiptId`/`receiptLineIds` (una sola), se envuelve. `receipts` es
+  // [{ receiptId, lineIds? }] para vincular a VARIAS de una vez.
+  const requested = Array.isArray(receipts) && receipts.length
+    ? receipts
+    : (receiptId ? [{ receiptId, lineIds: receiptLineIds }] : [])
+  const seenReceipt = new Set()
+  const reqReceipts = []
+  for (const r of requested) {
+    if (!r || !r.receiptId || seenReceipt.has(r.receiptId)) continue
+    seenReceipt.add(r.receiptId)
+    reqReceipts.push({ receiptId: r.receiptId, lineIds: Array.isArray(r.lineIds) ? r.lineIds : [] })
+  }
+  if (!reqReceipts.length) throw createError(400, 'Debe indicar al menos una recepción.')
+
   return withTransaction(async (client) => {
-    // 1. El gasto: existe, no cancelado, sin pago aplicado, con proveedor.
+    // 1. El gasto: existe, no cancelado, con proveedor. (Pagado SÍ se permite:
+    //    la reclasificación es sobre el mismo registro, su pago viaja con él.)
     const { rows: exp } = await client.query(
       `SELECT si.id, si.status, si.partner_id, si.currency, si.subtotal,
-              si.total_mxn, si.exchange_rate_value, si.invoice_number,
-              ap.amount_paid AS ap_amount_paid
+              si.total_mxn, si.exchange_rate_value, si.invoice_number
          FROM supplier_invoices si
-         LEFT JOIN accounts_payable ap ON ap.document_id = si.id AND ap.tenant_id = si.tenant_id
         WHERE si.id = $1 AND si.tenant_id = $2 AND si.is_expense = true
         FOR UPDATE OF si`,
       [expenseId, tenantId]
@@ -1370,59 +1387,62 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLin
     if (!exp.length) throw createError(404, 'Gasto no encontrado.')
     const e = exp[0]
     if (e.status === 'cancelled') throw createError(409, 'El gasto está cancelado.')
-    // Un gasto YA PAGADO sí se puede vincular: la reclasificación ocurre sobre el
-    // MISMO registro (su CXP y su pago viajan con él al volverse factura de compra).
-    // La remisión-CXP de la recepción solo se sustituye si está SIN pagar (guard abajo).
     if (!e.partner_id) throw createError(400, 'El gasto no tiene proveedor del catálogo; no se puede vincular a una recepción.')
 
-    // 2. La recepción: confirmada, mismo proveedor.
-    const { rows: rc } = await client.query(
-      `SELECT sr.id, sr.partner_id, sr.status
-         FROM supplier_receipts sr
-        WHERE sr.id = $1 AND sr.tenant_id = $2
-        FOR UPDATE OF sr`,
-      [receiptId, tenantId]
-    )
-    if (!rc.length) throw createError(404, 'Recepción no encontrada.')
-    if (rc[0].status !== 'confirmed') throw createError(409, 'La recepción no está confirmada.')
-    if (rc[0].partner_id !== e.partner_id) throw createError(400, 'La recepción es de otro proveedor.')
-
-    // 3. Líneas a cubrir: las SELECCIONADAS (facturación parcial, mismo concepto
-    //    que registerInvoice/mig 202) o TODAS las pendientes si no se mandó nada.
-    //    Pendiente = sin factura real activa (NULL / cancelada / cubierta por remisión).
-    let lines
-    if (Array.isArray(receiptLineIds) && receiptLineIds.length > 0) {
-      const { rows } = await client.query(
-        `SELECT srl.id, srl.subtotal, ci.type AS cover_type, ci.status AS cover_status
-           FROM supplier_receipt_lines srl
-           LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
-          WHERE srl.supplier_receipt_id = $1 AND srl.id = ANY($2::uuid[])`,
-        [receiptId, receiptLineIds]
+    // 2. Por cada recepción: validar (confirmada, mismo proveedor) y recolectar
+    //    las líneas a cubrir (las seleccionadas o TODAS las pendientes).
+    const perReceipt = []
+    for (const rr of reqReceipts) {
+      const { rows: rc } = await client.query(
+        `SELECT sr.id, sr.partner_id, sr.status FROM supplier_receipts sr
+          WHERE sr.id = $1 AND sr.tenant_id = $2 FOR UPDATE OF sr`,
+        [rr.receiptId, tenantId]
       )
-      if (rows.length !== receiptLineIds.length) {
-        throw createError(400, 'Alguna línea seleccionada no pertenece a esta recepción.')
-      }
-      for (const l of rows) {
-        if (l.cover_type === 'invoice' && l.cover_status !== 'cancelled') {
-          throw createError(409, 'Alguna línea seleccionada ya está cubierta por otra factura activa.')
+      if (!rc.length) throw createError(404, 'Recepción no encontrada.')
+      if (rc[0].status !== 'confirmed') throw createError(409, 'Una recepción seleccionada no está confirmada.')
+      if (rc[0].partner_id !== e.partner_id) throw createError(400, 'Una recepción seleccionada es de otro proveedor.')
+
+      let lines
+      if (rr.lineIds.length > 0) {
+        const { rows } = await client.query(
+          `SELECT srl.id, srl.subtotal, ci.type AS cover_type, ci.status AS cover_status
+             FROM supplier_receipt_lines srl
+             LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+            WHERE srl.supplier_receipt_id = $1 AND srl.id = ANY($2::uuid[])`,
+          [rr.receiptId, rr.lineIds]
+        )
+        if (rows.length !== rr.lineIds.length) {
+          throw createError(400, 'Alguna línea seleccionada no pertenece a su recepción.')
         }
+        for (const l of rows) {
+          if (l.cover_type === 'invoice' && l.cover_status !== 'cancelled') {
+            throw createError(409, 'Alguna línea seleccionada ya está cubierta por otra factura activa.')
+          }
+        }
+        lines = rows
+      } else {
+        const { rows } = await client.query(
+          `SELECT srl.id, srl.subtotal
+             FROM supplier_receipt_lines srl
+             LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+            WHERE srl.supplier_receipt_id = $1
+              AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled' OR ci.type = 'remission')`,
+          [rr.receiptId]
+        )
+        lines = rows
       }
-      lines = rows
-    } else {
-      const { rows } = await client.query(
-        `SELECT srl.id, srl.subtotal
-           FROM supplier_receipt_lines srl
-           LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
-          WHERE srl.supplier_receipt_id = $1
-            AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled' OR ci.type = 'remission')`,
-        [receiptId]
-      )
-      lines = rows
+      if (!lines.length) continue   // esta recepción ya está facturada → se ignora
+      const coverage = parseFloat(lines.reduce((s, l) => s + parseFloat(l.subtotal || 0), 0).toFixed(2))
+      perReceipt.push({ receiptId: rr.receiptId, lineIds: lines.map(l => l.id), coverage })
     }
-    if (!lines.length) throw createError(409, 'La recepción ya está facturada (no tiene líneas pendientes).')
-    const coverageSubtotal = parseFloat(lines.reduce((s, l) => s + parseFloat(l.subtotal || 0), 0).toFixed(2))
+    if (!perReceipt.length) {
+      throw createError(409, 'Ninguna de las recepciones seleccionadas tiene líneas pendientes de facturar.')
+    }
+    const affectedReceiptIds = perReceipt.map(p => p.receiptId)
+    const coverageSubtotal = parseFloat(perReceipt.reduce((s, p) => s + p.coverage, 0).toFixed(2))
 
-    // 4. Reclasificar el gasto → factura de compra ligada a la recepción.
+    // 3. Reclasificar el gasto → factura de compra. supplier_receipt_id = la 1ª
+    //    (campo legado "principal"); la liga real N:N vive en invoice_receipt_links.
     const subtotalMxn = e.currency === 'USD'
       ? parseFloat((parseFloat(e.subtotal || 0) * parseFloat(e.exchange_rate_value || 1)).toFixed(2))
       : parseFloat(e.subtotal || 0)
@@ -1435,27 +1455,29 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLin
               supplier_receipt_id = $3,
               reconciliation_status = $4, reconciliation_diff = $5, updated_at = NOW()
         WHERE id = $1 AND tenant_id = $2`,
-      [expenseId, tenantId, receiptId, reconStatus, reconDiff]
+      [expenseId, tenantId, perReceipt[0].receiptId, reconStatus, reconDiff]
     )
-    await client.query(
-      `INSERT INTO invoice_receipt_links (tenant_id, supplier_invoice_id, supplier_receipt_id, amount_applied)
-       VALUES ($1,$2,$3,$4) ON CONFLICT (supplier_invoice_id, supplier_receipt_id) DO NOTHING`,
-      [tenantId, expenseId, receiptId, coverageSubtotal.toFixed(2)]
-    )
-    await client.query(
-      `UPDATE supplier_receipt_lines SET invoiced_by_invoice_id = $1 WHERE id = ANY($2::uuid[])`,
-      [expenseId, lines.map(l => l.id)]
-    )
+    for (const p of perReceipt) {
+      await client.query(
+        `INSERT INTO invoice_receipt_links (tenant_id, supplier_invoice_id, supplier_receipt_id, amount_applied)
+         VALUES ($1,$2,$3,$4) ON CONFLICT (supplier_invoice_id, supplier_receipt_id) DO NOTHING`,
+        [tenantId, expenseId, p.receiptId, p.coverage.toFixed(2)]
+      )
+      await client.query(
+        `UPDATE supplier_receipt_lines SET invoiced_by_invoice_id = $1 WHERE id = ANY($2::uuid[])`,
+        [expenseId, p.lineIds]
+      )
+    }
 
-    // 5. Sustitución: si la recepción tenía una REMISIÓN-CXP activa, anularla
-    //    (con guard de pago) → evita doble CXP. La CXP del gasto queda como la real.
+    // 4. Sustitución: anular las REMISIONES-CXP activas de las recepciones
+    //    afectadas (guard de pago) → evita doble CXP.
     const { rows: rems } = await client.query(
       `SELECT DISTINCT si.id, si.invoice_number
          FROM supplier_invoices si
          JOIN invoice_receipt_links irl ON irl.supplier_invoice_id = si.id
         WHERE si.tenant_id = $1 AND si.type = 'remission' AND si.status <> 'cancelled'
-          AND si.id <> $2 AND irl.supplier_receipt_id = $3`,
-      [tenantId, expenseId, receiptId]
+          AND si.id <> $2 AND irl.supplier_receipt_id = ANY($3::uuid[])`,
+      [tenantId, expenseId, affectedReceiptIds]
     )
     const replacedRemissionIds = []
     for (const rem of rems) {
@@ -1465,7 +1487,7 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLin
         [tenantId, rem.id]
       )
       if (parseFloat(apr[0]?.amount_paid || 0) > 0) {
-        throw createError(409, `La CXP sin factura ${rem.invoice_number} de esta recepción ya tiene pagos aplicados. Reversa el pago antes de vincular.`)
+        throw createError(409, `La CXP sin factura ${rem.invoice_number} de una recepción ya tiene pagos aplicados. Reversa el pago antes de vincular.`)
       }
       await client.query(
         `UPDATE supplier_invoices SET status = 'cancelled', replaced_by_invoice_id = $1, updated_at = NOW()
@@ -1478,28 +1500,35 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLin
       replacedRemissionIds.push(rem.id)
     }
 
-    // 6. Recomputar invoiced_at de la recepción (facturada solo si TODAS sus líneas
-    //    quedan cubiertas por un documento activo).
-    await client.query(
-      `UPDATE supplier_receipts sr
-          SET invoiced_at = CASE WHEN NOT EXISTS (
-                SELECT 1 FROM supplier_receipt_lines srl
-                 LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
-                WHERE srl.supplier_receipt_id = sr.id
-                  AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled')
-              ) THEN COALESCE(sr.invoiced_at, NOW()) ELSE NULL END
-        WHERE sr.id = $1 AND sr.tenant_id = $2`,
-      [receiptId, tenantId]
-    )
+    // 5. Recomputar invoiced_at de cada recepción afectada.
+    for (const rid of affectedReceiptIds) {
+      await client.query(
+        `UPDATE supplier_receipts sr
+            SET invoiced_at = CASE WHEN NOT EXISTS (
+                  SELECT 1 FROM supplier_receipt_lines srl
+                   LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+                  WHERE srl.supplier_receipt_id = sr.id
+                    AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled')
+                ) THEN COALESCE(sr.invoiced_at, NOW()) ELSE NULL END
+          WHERE sr.id = $1 AND sr.tenant_id = $2`,
+        [rid, tenantId]
+      )
+    }
 
     await audit({
       tenantId, userId, action: 'supplier_expense.linked_to_receipt',
       resource: 'supplier_invoices', resourceId: expenseId,
-      payload: { receiptId, coverageSubtotal, reconStatus, reconDiff, replacedRemissionIds },
+      payload: { receiptIds: affectedReceiptIds, coverageSubtotal, reconStatus, reconDiff, replacedRemissionIds },
       ipAddress, userAgent,
     })
 
-    return { id: expenseId, receiptId, reconciliation_status: reconStatus, reconciliation_diff: reconDiff, replacedRemissionIds }
+    return {
+      id: expenseId,
+      receiptId: perReceipt[0].receiptId,   // compat
+      receiptIds: affectedReceiptIds,
+      reconciliation_status: reconStatus, reconciliation_diff: reconDiff,
+      replacedRemissionIds,
+    }
   })
 }
 
@@ -1747,10 +1776,52 @@ function createError(status, message) {
   return err
 }
 
+/**
+ * Devuelve los CONCEPTOS (líneas) del CFDI de un gasto/factura para
+ * previsualizarlos, parseando el XML guardado. Fuente del XML, en orden:
+ *   1. `supplier_invoices.xml_content` (lo guarda el alta por "Cargar XML").
+ *   2. el adjunto categoría 'cfdi' tipo XML (lo guarda el buzón de correo, mig 213).
+ * Si no hay XML (gasto manual o sólo PDF) → lines vacío + hasXml=false.
+ */
+async function getExpenseConceptos({ tenantId, id }) {
+  const { rows } = await query(
+    `SELECT xml_content FROM supplier_invoices WHERE id = $1 AND tenant_id = $2`,
+    [id, tenantId]
+  )
+  if (!rows.length) throw createError(404, 'Documento no encontrado.')
+
+  let xml = rows[0].xml_content || null
+  if (!xml) {
+    const atts = await attachmentService.listAttachments({
+      tenantId, entityType: 'supplier_invoice', entityId: id, category: 'cfdi',
+    })
+    const xmlAtt = (atts || []).find(a =>
+      /xml/i.test(a.mime_type || '') || /\.xml$/i.test(a.filename || ''))
+    if (xmlAtt) {
+      const info = await attachmentService.getAttachmentInfo({ tenantId, attachmentId: xmlAtt.id })
+      if (info?.storage_path) {
+        try {
+          const buf = await storage.fetchBuffer(info.storage_path)
+          if (buf) xml = buf.toString('utf8')
+        } catch { /* sin XML descargable → se devuelve vacío */ }
+      }
+    }
+  }
+  if (!xml) return { lines: [], hasXml: false }
+
+  try {
+    const parsed = await documentParserService.parseSupplierDocument(
+      Buffer.from(xml), 'application/xml', 'cfdi.xml')
+    return { lines: parsed?.lines || [], hasXml: true }
+  } catch {
+    return { lines: [], hasXml: false }
+  }
+}
+
 module.exports = {
   registerInvoice, generateReceiptRemission, listInvoices, getInvoice, listExpenses,
   listExpensesSummary, getExpense, updateExpense, cancelExpense, linkExpenseToReceipt,
-  assignExpenseSupplier, payExpense,
+  assignExpenseSupplier, payExpense, getExpenseConceptos,
   suggestReceiptForExpense, requestExpenseInvoice, registerPayment, reverseSupplierPayment, getSupplierStatement,
   unlinkInvoiceFromReceipt,
 }

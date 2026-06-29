@@ -160,6 +160,34 @@ test('facturación PARCIAL: cubrir solo una línea → la otra queda pendiente',
   expect(rc[0].invoiced_at).toBeNull()                           // recepción NO totalmente facturada
 })
 
+test('vincula UNA factura a VARIAS recepciones de una vez', async () => {
+  const sid = await makeSupplier()
+  const r1 = await makeReceipt({ partnerId: sid, qty: 10, unitPrice: 100 })   // 1000
+  const r2 = await makeReceipt({ partnerId: sid, qty: 5,  unitPrice: 100 })   // 500
+  const gasto = await makeExpense({ supplierId: sid, subtotal: 1500, tax: 240 })
+
+  const r = await linkExpenseToReceipt({
+    tenantId, expenseId: gasto.id,
+    receipts: [{ receiptId: r1 }, { receiptId: r2 }],
+    userId,
+  })
+  expect(r.receiptIds).toEqual(expect.arrayContaining([r1, r2]))
+  expect(r.reconciliation_status).toBe('reconciled')   // 1500 vs 1000+500
+
+  // Ambas recepciones quedan ligadas a la misma factura y facturadas.
+  for (const rid of [r1, r2]) {
+    const { rows: link } = await withBypass(() => query(
+      `SELECT 1 FROM invoice_receipt_links WHERE supplier_invoice_id = $1 AND supplier_receipt_id = $2`, [gasto.id, rid]))
+    expect(link.length).toBe(1)
+    const { rows: rc } = await withBypass(() => query(
+      `SELECT invoiced_at FROM supplier_receipts WHERE id = $1`, [rid]))
+    expect(rc[0].invoiced_at).not.toBeNull()
+  }
+  const { rows: si } = await withBypass(() => query(
+    `SELECT is_expense FROM supplier_invoices WHERE id = $1`, [gasto.id]))
+  expect(si[0].is_expense).toBe(false)
+})
+
 test('DESVINCULAR: vuelve a gasto, libera líneas y la recepción deja de estar facturada', async () => {
   const sid = await makeSupplier()
   const rid = await makeReceipt({ partnerId: sid })

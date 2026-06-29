@@ -941,16 +941,33 @@ router.post('/expenses/:id/link-receipt',
   checkAnyPermission([['expenses', 'create'], ['purchases', 'create']]),
   async (req, res, next) => {
     try {
-      const { receiptId, receiptLineIds } = req.body || {}
-      if (!receiptId) return res.status(400).json({ error: 'receiptId es requerido.' })
+      // Acepta una sola recepción (receiptId/receiptLineIds) o VARIAS (receipts[]).
+      const { receiptId, receiptLineIds, receipts } = req.body || {}
+      if (!receiptId && !(Array.isArray(receipts) && receipts.length)) {
+        return res.status(400).json({ error: 'receiptId o receipts[] es requerido.' })
+      }
       const result = await supplierInvoiceService.linkExpenseToReceipt({
         tenantId: req.tenant.id, expenseId: req.params.id, receiptId,
         receiptLineIds: Array.isArray(receiptLineIds) ? receiptLineIds : [],
+        receipts: Array.isArray(receipts) ? receipts : null,
         userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
       })
       res.json(result)
     } catch (err) { next(err) }
   })
+
+/**
+ * GET /api/purchases/expenses/:id/conceptos
+ * Conceptos (líneas) del CFDI del gasto, para previsualizar. Parsea el XML guardado.
+ */
+router.get('/expenses/:id/conceptos', checkPermission('expenses', 'read'), async (req, res, next) => {
+  try {
+    const result = await supplierInvoiceService.getExpenseConceptos({
+      tenantId: req.tenant.id, id: req.params.id,
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
 
 /**
  * POST /api/purchases/expenses/:id/unlink-receipt

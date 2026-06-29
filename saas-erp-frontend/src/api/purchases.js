@@ -87,12 +87,15 @@ export const purchasesApi = {
   requestExpenseInvoice: (id) => api.post(`${B}/expenses/${id}/request-invoice`).then(r => r.data),
   getExpenseInbox:    () => api.get(`${B}/expenses/inbox`).then(r => r.data),
   rotateExpenseInbox: () => api.post(`${B}/expenses/inbox/rotate`).then(r => r.data),
-  linkExpenseToReceipt: (id, receiptId, receiptLineIds) =>
-    api.post(`${B}/expenses/${id}/link-receipt`, { receiptId, receiptLineIds }).then(r => r.data),
+  // body: { receiptId, receiptLineIds } (una sola) o { receipts: [{ receiptId, lineIds? }] } (varias)
+  linkExpenseToReceipt: (id, body) =>
+    api.post(`${B}/expenses/${id}/link-receipt`, body || {}).then(r => r.data),
   // Desvincula una factura de su recepción y la revierte a gasto.
   unlinkExpenseFromReceipt: (id) =>
     api.post(`${B}/expenses/${id}/unlink-receipt`).then(r => r.data),
   expenseReceiptSuggestion: (id) => api.get(`${B}/expenses/${id}/receipt-suggestion`).then(r => r.data),
+  // Conceptos (líneas) del CFDI del gasto, para previsualizar (parsea el XML guardado).
+  expenseConceptos: (id) => api.get(`${B}/expenses/${id}/conceptos`).then(r => r.data),
   createSupplierFromExpense: (id, body) =>
     api.post(`${B}/expenses/${id}/create-supplier`, body).then(r => r.data),
   // Respaldo del CFDI (XML/PDF) del gasto: listar / subir / descargar.

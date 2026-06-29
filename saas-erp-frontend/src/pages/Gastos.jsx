@@ -494,8 +494,8 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const [cancelReason, setCancelReason] = useState('')
   const [requestMsg, setRequestMsg] = useState(null)
   const [linkOpen, setLinkOpen] = useState(false)
-  const [pickReceiptId, setPickReceiptId] = useState('')   // selección del dropdown (paso 1 manual)
-  const [linkReceiptId, setLinkReceiptId] = useState('')   // recepción confirmada → paso 2 (líneas)
+  const [pickedReceipts, setPickedReceipts] = useState({}) // { receiptId: bool } selección (paso 1 manual, multi)
+  const [linkReceiptId, setLinkReceiptId] = useState('')   // 1 sola recepción → paso 2 (líneas, parcial)
   const [checkedLines, setCheckedLines] = useState({})     // { lineId: bool }
   const [supOpen, setSupOpen] = useState(false)            // alta rápida de proveedor (gasto genérico)
   const [supForm, setSupForm] = useState({ name: '', rfc: '', type: 'supplier', recurrente: false })
@@ -622,6 +622,14 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
     enabled:  !!canLink,
   })
 
+  // Conceptos del CFDI (parseados del XML guardado) para previsualizar.
+  const { data: conceptosData } = useQuery({
+    queryKey: ['expense-conceptos', id],
+    queryFn:  () => purchasesApi.expenseConceptos(id),
+    enabled:  !!id && !!exp?.uuid_sat,
+  })
+  const conceptos = conceptosData?.lines || []
+
   // Recepciones pendientes de factura del proveedor (para elegir manualmente).
   const { data: pendingReceipts } = useQuery({
     queryKey: ['pending-invoice-receipts', exp?.partner_id],
@@ -645,7 +653,8 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   }, [receiptDetail])
 
   const linkReceipt = useMutation({
-    mutationFn: ({ receiptId, lineIds }) => purchasesApi.linkExpenseToReceipt(id, receiptId, lineIds),
+    mutationFn: ({ receiptId, lineIds, receipts }) =>
+      purchasesApi.linkExpenseToReceipt(id, { receiptId, receiptLineIds: lineIds, receipts }),
     onSuccess: () => {
       // El gasto se volvió factura de compra → sale del listado de Gastos.
       qc.invalidateQueries({ queryKey: ['expenses'] })
@@ -687,7 +696,7 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const reconDiff = +(expSubtotal - coveredSubtotal).toFixed(2)
   const reconOk = Math.abs(reconDiff) < 0.01
   const checkedCount = Object.values(checkedLines).filter(Boolean).length
-  const resetLink = () => { setLinkOpen(false); setLinkReceiptId(''); setPickReceiptId(''); setCheckedLines({}) }
+  const resetLink = () => { setLinkOpen(false); setLinkReceiptId(''); setPickedReceipts({}); setCheckedLines({}) }
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">
@@ -907,6 +916,35 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
               </div>
             )}
 
+            {/* Conceptos del CFDI (previsualización, parseados del XML guardado). */}
+            {conceptos.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-ink-secondary mb-1">Conceptos de la factura</p>
+                <div className="border border-line-subtle rounded-lg overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead className="bg-surface-elevated/50">
+                      <tr className="text-ink-muted">
+                        <th className="text-left font-medium px-2 py-1">Descripción</th>
+                        <th className="text-right font-medium px-2 py-1">Cant.</th>
+                        <th className="text-right font-medium px-2 py-1">P. unit.</th>
+                        <th className="text-right font-medium px-2 py-1">Importe</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-line-subtle">
+                      {conceptos.map((l, i) => (
+                        <tr key={i}>
+                          <td className="px-2 py-1 text-ink-secondary">{l.description}</td>
+                          <td className="px-2 py-1 text-right font-mono whitespace-nowrap">{l.quantity} {l.unit}</td>
+                          <td className="px-2 py-1 text-right font-mono">{fmtMXN(l.unitPrice)}</td>
+                          <td className="px-2 py-1 text-right font-mono font-medium">{fmtMXN(l.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {/* Vincular a una recepción → factura de compra (mercancía). NO se liga
                 sola (irreversible): se SUGIERE, eliges líneas, concilias y confirmas. */}
             {canLink && (
@@ -949,26 +987,44 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
                             <p className="text-xs text-ink-muted">Este proveedor no tiene recepciones pendientes de factura.</p>
                             <button type="button" className="btn-ghost text-xs" onClick={resetLink}>Cerrar</button>
                           </div>
-                        ) : (
+                        ) : (() => {
+                          const pickedIds = Object.keys(pickedReceipts).filter(k => pickedReceipts[k])
+                          const togglePick = (rid) => setPickedReceipts(s => ({ ...s, [rid]: !s[rid] }))
+                          return (
                           <div className="flex flex-col gap-2">
-                            <select className="select text-sm" value={pickReceiptId}
-                              onChange={e => setPickReceiptId(e.target.value)}>
-                              <option value="">— Elige la recepción —</option>
+                            <p className="text-[11px] text-ink-muted">
+                              Marca una o <strong>varias</strong> recepciones que cubre esta factura.
+                              Con una sola podrás elegir líneas (parcial); con varias se vinculan completas.
+                            </p>
+                            <div className="flex flex-col gap-1 max-h-44 overflow-y-auto">
                               {pendingReceipts.map(r => (
-                                <option key={r.id} value={r.id}>
-                                  {r.receipt_number} · {fmtDateOnly(r.received_date)} · {fmtMXN(r.total_mxn)}
-                                </option>
+                                <label key={r.id} className="flex items-center gap-2 text-xs cursor-pointer">
+                                  <input type="checkbox" className="w-4 h-4 accent-brand-600"
+                                    checked={!!pickedReceipts[r.id]} onChange={() => togglePick(r.id)} />
+                                  <span className="flex-1 text-ink-secondary truncate">
+                                    {r.receipt_number} · {fmtDateOnly(r.received_date)}
+                                  </span>
+                                  <span className="tabular-nums text-ink-primary">{fmtMXN(r.total_mxn)}</span>
+                                </label>
                               ))}
-                            </select>
+                            </div>
                             <div className="flex gap-2">
                               <button type="button" className="btn-ghost text-xs" onClick={resetLink}>Cancelar</button>
-                              <button type="button" className="btn-primary text-xs" disabled={!pickReceiptId}
-                                onClick={() => { setError(null); setLinkReceiptId(pickReceiptId) }}>
-                                Continuar
+                              <button type="button" className="btn-primary text-xs"
+                                disabled={pickedIds.length === 0 || linkReceipt.isPending}
+                                onClick={() => {
+                                  setError(null)
+                                  if (pickedIds.length === 1) setLinkReceiptId(pickedIds[0])
+                                  else linkReceipt.mutate({ receipts: pickedIds.map(rid => ({ receiptId: rid })) })
+                                }}>
+                                {linkReceipt.isPending ? <Spinner size="sm" />
+                                  : pickedIds.length > 1 ? `Vincular ${pickedIds.length} recepciones`
+                                  : 'Continuar'}
                               </button>
                             </div>
                           </div>
-                        )}
+                          )
+                        })()}
                       </>
                     )
                   ) : receiptDetail === undefined ? (
