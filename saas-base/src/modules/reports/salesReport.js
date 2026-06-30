@@ -528,4 +528,126 @@ async function getProductDetail(tenantId, productId, from, to) {
   return { invoices, deliveries }
 }
 
-module.exports = { getSalesReport, getSalesDetail }
+// ─────────────────────────────────────────────────────────────────────────────
+// Conciliación: por qué el "Acumulado del mes" del dashboard ≠ "Ventas del
+// periodo" del reporte. Descompone cada lado y el facturado del dashboard por
+// origen (remisión del periodo / de periodos anteriores / factura directa), para
+// aislar en pesos exactos las dos causas: IVA y diferencia de base/fecha.
+//
+//   - REPORTE  = remisiones ENTREGADAS en el periodo, SUBTOTAL sin IVA.
+//   - DASHBOARD = facturas TIMBRADAS en el periodo (con IVA) + remisiones del
+//     periodo sin factura (sin IVA). El facturado usa stamp_date; el sin-factura
+//     usa delivered_at — exactamente como financialSnapshot.
+// ─────────────────────────────────────────────────────────────────────────────
+async function getSalesReconciliation({ tenantId, from, to }) {
+  // 1) Lado REPORTE — remisiones del periodo (sin IVA), partido facturado/sin factura.
+  const { rows: repRows } = await query(`
+    SELECT
+      COALESCE(SUM(dnl.subtotal), 0)::numeric AS total,
+      COALESCE(SUM(CASE WHEN ${LINE_INVOICED} THEN dnl.subtotal ELSE 0 END), 0)::numeric AS invoiced,
+      COALESCE(SUM(CASE WHEN NOT (${LINE_INVOICED}) THEN dnl.subtotal ELSE 0 END), 0)::numeric AS uninvoiced
+      FROM delivery_note_lines dnl
+      JOIN delivery_notes dn ON dn.id = dnl.delivery_note_id
+     WHERE dn.tenant_id = $1
+       AND dn.status IN ('delivered','partially_delivered','issued','sent_by_email')
+       AND COALESCE(dn.delivered_at, dn.issue_date) >= $2
+       AND COALESCE(dn.delivered_at, dn.issue_date) <  $3
+  `, [tenantId, from, to])
+
+  // 2) Lado DASHBOARD — facturado CON IVA (por stamp_date) + sin factura (remisiones).
+  const { rows: dInv } = await query(`
+    SELECT COALESCE(SUM(total_mxn), 0)::numeric AS total, COUNT(*)::int AS num
+      FROM invoices
+     WHERE tenant_id = $1 AND cfdi_type = 'I' AND status = 'stamped'
+       AND stamp_date >= $2 AND stamp_date < $3
+  `, [tenantId, from, to])
+
+  const { rows: dUninv } = await query(`
+    SELECT COALESCE(SUM(dn.total_mxn), 0)::numeric AS total, COUNT(*)::int AS num
+      FROM delivery_notes dn
+     WHERE dn.tenant_id = $1
+       AND dn.status IN ('delivered','partially_delivered','issued','sent_by_email')
+       AND dn.delivered_at >= $2 AND dn.delivered_at < $3
+       AND NOT EXISTS (
+         SELECT 1 FROM invoices inv
+          WHERE inv.tenant_id = $1 AND inv.delivery_note_id = dn.id AND inv.status = 'stamped')
+       AND NOT EXISTS (
+         SELECT 1 FROM invoice_remissions ir
+           JOIN invoices inv ON inv.id = ir.invoice_id
+          WHERE ir.delivery_note_id = dn.id AND inv.status = 'stamped')
+  `, [tenantId, from, to])
+
+  // 3) Desglose del FACTURADO del dashboard por ORIGEN. Subtotal en MXN prorrateado
+  //    (robusto a moneda y retenciones): subtotal_mxn = total_mxn × subtotal/total.
+  const { rows: buckets } = await query(`
+    WITH stamped AS (
+      SELECT i.id, i.total_mxn,
+             (i.total_mxn * i.subtotal / NULLIF(i.total, 0)) AS subtotal_mxn
+        FROM invoices i
+       WHERE i.tenant_id = $1 AND i.cfdi_type = 'I' AND i.status = 'stamped'
+         AND i.stamp_date >= $2 AND i.stamp_date < $3
+    ),
+    links AS (
+      SELECT s.id AS invoice_id, COALESCE(dn.delivered_at, dn.issue_date) AS dnt
+        FROM stamped s
+        JOIN invoices i        ON i.id = s.id
+        JOIN delivery_notes dn ON dn.id = i.delivery_note_id
+      UNION
+      SELECT s.id, COALESCE(dn.delivered_at, dn.issue_date)
+        FROM stamped s
+        JOIN invoice_remissions ir ON ir.invoice_id = s.id
+        JOIN delivery_notes dn     ON dn.id = ir.delivery_note_id
+    ),
+    classified AS (
+      SELECT s.id, s.total_mxn, s.subtotal_mxn,
+        CASE
+          WHEN NOT EXISTS (SELECT 1 FROM links l WHERE l.invoice_id = s.id) THEN 'directa'
+          WHEN EXISTS (SELECT 1 FROM links l WHERE l.invoice_id = s.id AND l.dnt >= $2 AND l.dnt < $3) THEN 'mes'
+          WHEN EXISTS (SELECT 1 FROM links l WHERE l.invoice_id = s.id AND l.dnt <  $2) THEN 'previa'
+          ELSE 'posterior'
+        END AS bucket
+      FROM stamped s
+    )
+    SELECT bucket,
+           COUNT(*)::int AS num,
+           COALESCE(SUM(subtotal_mxn), 0)::numeric        AS subtotal_mxn,
+           COALESCE(SUM(total_mxn - subtotal_mxn), 0)::numeric AS iva_mxn,
+           COALESCE(SUM(total_mxn), 0)::numeric           AS total_mxn
+      FROM classified
+     GROUP BY bucket
+  `, [tenantId, from, to])
+
+  const byBucket = { directa: null, mes: null, previa: null, posterior: null }
+  for (const b of buckets) {
+    byBucket[b.bucket] = {
+      num: b.num,
+      subtotal_mxn: parseFloat(b.subtotal_mxn) || 0,
+      iva_mxn:      parseFloat(b.iva_mxn) || 0,
+      total_mxn:    parseFloat(b.total_mxn) || 0,
+    }
+  }
+  const zero = () => ({ num: 0, subtotal_mxn: 0, iva_mxn: 0, total_mxn: 0 })
+
+  return {
+    period: { from, to },
+    report: {
+      total:      parseFloat(repRows[0].total) || 0,
+      invoiced:   parseFloat(repRows[0].invoiced) || 0,
+      uninvoiced: parseFloat(repRows[0].uninvoiced) || 0,
+    },
+    dashboard: {
+      invoiced_with_iva: parseFloat(dInv[0].total) || 0,
+      invoiced_count:    dInv[0].num,
+      uninvoiced:        parseFloat(dUninv[0].total) || 0,
+      uninvoiced_count:  dUninv[0].num,
+    },
+    invoiced_buckets: {
+      mes:       byBucket.mes       || zero(),
+      previa:    byBucket.previa    || zero(),
+      directa:   byBucket.directa   || zero(),
+      posterior: byBucket.posterior || zero(),
+    },
+  }
+}
+
+module.exports = { getSalesReport, getSalesDetail, getSalesReconciliation }

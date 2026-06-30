@@ -5,14 +5,15 @@
 // puede pivotear directamente.
 
 const ExcelJS = require('exceljs')
-const { getSalesReport } = require('./salesReport')
+const { getSalesReport, getSalesReconciliation } = require('./salesReport')
 
 async function generateSalesWorkbook({ tenantId, from, to, tenantName }) {
   const wb = new ExcelJS.Workbook()
   wb.creator = 'Praxion Systems'
   wb.created = new Date()
 
-  const data = await getSalesReport({ tenantId, from, to })
+  const data  = await getSalesReport({ tenantId, from, to })
+  const recon = await getSalesReconciliation({ tenantId, from, to })
 
   addResumenSheet(wb, { from, to, tenantName, data })
   addClientesSheet(wb, data)
@@ -21,6 +22,7 @@ async function generateSalesWorkbook({ tenantId, from, to, tenantName }) {
   addUtilidadesSheet(wb, data)
   addAlertasSheet(wb, data)
   addTendenciaSheet(wb, data)
+  addConciliacionSheet(wb, { from, to, recon })
 
   return wb.xlsx.writeBuffer()
 }
@@ -178,6 +180,98 @@ function addTendenciaSheet(wb, data) {
   ]
   styleHeader(ws)
   data.weekly_trend.forEach(r => ws.addRow(r))
+}
+
+// ─── Conciliación Dashboard vs Reporte ───────────────────────────────────────
+function addConciliacionSheet(wb, { from, to, recon }) {
+  const ws = wb.addWorksheet('Conciliación')
+  ws.columns = [{ width: 52 }, { width: 18 }, { width: 16 }, { width: 18 }, { width: 14 }]
+
+  const r = recon.report
+  const d = recon.dashboard
+  const b = recon.invoiced_buckets
+  const dashTotal = d.invoiced_with_iva + d.uninvoiced
+
+  // Fecha final inclusiva (to es exclusivo).
+  const toIncl = new Date(to + 'T00:00:00Z'); toIncl.setUTCDate(toIncl.getUTCDate() - 1)
+  const toInclStr = toIncl.toISOString().slice(0, 10)
+
+  ws.addRow(['Conciliación: Dashboard "Acumulado del mes"  vs  Reporte "Ventas del periodo"'])
+    .font = { bold: true, size: 14 }
+  ws.addRow([`Periodo: ${from} al ${toInclStr}`]).font = { italic: true, color: { argb: 'FF606060' } }
+  ws.addRow([])
+
+  // ── A) Reporte ──
+  crow(ws, '— REPORTE (remisiones entregadas en el periodo · SIN IVA) —', null, { bold: true })
+  crow(ws, 'Ventas remisionadas (sin IVA)',          r.total,      { bold: true })
+  crow(ws, '   · Facturado (sin IVA)',               r.invoiced)
+  crow(ws, '   · Sin factura (sin IVA)',             r.uninvoiced)
+  ws.addRow([])
+
+  // ── B) Dashboard ──
+  crow(ws, '— DASHBOARD "Acumulado del mes" —', null, { bold: true })
+  crow(ws, `Facturado (CON IVA · ${d.invoiced_count} facturas timbradas)`, d.invoiced_with_iva)
+  crow(ws, `Sin factura (sin IVA · ${d.uninvoiced_count} remisiones)`,     d.uninvoiced)
+  crow(ws, 'Total dashboard',                        dashTotal,    { bold: true })
+  ws.addRow([])
+
+  // ── C) Desglose del facturado del dashboard por origen ──
+  crow(ws, '— DESGLOSE DEL FACTURADO DEL DASHBOARD (facturas timbradas en el periodo) —', null, { bold: true })
+  const hdr = ws.addRow(['Origen de la factura', '# Facturas', 'Subtotal (sin IVA)', 'IVA / impuestos', 'Total (con IVA)'])
+  hdr.font = { bold: true }
+  hdr.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } }; c.font = { bold: true, color: { argb: 'FFFFFFFF' } } })
+
+  const bucketRow = (label, x) => {
+    const rr = ws.addRow([label, x.num, x.subtotal_mxn, x.iva_mxn, x.total_mxn])
+    rr.getCell(3).numFmt = '"$"#,##0.00'
+    rr.getCell(4).numFmt = '"$"#,##0.00'
+    rr.getCell(5).numFmt = '"$"#,##0.00'
+  }
+  bucketRow('Facturas de remisiones DEL PERIODO',          b.mes)
+  bucketRow('Facturas de remisiones de PERIODOS ANTERIORES', b.previa)
+  bucketRow('Facturas DIRECTAS (sin remisión)',            b.directa)
+  bucketRow('Facturas de remisiones de PERIODOS POSTERIORES', b.posterior)
+  const tot = ws.addRow([
+    'TOTAL FACTURADO (= facturado del dashboard)',
+    b.mes.num + b.previa.num + b.directa.num + b.posterior.num,
+    b.mes.subtotal_mxn + b.previa.subtotal_mxn + b.directa.subtotal_mxn + b.posterior.subtotal_mxn,
+    b.mes.iva_mxn + b.previa.iva_mxn + b.directa.iva_mxn + b.posterior.iva_mxn,
+    b.mes.total_mxn + b.previa.total_mxn + b.directa.total_mxn + b.posterior.total_mxn,
+  ])
+  tot.font = { bold: true }
+  ;[3, 4, 5].forEach(i => { tot.getCell(i).numFmt = '"$"#,##0.00' })
+  ws.addRow([])
+
+  // ── D) Puente Dashboard → Reporte ──
+  crow(ws, '— PUENTE: del total del dashboard al total del reporte —', null, { bold: true })
+  crow(ws, 'Total dashboard',                                          dashTotal)
+  crow(ws, '(−) IVA / impuestos del facturado',                       -(b.mes.iva_mxn + b.previa.iva_mxn + b.directa.iva_mxn + b.posterior.iva_mxn))
+  crow(ws, '(−) Facturado de remisiones de periodos ANTERIORES (sin IVA)', -b.previa.subtotal_mxn)
+  crow(ws, '(−) Facturas DIRECTAS sin remisión (sin IVA)',            -b.directa.subtotal_mxn)
+  crow(ws, '(−) Facturado de remisiones de periodos POSTERIORES (sin IVA)', -b.posterior.subtotal_mxn)
+  const equiv = b.mes.subtotal_mxn + d.uninvoiced
+  crow(ws, '= Equivalente al reporte (facturado del periodo + sin factura, sin IVA)', equiv, { bold: true })
+  crow(ws, 'Reporte real — Ventas remisionadas (sin IVA)',            r.total, { bold: true })
+  const resid = r.total - equiv
+  crow(ws, 'Diferencia por conciliar (correcciones de precio, facturación parcial, etc.)', resid,
+       { color: Math.abs(resid) < 1 ? 'FF166534' : 'FFB45309', bold: true })
+  ws.addRow([])
+
+  ws.addRow(['Notas:']).font = { bold: true }
+  ;[
+    '· "Ventas" del reporte = subtotal SIN IVA de las remisiones entregadas en el periodo.',
+    '· El "Facturado" del dashboard incluye IVA y cuenta facturas por su fecha de TIMBRADO (no por la entrega de la remisión).',
+    '· "Remisiones de periodos posteriores" = remisiones de este periodo cuya factura se timbró DESPUÉS (el reporte ya las cuenta como facturadas).',
+    '· La "Diferencia por conciliar" recoge diferencias de precio factura-vs-remisión, facturación parcial y remisiones del periodo facturadas en otro periodo.',
+  ].forEach(t => { ws.addRow([t]).font = { italic: true, size: 9, color: { argb: 'FF808080' } } })
+}
+
+function crow(ws, label, value, opts = {}) {
+  const r = ws.addRow([label, value == null ? '' : value])
+  if (opts.bold)  r.font = { bold: true }
+  if (opts.color) r.font = { ...(r.font || {}), bold: true, color: { argb: opts.color } }
+  if (typeof value === 'number') r.getCell(2).numFmt = '"$"#,##0.00'
+  return r
 }
 
 function row(ws, label, value, kind, opts = {}) {
