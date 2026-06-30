@@ -324,12 +324,12 @@ router.post('/counts/suggest', checkPermission('inventory', 'adjust'), async (re
 // Capturar línea (cantidad física)
 router.put('/counts/:id/lines/:lineId', checkPermission('inventory', 'adjust'), async (req, res, next) => {
   try {
-    const { physicalQty, notes } = req.body
+    const { physicalQty, notes, unitCost } = req.body
     const data = await countService.captureLine({
       tenantId:    req.tenant.id,
       countId:     req.params.id,
       lineId:      req.params.lineId,
-      physicalQty, notes,
+      physicalQty, notes, unitCost,
       userId:      req.auth.userId,
     })
     res.json(data)

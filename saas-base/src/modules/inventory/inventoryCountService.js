@@ -388,8 +388,11 @@ async function getCountById({ tenantId, countId, client = null }) {
        rm.resin_type,
        rm.material_type,
        u_cap.full_name AS captured_by_name,
+       -- Costo efectivo: el de sistema si existe, si no el capturado a mano.
+       COALESCE(NULLIF(icl.system_avg_cost, 0), icl.captured_unit_cost, 0) AS effective_cost,
        (icl.physical_qty - icl.system_qty) AS difference,
-       (COALESCE(icl.physical_qty, icl.system_qty) - icl.system_qty) * icl.system_avg_cost AS difference_value
+       (COALESCE(icl.physical_qty, icl.system_qty) - icl.system_qty)
+         * COALESCE(NULLIF(icl.system_avg_cost, 0), icl.captured_unit_cost, 0) AS difference_value
      FROM inventory_count_lines icl
      JOIN warehouses w ON w.id = icl.warehouse_id
      LEFT JOIN raw_materials rm ON rm.id = icl.item_id AND icl.item_type = 'raw_material'::inventory_item_type
@@ -462,7 +465,7 @@ async function listCounts({
 // Capturar línea (cantidad física + notas)
 // ─────────────────────────────────────────────────────────────────────────────
 async function captureLine({
-  tenantId, countId, lineId, physicalQty, notes, userId,
+  tenantId, countId, lineId, physicalQty, notes, unitCost, userId,
 }) {
   // Validar que el conteo existe y está en captura
   const { rows: cnt } = await query(
@@ -475,6 +478,16 @@ async function captureLine({
     throw createError(409, `No se puede capturar: el conteo está en estado ${cnt[0].status}.`)
   }
 
+  // Cargar la línea (existencia + costo de sistema para el candado del costo manual)
+  const { rows: lineRows } = await query(
+    `SELECT id, system_avg_cost, captured_unit_cost
+       FROM inventory_count_lines
+      WHERE id = $1 AND count_id = $2`,
+    [lineId, countId]
+  )
+  if (!lineRows[0]) throw createError(404, 'Línea no encontrada.')
+  const line = lineRows[0]
+
   // physicalQty puede ser 0, null (limpiar) o un número positivo
   let qty = null
   if (physicalQty !== null && physicalQty !== undefined && physicalQty !== '') {
@@ -484,18 +497,38 @@ async function captureLine({
     }
   }
 
+  // Costo unitario manual: SOLO se puede fijar en artículos SIN costo de sistema
+  // (system_avg_cost = 0). Sobre un artículo con costo promedio válido se rechaza
+  // para no corromper el costeo. `undefined` = no tocar el costo existente.
+  let capturedCost = line.captured_unit_cost  // por defecto, conservar
+  if (unitCost !== undefined) {
+    if (unitCost === null || unitCost === '') {
+      capturedCost = null
+    } else {
+      const c = parseFloat(unitCost)
+      if (isNaN(c) || c < 0) {
+        throw createError(400, 'unitCost debe ser un número >= 0.')
+      }
+      if (parseFloat(line.system_avg_cost) > 0) {
+        throw createError(409, 'Solo puedes fijar el costo manual en artículos sin costo de sistema.')
+      }
+      capturedCost = c
+    }
+  }
+
   const newStatus = qty === null ? 'pending' : 'captured'
 
   const { rows } = await query(
     `UPDATE inventory_count_lines
-     SET physical_qty = $1::numeric,
-         notes        = $2::text,
-         captured_at  = CASE WHEN $1::numeric IS NULL THEN NULL ELSE NOW() END,
-         captured_by  = CASE WHEN $1::numeric IS NULL THEN NULL ELSE $4::uuid END,
-         status       = $5::text
+     SET physical_qty       = $1::numeric,
+         notes              = $2::text,
+         captured_unit_cost = $7::numeric,
+         captured_at        = CASE WHEN $1::numeric IS NULL THEN NULL ELSE NOW() END,
+         captured_by        = CASE WHEN $1::numeric IS NULL THEN NULL ELSE $4::uuid END,
+         status             = $5::text
      WHERE id = $3 AND count_id = $6
      RETURNING *`,
-    [qty, notes || null, lineId, userId, newStatus, countId]
+    [qty, notes || null, lineId, userId, newStatus, countId, capturedCost]
   )
   if (!rows[0]) throw createError(404, 'Línea no encontrada.')
 
@@ -579,7 +612,8 @@ async function moveToReconcile({ tenantId, countId, userId }) {
              AND physical_qty <> system_qty
          ),
          total_diff_value = (
-           SELECT COALESCE(SUM((physical_qty - system_qty) * system_avg_cost), 0)
+           SELECT COALESCE(SUM((physical_qty - system_qty)
+             * COALESCE(NULLIF(system_avg_cost, 0), captured_unit_cost, 0)), 0)
            FROM inventory_count_lines
            WHERE count_id = ic.id
              AND status = 'captured'
@@ -649,18 +683,23 @@ async function applyCount({ tenantId, countId, closingNotes, userId }) {
         }
         const diff = parseFloat(ln.difference)
         const isIn = diff > 0
+        // Costo efectivo: el de sistema si existe; si el artículo no tiene costo
+        // (system_avg_cost=0) se usa el costo capturado a mano (mig 217). Así el
+        // ajuste de cierre queda valuado en vez de en $0.
+        const sysCost = parseFloat(ln.system_avg_cost)
+        const effCost = sysCost > 0 ? sysCost : parseFloat(ln.captured_unit_cost || 0)
         linesByWarehouse.get(ln.warehouse_id).push({
           itemType:  ln.item_type,
           itemId:    ln.item_id,
           direction: isIn ? 'in' : 'out',
           quantity:  Math.abs(diff),
           unit:      ln.unit,
-          unitCost:  parseFloat(ln.system_avg_cost),
+          unitCost:  effCost,
           notes:     ln.notes
             ? `Diferencia conteo ${count.count_number}: ${ln.notes}`
             : `Diferencia detectada en conteo ${count.count_number}`,
         })
-        totalDiffValue += diff * parseFloat(ln.system_avg_cost)
+        totalDiffValue += diff * effCost
       }
 
       // Si hay más de un almacén (sólo en cierre de mes), creamos varios

@@ -20,8 +20,8 @@ const STATUS_BADGE = {
 function useCellSave(countId, lineId) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ physicalQty, notes }) =>
-      countsApi.captureLine(countId, lineId, { physicalQty, notes }),
+    mutationFn: ({ physicalQty, notes, unitCost }) =>
+      countsApi.captureLine(countId, lineId, { physicalQty, notes, unitCost }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['count', countId] })
     },
@@ -32,18 +32,28 @@ function useCellSave(countId, lineId) {
 function CaptureRow({ line, countId, readOnly }) {
   const [physical, setPhysical] = useState(line.physical_qty != null ? String(line.physical_qty) : '')
   const [notes, setNotes]       = useState(line.notes || '')
+  const [cost, setCost]         = useState(line.captured_unit_cost != null ? String(line.captured_unit_cost) : '')
   const [touched, setTouched]   = useState(false)
 
   const saveMut = useCellSave(countId, line.id)
 
+  // Artículo sin costo de sistema → se puede capturar un costo manual para valuar
+  // el ajuste (mig 217). Si ya tiene costo promedio, no se toca (candado backend).
+  const isZeroCost   = parseFloat(line.system_avg_cost) === 0
+  const effectiveCost = isZeroCost
+    ? (cost !== '' ? parseFloat(cost) : 0)
+    : parseFloat(line.system_avg_cost)
+
   const diff = physical !== '' ? parseFloat(physical) - parseFloat(line.system_qty) : null
-  const diffValue = diff != null ? diff * parseFloat(line.system_avg_cost) : null
+  const diffValue = diff != null ? diff * effectiveCost : null
 
   function handleBlur() {
     if (!touched) return
     saveMut.mutate({
       physicalQty: physical === '' ? null : parseFloat(physical),
       notes:       notes,
+      // Solo mandamos costo en artículos sin costo de sistema (candado backend).
+      unitCost:    isZeroCost ? (cost === '' ? null : parseFloat(cost)) : undefined,
     })
     setTouched(false)
   }
@@ -94,7 +104,26 @@ function CaptureRow({ line, countId, readOnly }) {
         ) : <span className="text-ink-muted">—</span>}
       </td>
       <td className="text-right tabular-nums text-xs hidden sm:table-cell">
-        {diffValue != null && physical !== '' && diff !== 0 ? (
+        {isZeroCost && !readOnly ? (
+          <div className="flex flex-col items-end gap-0.5">
+            <input
+              type="number"
+              step="0.0001"
+              min="0"
+              className="input input-sm w-[96px] tabular-nums text-right"
+              placeholder="$ costo/u"
+              value={cost}
+              onChange={e => { setCost(e.target.value); setTouched(true) }}
+              onBlur={handleBlur}
+              title="Este artículo no tiene costo en el sistema. Captura su costo unitario para valuar el ajuste; si lo dejas vacío, el ajuste vale $0."
+            />
+            {diffValue != null && physical !== '' && diff !== 0 && cost !== '' && (
+              <span className={diffValue >= 0 ? 'text-status-success' : 'text-status-danger'}>
+                {fmtMXN(diffValue)}
+              </span>
+            )}
+          </div>
+        ) : diffValue != null && physical !== '' && diff !== 0 ? (
           <span className={diffValue >= 0 ? 'text-status-success' : 'text-status-danger'}>
             {fmtMXN(diffValue)}
           </span>
@@ -205,8 +234,11 @@ export default function ConteoDetalle() {
     const diffLines = count.lines.filter(l =>
       l.physical_qty != null && parseFloat(l.physical_qty) !== parseFloat(l.system_qty)
     )
-    const totalDiffValue = diffLines.reduce((sum, l) =>
-      sum + (parseFloat(l.physical_qty) - parseFloat(l.system_qty)) * parseFloat(l.system_avg_cost), 0)
+    const totalDiffValue = diffLines.reduce((sum, l) => {
+      const sys = parseFloat(l.system_avg_cost)
+      const eff = sys > 0 ? sys : parseFloat(l.captured_unit_cost || 0)
+      return sum + (parseFloat(l.physical_qty) - parseFloat(l.system_qty)) * eff
+    }, 0)
     return {
       total: count.lines.length,
       pending,
