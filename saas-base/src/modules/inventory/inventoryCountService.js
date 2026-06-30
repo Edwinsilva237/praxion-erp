@@ -15,9 +15,29 @@ async function nextCountNumber(client, tenantId, type) {
   const yyyymm = now.toISOString().slice(0, 7).replace('-', '')
   const suffix = type === 'month_close' ? 'CM' : null
 
-  // Para month_close: solo puede haber UNO por mes (folio CONT-YYYYMM-CM)
+  // Para month_close el folio base es CONT-YYYYMM-CM. La regla de negocio "un
+  // cierre de mes ACTIVO por mes" se garantiza aparte (chequeo de status en
+  // createCount); el folio solo necesita ser ÚNICO (constraint ic_number_tenant).
+  // Si ya existe un CM de este mes (p. ej. uno CANCELADO o ya APLICADO), el folio
+  // base está ocupado → usar sufijo incremental (CM-2, CM-3…). Sin esto, recrear
+  // un cierre tras cancelar el anterior chocaba con el UNIQUE → "Internal server
+  // error" (23505).
   if (suffix === 'CM') {
-    return `CONT-${yyyymm}-CM`
+    const base = `CONT-${yyyymm}-CM`
+    const { rows } = await client.query(
+      `SELECT count_number FROM inventory_counts
+        WHERE tenant_id = $1
+          AND count_type = 'month_close'
+          AND count_number LIKE $2`,
+      [tenantId, `${base}%`]
+    )
+    if (rows.length === 0) return base
+    let max = 1
+    for (const r of rows) {
+      const m = r.count_number.match(/-CM-(\d+)$/)
+      if (m) max = Math.max(max, parseInt(m[1]))
+    }
+    return `${base}-${max + 1}`
   }
 
   // Para cyclic: contador incremental dentro del mes
