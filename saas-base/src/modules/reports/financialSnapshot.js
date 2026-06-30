@@ -48,8 +48,13 @@ async function getSalesSnapshot(tenantId, from, to) {
   `, [tenantId, from, to])
 
   // SIN FACTURAR: remisiones entregadas en el mes que NO terminaron en
-  // factura timbrada. Evita doble conteo: si la remisión generó factura
-  // (delivery_note_id apunta a ella) ya cuenta en "invoiced".
+  // factura timbrada. Evita doble conteo de DOS formas en que una remisión
+  // puede quedar facturada:
+  //   1) Factura INDIVIDUAL → inv.delivery_note_id apunta a la remisión.
+  //   2) Factura CONSOLIDADA (varias remisiones en una) → deja delivery_note_id
+  //      en NULL y la liga vive en invoice_remissions (mig 190). Sin este
+  //      segundo NOT EXISTS las remisiones consolidadas se contaban en
+  //      "invoiced" (vía su factura) Y otra vez en "uninvoiced" → total inflado.
   const { rows: dnRows } = await query(`
     SELECT
       COALESCE(SUM(dn.total_mxn), 0)::numeric AS total_uninvoiced,
@@ -62,6 +67,12 @@ async function getSalesSnapshot(tenantId, from, to) {
         SELECT 1 FROM invoices inv
          WHERE inv.tenant_id = $1
            AND inv.delivery_note_id = dn.id
+           AND inv.status = 'stamped'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM invoice_remissions ir
+          JOIN invoices inv ON inv.id = ir.invoice_id
+         WHERE ir.delivery_note_id = dn.id
            AND inv.status = 'stamped'
       )
   `, [tenantId, from, to])

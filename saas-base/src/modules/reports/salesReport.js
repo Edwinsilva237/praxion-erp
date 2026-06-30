@@ -12,6 +12,43 @@ const { query } = require('../../db')
 
 const COST_WINDOW_DAYS = 60
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Predicados "¿esta remisión/línea ya está facturada?" — reutilizables.
+//
+// Una remisión puede quedar facturada de DOS formas y ambas deben contar como
+// "facturada", o la consolidada se misclasifica como "sin factura":
+//   1) Factura INDIVIDUAL: liga directa (invoices.delivery_note_id = dn.id) y,
+//      a nivel de línea, invoice_lines.delivery_note_line_id = dnl.id.
+//   2) Factura CONSOLIDADA: deja delivery_note_id en NULL y NO guarda
+//      delivery_note_line_id en sus líneas; la única liga es invoice_remissions
+//      (mig 190). Sin chequear esa tabla, sus remisiones salían como "sin factura".
+//
+// LINE_INVOICED: a nivel de LÍNEA de remisión (dnl). Requiere `dnl` en scope.
+// DN_HAS_INVOICE: a nivel de REMISIÓN (dn). Requiere `dn` en scope. $1 = tenant.
+// ─────────────────────────────────────────────────────────────────────────────
+const LINE_INVOICED = `(
+  EXISTS (
+    SELECT 1 FROM invoice_lines il
+     JOIN invoices inv ON inv.id = il.invoice_id
+     WHERE il.delivery_note_line_id = dnl.id AND inv.status = 'stamped'
+  ) OR EXISTS (
+    SELECT 1 FROM invoice_remissions ir
+     JOIN invoices inv2 ON inv2.id = ir.invoice_id
+     WHERE ir.delivery_note_id = dnl.delivery_note_id AND inv2.status = 'stamped'
+  )
+)`
+
+const DN_HAS_INVOICE = `(
+  EXISTS (
+    SELECT 1 FROM invoices inv
+     WHERE inv.tenant_id = $1 AND inv.delivery_note_id = dn.id AND inv.status = 'stamped'
+  ) OR EXISTS (
+    SELECT 1 FROM invoice_remissions ir
+     JOIN invoices inv2 ON inv2.id = ir.invoice_id
+     WHERE ir.delivery_note_id = dn.id AND inv2.status = 'stamped'
+  )
+)`
+
 /**
  * Vista completa del reporte de ventas en un periodo.
  *
@@ -126,16 +163,8 @@ async function getByCustomer(tenantId, from, to, costMap) {
     SELECT bp.id AS partner_id, bp.name AS partner_name, bp.tax_name AS partner_legal_name,
            bp.rfc AS partner_rfc,
            SUM(dnl.subtotal)::numeric AS revenue,
-           SUM(CASE WHEN EXISTS (
-             SELECT 1 FROM invoice_lines il
-              JOIN invoices inv ON inv.id = il.invoice_id
-              WHERE il.delivery_note_line_id = dnl.id AND inv.status = 'stamped'
-           ) THEN dnl.subtotal ELSE 0 END)::numeric AS invoiced_revenue,
-           SUM(CASE WHEN NOT EXISTS (
-             SELECT 1 FROM invoice_lines il
-              JOIN invoices inv ON inv.id = il.invoice_id
-              WHERE il.delivery_note_line_id = dnl.id AND inv.status = 'stamped'
-           ) THEN dnl.subtotal ELSE 0 END)::numeric AS uninvoiced_revenue,
+           SUM(CASE WHEN ${LINE_INVOICED} THEN dnl.subtotal ELSE 0 END)::numeric AS invoiced_revenue,
+           SUM(CASE WHEN NOT (${LINE_INVOICED}) THEN dnl.subtotal ELSE 0 END)::numeric AS uninvoiced_revenue,
            COUNT(DISTINCT dn.id)::int AS deliveries,
            json_agg(json_build_object(
              'product_id', dnl.product_id,
@@ -192,16 +221,8 @@ async function getByProduct(tenantId, from, to, costMap) {
            SUM(dnl.quantity_delivered)::numeric AS qty_sold,
            SUM(dnl.quantity_base)::numeric      AS qty_base,
            SUM(dnl.subtotal)::numeric           AS revenue,
-           SUM(CASE WHEN EXISTS (
-             SELECT 1 FROM invoice_lines il
-              JOIN invoices inv ON inv.id = il.invoice_id
-              WHERE il.delivery_note_line_id = dnl.id AND inv.status = 'stamped'
-           ) THEN dnl.subtotal ELSE 0 END)::numeric AS invoiced_revenue,
-           SUM(CASE WHEN NOT EXISTS (
-             SELECT 1 FROM invoice_lines il
-              JOIN invoices inv ON inv.id = il.invoice_id
-              WHERE il.delivery_note_line_id = dnl.id AND inv.status = 'stamped'
-           ) THEN dnl.subtotal ELSE 0 END)::numeric AS uninvoiced_revenue,
+           SUM(CASE WHEN ${LINE_INVOICED} THEN dnl.subtotal ELSE 0 END)::numeric AS invoiced_revenue,
+           SUM(CASE WHEN NOT (${LINE_INVOICED}) THEN dnl.subtotal ELSE 0 END)::numeric AS uninvoiced_revenue,
            AVG(dnl.unit_price)::numeric         AS avg_price,
            COUNT(*)::int                         AS line_count
       FROM delivery_note_lines dnl
@@ -450,10 +471,7 @@ async function getCustomerDetail(tenantId, partnerId, from, to) {
   const { rows: deliveries } = await query(`
     SELECT dn.id, dn.document_number, dn.delivered_at, dn.issue_date,
            dn.total_mxn, dn.status, dn.no_invoice,
-           EXISTS (SELECT 1 FROM invoices inv
-                    WHERE inv.tenant_id = $1
-                      AND inv.delivery_note_id = dn.id
-                      AND inv.status = 'stamped') AS has_invoice
+           ${DN_HAS_INVOICE} AS has_invoice
       FROM delivery_notes dn
      WHERE dn.tenant_id = $1
        AND dn.partner_id = $2
@@ -476,10 +494,7 @@ async function getProductDetail(tenantId, productId, from, to) {
            bp.name AS partner_name,
            SUM(dnl.subtotal)::numeric AS subtotal,
            SUM(dnl.quantity_delivered)::numeric AS qty,
-           EXISTS (SELECT 1 FROM invoices inv
-                    WHERE inv.tenant_id = $1
-                      AND inv.delivery_note_id = dn.id
-                      AND inv.status = 'stamped') AS has_invoice
+           ${DN_HAS_INVOICE} AS has_invoice
       FROM delivery_note_lines dnl
       JOIN delivery_notes dn ON dn.id = dnl.delivery_note_id
       JOIN business_partners bp ON bp.id = dn.partner_id
