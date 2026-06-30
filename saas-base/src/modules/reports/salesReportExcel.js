@@ -6,6 +6,7 @@
 
 const ExcelJS = require('exceljs')
 const { getSalesReport, getSalesReconciliation, getCxcIntegrity } = require('./salesReport')
+const { getSalesSnapshot } = require('./financialSnapshot')
 
 async function generateSalesWorkbook({ tenantId, from, to, tenantName }) {
   const wb = new ExcelJS.Workbook()
@@ -15,8 +16,11 @@ async function generateSalesWorkbook({ tenantId, from, to, tenantName }) {
   const data      = await getSalesReport({ tenantId, from, to })
   const recon     = await getSalesReconciliation({ tenantId, from, to })
   const integrity = await getCxcIntegrity({ tenantId })
+  // Mismo método que el dashboard para el total de "Ventas del periodo".
+  const snap     = await getSalesSnapshot(tenantId, from, to)
+  const snapPrev = await getSalesSnapshot(tenantId, data.period.previous.from, data.period.previous.to)
 
-  addResumenSheet(wb, { from, to, tenantName, data })
+  addResumenSheet(wb, { from, to, tenantName, data, snap, snapPrev })
   addClientesSheet(wb, data)
   addProductosSheet(wb, data)
   addEsquinerosSheet(wb, data)
@@ -38,7 +42,7 @@ function styleHeader(ws) {
   ws.autoFilter = { from: 'A1', to: { row: 1, column: ws.columns.length } }
 }
 
-function addResumenSheet(wb, { from, to, tenantName, data }) {
+function addResumenSheet(wb, { from, to, tenantName, data, snap, snapPrev }) {
   const ws = wb.addWorksheet('Resumen')
   ws.columns = [{ width: 42 }, { width: 22 }, { width: 22 }]
   ws.addRow([`Reporte de Ventas — ${tenantName}`]).font = { bold: true, size: 16 }
@@ -46,32 +50,43 @@ function addResumenSheet(wb, { from, to, tenantName, data }) {
   ws.addRow([])
 
   const c = data.totals_current
-  const p = data.totals_previous
-  const delta = c.revenue - p.revenue
-  const deltaPct = p.revenue > 0 ? (delta / p.revenue) * 100 : null
+  // VENTAS con el MISMO método que el dashboard: Facturado (con IVA) + Sin factura.
+  const total     = snap.total
+  const prevTotal = snapPrev ? snapPrev.total : 0
+  const delta     = total - prevTotal
+  const deltaPct  = prevTotal > 0 ? (delta / prevTotal) * 100 : null
 
-  row(ws, '— VENTAS —', null, null, { bold: true })
-  row(ws, 'Total del periodo',           c.revenue,           'currency')
-  row(ws, 'Total periodo anterior',      p.revenue,           'currency')
-  row(ws, 'Diferencia',                  delta,               'currency',
+  row(ws, '— VENTAS DEL PERIODO (mismo método que el dashboard) —', null, null, { bold: true })
+  row(ws, 'Total del periodo',           total,                'currency', { bold: true })
+  row(ws, '   · Facturado (con IVA)',    snap.invoiced,        'currency')
+  row(ws, '        — Subtotal (sin IVA)', snap.invoiced_subtotal, 'currency')
+  row(ws, '        — IVA',               snap.invoiced_iva,    'currency')
+  row(ws, '   · Sin factura (remisiones)', snap.uninvoiced,    'currency')
+  row(ws, 'Total periodo anterior',      prevTotal,            'currency')
+  row(ws, 'Diferencia',                  delta,                'currency',
       { color: delta > 0 ? 'FF166534' : delta < 0 ? 'FF991B1B' : 'FF606060' })
   if (deltaPct != null) row(ws, '% cambio', deltaPct / 100, 'pct')
+  row(ws, `Facturas: ${snap.count_invoiced}  ·  Remisiones sin factura: ${snap.count_uninvoiced}`, null, null,
+      { color: 'FF808080' })
   ws.addRow([])
 
-  row(ws, '— OPERACIÓN —', null, null, { bold: true })
+  row(ws, '— ANÁLISIS OPERATIVO (remisiones entregadas · sin IVA) —', null, null, { bold: true })
+  row(ws, 'Remisionado del periodo',     c.revenue,           'currency')
   row(ws, 'Entregas (remisiones)',       c.deliveries,        'count')
   row(ws, 'Clientes únicos',             c.customers,         'count')
   row(ws, 'Productos vendidos',          data.by_product.length, 'count')
   ws.addRow([])
 
-  row(ws, '— UTILIDAD ESTIMADA —', null, null, { bold: true })
-  row(ws, 'Ventas',                      c.revenue,           'currency')
+  row(ws, '— UTILIDAD ESTIMADA (sobre lo remisionado) —', null, null, { bold: true })
+  row(ws, 'Remisionado',                 c.revenue,           'currency')
   row(ws, 'Costo estimado',              c.estimated_cost,    'currency')
   row(ws, 'Utilidad bruta',              c.estimated_margin,  'currency',
       { color: c.estimated_margin > 0 ? 'FF166534' : 'FF991B1B', bold: true })
   row(ws, 'Margen',                      c.margin_pct / 100,  'pct')
   ws.addRow([])
 
+  ws.addRow(['Nota: "Ventas del periodo" usa el método del dashboard (facturado con IVA + remisiones sin factura). El bloque']).font = { italic: true, size: 9, color: { argb: 'FF808080' } }
+  ws.addRow(['operativo y el detalle por cliente/producto son sobre remisiones entregadas (sin IVA); la pestaña "Conciliación" explica la diferencia.']).font = { italic: true, size: 9, color: { argb: 'FF808080' } }
   ws.addRow([`Generado: ${new Date().toLocaleString('es-MX')} · Costos: promedio de últimos ${data.cost_window_days} días`])
     .font = { italic: true, size: 9, color: { argb: 'FF808080' } }
 }

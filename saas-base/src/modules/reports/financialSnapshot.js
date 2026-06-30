@@ -187,4 +187,6 @@ function monthRange(month) {
   return { from: fmt(from), to: fmt(to), label: `${year}-${String(mIdx + 1).padStart(2, '0')}` }
 }
 
-module.exports = { getFinancialSnapshot }
+// getSalesSnapshot se exporta para que el PDF y el Excel de ventas usen
+// EXACTAMENTE el mismo método que el dashboard (mismo total facturado+sin factura).
+module.exports = { getFinancialSnapshot, getSalesSnapshot }

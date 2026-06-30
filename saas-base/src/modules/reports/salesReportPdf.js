@@ -15,6 +15,7 @@
 
 const PDFDocument = require('pdfkit')
 const { getSalesReport } = require('./salesReport')
+const { getSalesSnapshot } = require('./financialSnapshot')
 const storage = require('../../utils/storage')
 const { query } = require('../../db')
 const { addPraxionFooterAllPagesPDF } = require('../../utils/praxionWitnessMark')
@@ -44,6 +45,9 @@ async function generateSalesPdf({ tenantId, from, to }) {
   const logoBuffer  = t.logo_storage_path ? await storage.fetchBuffer(t.logo_storage_path) : null
 
   const data = await getSalesReport({ tenantId, from, to })
+  // Mismo método que el dashboard: Facturado (con IVA) + Sin factura.
+  const snap     = await getSalesSnapshot(tenantId, from, to)
+  const snapPrev = await getSalesSnapshot(tenantId, data.period.previous.from, data.period.previous.to)
 
   const doc = new PDFDocument({
     size: 'LETTER', margin: MARGIN, info: {
@@ -63,7 +67,7 @@ async function generateSalesPdf({ tenantId, from, to }) {
 
   // Página 2+: resumen ejecutivo
   newContentPage(doc, ctx)
-  drawKpis(doc, data, primary, secondary)
+  drawKpis(doc, data, primary, secondary, snap, snapPrev)
 
   // Desglose por cliente (TODOS)
   drawCustomerTable(doc, ctx, data)
@@ -134,9 +138,10 @@ function drawCover(doc, { tenantName, from, to, primary, secondary, logoBuffer }
 
   // Nota metodológica en la portada (transparencia de las cifras).
   doc.fillColor(SUB).font('Helvetica').fontSize(9)
-     .text('Las cifras de "Ventas" corresponden al subtotal SIN IVA de las remisiones entregadas en el periodo. '
-         + '"En factura" es la parte ya amparada por un CFDI timbrado (incluye facturas consolidadas); '
-         + '"Sin factura" es la pendiente de timbrar. La utilidad usa costo promedio ponderado y es estimada.',
+     .text('"Ventas del periodo" usa el MISMO método que el dashboard: Facturado (facturas timbradas en el periodo, CON IVA) + '
+         + 'Sin factura (remisiones entregadas aún no facturadas). El detalle por cliente/producto y la utilidad son un análisis '
+         + 'OPERATIVO sobre las remisiones entregadas (subtotal sin IVA) y pueden no sumar el total de arriba; la pestaña '
+         + '"Conciliación" del Excel explica la diferencia. La utilidad usa costo promedio ponderado y es estimada.',
        40, 300, { width: W - 80, align: 'left', lineGap: 2 })
 
   doc.fillColor(SUB).font('Helvetica').fontSize(9)
@@ -162,27 +167,28 @@ function drawHeader(doc, { tenantName, primary, logoBuffer }) {
 }
 
 // ─── KPIs grandes ───────────────────────────────────────────────────────────
-function drawKpis(doc, data, primary, secondary) {
+// El ENCABEZADO usa el MISMO método que el dashboard (snapshot): Ventas del
+// periodo = Facturado (facturas timbradas, CON IVA) + Sin factura (remisiones no
+// facturadas). El detalle por cliente/producto/margen de abajo es por remisión
+// entregada (sin IVA) — análisis operativo; ver la pestaña Conciliación del Excel.
+function drawKpis(doc, data, primary, secondary, snap, snapPrev) {
   const c = data.totals_current
-  const p = data.totals_previous
-  const delta = c.revenue - p.revenue
-  const deltaPct = p.revenue > 0 ? (delta / p.revenue) * 100 : null
-
-  // Facturado vs sin factura (sumados del desglose por cliente, ya corregido p/ consolidadas).
-  const invoiced   = (data.by_customer || []).reduce((s, x) => s + (x.invoiced_revenue   || 0), 0)
-  const uninvoiced = (data.by_customer || []).reduce((s, x) => s + (x.uninvoiced_revenue || 0), 0)
+  const total     = snap.total
+  const prevTotal = snapPrev ? snapPrev.total : 0
+  const delta     = total - prevTotal
+  const deltaPct  = prevTotal > 0 ? (delta / prevTotal) * 100 : null
 
   sectionTitle(doc, 'RESUMEN EJECUTIVO', primary)
   doc.fillColor(INK).font('Helvetica-Bold').fontSize(22)
      .text('Ventas del periodo', MARGIN, doc.y)
   doc.fillColor(SUB).font('Helvetica').fontSize(8)
-     .text('Remisionado, subtotal sin IVA', MARGIN, doc.y + 2)
+     .text('Facturado (con IVA) + por facturar — mismo método que el dashboard', MARGIN, doc.y + 2)
   doc.moveDown(0.6)
 
   doc.fillColor(primary).font('Helvetica-Bold').fontSize(40)
-     .text(fmtMXNf(c.revenue), MARGIN, doc.y)
+     .text(fmtMXNf(total), MARGIN, doc.y)
 
-  if (p.revenue > 0) {
+  if (prevTotal > 0) {
     const arrow = delta > 0 ? '▲' : delta < 0 ? '▼' : '='
     const color = delta > 0 ? POS : delta < 0 ? NEG : SUB
     doc.fillColor(color).font('Helvetica-Bold').fontSize(11)
@@ -191,19 +197,28 @@ function drawKpis(doc, data, primary, secondary) {
   doc.moveDown(1.0)
 
   const cards = [
-    { label: 'En factura',     value: fmtMXN(invoiced),   accent: primary },
-    { label: 'Sin factura',    value: fmtMXN(uninvoiced), accent: uninvoiced > 0 ? '#B45309' : SUB },
-    { label: 'Entregas',       value: fmtNum(c.deliveries) },
-    { label: 'Clientes',       value: fmtNum(c.customers) },
+    { label: 'Facturado (con IVA)', value: fmtMXN(snap.invoiced),   accent: primary },
+    { label: 'Sin factura',         value: fmtMXN(snap.uninvoiced), accent: snap.uninvoiced > 0 ? '#B45309' : SUB },
+    { label: 'Facturas',            value: fmtNum(snap.count_invoiced) },
+    { label: 'Remisiones s/factura',value: fmtNum(snap.count_uninvoiced) },
   ]
   drawKpiGrid(doc, cards)
-  doc.moveDown(0.5)
 
+  // Desglose del IVA del facturado (igual que el dashboard).
+  doc.fillColor(SUB).font('Helvetica').fontSize(8)
+     .text(`Facturado: subtotal ${fmtMXNf(snap.invoiced_subtotal)} + IVA ${fmtMXNf(snap.invoiced_iva)}`,
+       MARGIN, doc.y + 2)
+  doc.moveDown(1.0)
+
+  // Análisis operativo (sobre remisiones entregadas, sin IVA).
+  doc.fillColor(SUB).font('Helvetica-Bold').fontSize(8)
+     .text('ANÁLISIS OPERATIVO · remisiones entregadas en el periodo (sin IVA)', MARGIN, doc.y, { characterSpacing: 1 })
+  doc.moveDown(0.4)
   const cards2 = [
+    { label: 'Remisionado',    value: fmtMXN(c.revenue) },
     { label: 'Utilidad bruta', value: fmtMXN(c.estimated_margin), accent: c.estimated_margin >= 0 ? primary : NEG },
     { label: 'Margen %',       value: fmtPct(c.margin_pct), accent: c.margin_pct > 20 ? primary : c.margin_pct < 0 ? NEG : SUB },
-    { label: 'Costo estimado', value: fmtMXN(c.estimated_cost) },
-    { label: 'Ticket prom.',   value: fmtMXN(c.deliveries > 0 ? c.revenue / c.deliveries : 0) },
+    { label: 'Entregas',       value: fmtNum(c.deliveries) },
   ]
   drawKpiGrid(doc, cards2)
 
