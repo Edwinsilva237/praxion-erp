@@ -6,7 +6,6 @@
 
 const ExcelJS = require('exceljs')
 const { getSalesReport, getSalesReconciliation, getCxcIntegrity } = require('./salesReport')
-const { getSalesSnapshot } = require('./financialSnapshot')
 
 async function generateSalesWorkbook({ tenantId, from, to, tenantName }) {
   const wb = new ExcelJS.Workbook()
@@ -16,9 +15,9 @@ async function generateSalesWorkbook({ tenantId, from, to, tenantName }) {
   const data      = await getSalesReport({ tenantId, from, to })
   const recon     = await getSalesReconciliation({ tenantId, from, to })
   const integrity = await getCxcIntegrity({ tenantId })
-  // Mismo método que el dashboard para el total de "Ventas del periodo".
-  const snap     = await getSalesSnapshot(tenantId, from, to)
-  const snapPrev = await getSalesSnapshot(tenantId, data.period.previous.from, data.period.previous.to)
+  // Mismo método que el dashboard (lo devuelve getSalesReport).
+  const snap     = data.sales_snapshot
+  const snapPrev = data.sales_snapshot_prev
 
   addResumenSheet(wb, { from, to, tenantName, data, snap, snapPrev })
   addClientesSheet(wb, data)
@@ -217,8 +216,8 @@ function addConciliacionSheet(wb, { from, to, recon, integrity }) {
   ws.addRow([`Periodo: ${from} al ${toInclStr}`]).font = { italic: true, color: { argb: 'FF606060' } }
   ws.addRow([])
 
-  // ── A) Reporte ──
-  crow(ws, '— REPORTE (remisiones entregadas en el periodo · SIN IVA) —', null, { bold: true })
+  // ── A) Remisionado (análisis operativo) ──
+  crow(ws, '— REMISIONADO · análisis operativo (remisiones entregadas en el periodo · SIN IVA) —', null, { bold: true })
   crow(ws, 'Ventas remisionadas (sin IVA)',          r.total,      { bold: true })
   crow(ws, '   · Facturado (sin IVA)',               r.invoiced)
   crow(ws, '   · Sin factura (sin IVA)',             r.uninvoiced)

@@ -285,17 +285,23 @@ export default function ReportesVentas() {
 // ── Resumen ─────────────────────────────────────────────────────────────────
 function ResumenTab({ data }) {
   const cur = data.totals_current
-  const prev = data.totals_previous
-  const dRev = cur.revenue - prev.revenue
-  const dPct = prev.revenue > 0 ? (dRev / prev.revenue) * 100 : null
+  // Mismo método/total que el dashboard (Facturado con IVA + Sin factura).
+  const snap = data.sales_snapshot || { total: cur.revenue, invoiced: 0, invoiced_subtotal: 0, invoiced_iva: 0, uninvoiced: 0 }
+  const prevTotal = data.sales_snapshot_prev?.total || 0
+  const dRev = snap.total - prevTotal
+  const dPct = prevTotal > 0 ? (dRev / prevTotal) * 100 : null
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      {/* KPI: ventas y comparativa */}
+      {/* KPI: ventas y comparativa — mismo método que el dashboard */}
       <div className="card md:col-span-2">
         <p className="eyebrow">VENTAS DEL PERIODO</p>
-        <div className="text-3xl font-bold text-ink-primary mt-1 tabular-nums">{fmtMXNf(cur.revenue)}</div>
-        {prev.revenue > 0 && (
+        <div className="text-3xl font-bold text-ink-primary mt-1 tabular-nums">{fmtMXNf(snap.total)}</div>
+        <p className="text-[11px] text-ink-muted mt-1 tabular-nums">
+          Facturado {fmtMXN(snap.invoiced)} <span className="opacity-70">(subtotal {fmtMXN(snap.invoiced_subtotal)} · IVA {fmtMXN(snap.invoiced_iva)})</span>
+          {' · '}Sin factura {fmtMXN(snap.uninvoiced)}
+        </p>
+        {prevTotal > 0 && (
           <p className={clsx('text-xs mt-1',
             dRev > 0 ? 'text-status-success' : dRev < 0 ? 'text-status-danger' : 'text-ink-muted')}>
             {dRev > 0 ? '▲' : dRev < 0 ? '▼' : '='} {fmtMXN(Math.abs(dRev))}
@@ -303,16 +309,15 @@ function ResumenTab({ data }) {
           </p>
         )}
         <div className="grid grid-cols-3 gap-4 mt-5 pt-4 border-t border-line-subtle">
-          <KpiMini label="Entregas"  value={cur.deliveries} />
+          <KpiMini label="Operaciones"  value={cur.deliveries} />
           <KpiMini label="Clientes" value={cur.customers} />
           <KpiMini label="Margen est." value={fmtPct(cur.margin_pct)}
             tone={cur.margin_pct > 20 ? 'success' : cur.margin_pct > 0 ? 'neutral' : 'danger'} />
         </div>
-        {!cur.cost_complete && (
-          <p className="text-[10px] text-ink-muted mt-2">
-            Algunos productos no tienen costo histórico — el margen real puede ser mayor.
-          </p>
-        )}
+        <p className="text-[10px] text-ink-muted mt-2">
+          Listas por cliente/producto y margen son sin IVA y suman {fmtMXN(cur.revenue)} (total sin IVA).
+          {!cur.cost_complete && ' Algunos productos no tienen costo histórico — el margen real puede ser mayor.'}
+        </p>
       </div>
 
       {/* Top 5 clientes */}

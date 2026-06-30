@@ -9,6 +9,7 @@
 // el costo queda NULL y la utilidad como "n/d".
 
 const { query } = require('../../db')
+const { getSalesSnapshot } = require('./financialSnapshot')
 
 const COST_WINDOW_DAYS = 60
 
@@ -82,59 +83,250 @@ async function getSalesReport({ tenantId, from, to }) {
   // El "periodo previo" para comparativa: mismo número de días antes.
   const prev = previousPeriod(from, to)
 
-  // Costos: primero traemos los IDs de producto que aparecieron en el periodo
-  // para optimizar el cálculo (no calcular costos de productos que no se vendieron).
-  const productIdsInPeriod = await getProductIdsInPeriod(tenantId, from, to)
-  const costMap = await getProductCostMap(tenantId, productIdsInPeriod)
+  // UNIVERSO de ventas del periodo, MISMO método que el dashboard (sin IVA):
+  // líneas de facturas timbradas (facturado) + líneas de remisiones NO facturadas
+  // (sin factura). Cada venta UNA sola vez. De aquí se derivan todas las vistas,
+  // así el reporte por cliente/producto suma al total del dashboard (sin IVA) y el
+  // margen sigue siendo precio − costo por producto, sea anticipado o no.
+  const universe = await getSalesUniverse(tenantId, from, to)
+  const productIds = [...new Set(universe.map(r => r.product_id).filter(Boolean))]
+  const costMap = await getProductCostMap(tenantId, productIds)
 
-  const [
-    byCustomer,
-    byProduct,
-    topCustomers,
-    negativeMargins,
-    currentTotals,
-    previousTotals,
-    weeklyTrend,
-  ] = await Promise.all([
-    getByCustomer(tenantId, from, to, costMap),
-    getByProduct(tenantId, from, to, costMap),
-    getTopCustomers(tenantId, from, to),
-    getNegativeMargins(tenantId, from, to, costMap),
-    getPeriodTotals(tenantId, from, to, costMap),
-    getPeriodTotals(tenantId, prev.from, prev.to, costMap),
-    getWeeklyTrend(tenantId, from, to),
-  ])
+  const agg          = buildAggregates(universe, costMap)
+  const weeklyTrend  = computeWeeklyTrend(universe)
+  const prevRevenue  = await getPeriodRevenue(tenantId, prev.from, prev.to)
+
+  // Snapshot del DASHBOARD (mismo método, CON IVA desglosado). Se devuelve aquí
+  // para que pantalla/PDF/Excel muestren TODOS el mismo total del dashboard.
+  const snap     = await getSalesSnapshot(tenantId, from, to)
+  const snapPrev = await getSalesSnapshot(tenantId, prev.from, prev.to)
 
   return {
     period: { from, to, previous: prev },
     cost_window_days: COST_WINDOW_DAYS,
-    totals_current:   currentTotals,
-    totals_previous:  previousTotals,
-    by_customer:      byCustomer,
-    by_product:       byProduct,
-    top_customers:    topCustomers,
-    negative_margins: negativeMargins,
+    sales_snapshot:      snap,
+    sales_snapshot_prev: snapPrev,
+    totals_current:   agg.totals,
+    totals_previous:  { revenue: prevRevenue, estimated_cost: 0, estimated_margin: 0,
+                        margin_pct: 0, deliveries: 0, customers: 0, cost_complete: true },
+    by_customer:      agg.byCustomer,
+    by_product:       agg.byProduct,
+    top_customers:    agg.byCustomer.slice(0, 5).map(c => ({
+                        partner_id: c.partner_id, partner_name: c.partner_name,
+                        partner_legal_name: c.partner_legal_name,
+                        revenue: c.revenue, deliveries: c.deliveries })),
+    negative_margins: agg.negativeMargins,
     weekly_trend:     weeklyTrend,
     generated_at:     new Date().toISOString(),
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Universo de ventas del periodo (sin IVA, método dashboard, sin doble conteo)
+// ─────────────────────────────────────────────────────────────────────────────
+async function getSalesUniverse(tenantId, from, to) {
+  const { rows } = await query(`
+    WITH uni AS (
+      -- FACTURADO: líneas de facturas de ingreso timbradas en el periodo.
+      -- Subtotal MXN prorrateado (robusto a moneda y retenciones):
+      -- total_mxn × (subtotal_línea / total_factura).
+      SELECT 'facturado'::text AS src, true AS invoiced,
+             inv.id AS doc_id, inv.partner_id, il.product_id,
+             (inv.total_mxn * il.subtotal / NULLIF(inv.total, 0))::numeric AS subtotal_mxn,
+             COALESCE(il.quantity, 0)::numeric                    AS qty_sale,
+             COALESCE(il.quantity_base, il.quantity, 0)::numeric  AS qty_base,
+             il.unit_price::numeric AS unit_price,
+             to_char(inv.stamp_date, 'YYYY-MM-DD') AS eff_date
+        FROM invoice_lines il
+        JOIN invoices inv ON inv.id = il.invoice_id
+       WHERE inv.tenant_id = $1 AND inv.cfdi_type = 'I' AND inv.status = 'stamped'
+         AND inv.stamp_date >= $2 AND inv.stamp_date < $3
+      UNION ALL
+      -- SIN FACTURA: líneas de remisiones del periodo NO facturadas (3 ramas).
+      SELECT 'sin_factura'::text AS src, false AS invoiced,
+             dn.id AS doc_id, dn.partner_id, dnl.product_id,
+             dnl.subtotal::numeric AS subtotal_mxn,
+             COALESCE(dnl.quantity_delivered, 0)::numeric                    AS qty_sale,
+             COALESCE(dnl.quantity_base, dnl.quantity_delivered, 0)::numeric AS qty_base,
+             dnl.unit_price::numeric AS unit_price,
+             to_char(COALESCE(dn.delivered_at, dn.issue_date), 'YYYY-MM-DD') AS eff_date
+        FROM delivery_note_lines dnl
+        JOIN delivery_notes dn ON dn.id = dnl.delivery_note_id
+       WHERE dn.tenant_id = $1
+         AND dn.status IN ('delivered','partially_delivered','issued','sent_by_email')
+         AND COALESCE(dn.delivered_at, dn.issue_date) >= $2
+         AND COALESCE(dn.delivered_at, dn.issue_date) <  $3
+         AND NOT (${LINE_INVOICED})
+    )
+    SELECT uni.*,
+           bp.name AS partner_name, bp.tax_name AS partner_legal_name, bp.rfc AS partner_rfc,
+           p.sku, p.name AS product_name, p.type, p.length_mm, p.base_unit, p.sale_unit
+      FROM uni
+      LEFT JOIN business_partners bp ON bp.id = uni.partner_id
+      LEFT JOIN products p           ON p.id = uni.product_id
+  `, [tenantId, from, to])
+
+  return rows.map(r => ({
+    src: r.src, invoiced: r.invoiced, doc_id: r.doc_id,
+    partner_id: r.partner_id, partner_name: r.partner_name,
+    partner_legal_name: r.partner_legal_name, partner_rfc: r.partner_rfc,
+    product_id: r.product_id, sku: r.sku, product_name: r.product_name, type: r.type,
+    length_mm: r.length_mm != null ? parseFloat(r.length_mm) : null,
+    base_unit: r.base_unit, sale_unit: r.sale_unit,
+    subtotal_mxn: parseFloat(r.subtotal_mxn) || 0,
+    qty_sale: parseFloat(r.qty_sale) || 0,
+    qty_base: parseFloat(r.qty_base) || 0,
+    unit_price: parseFloat(r.unit_price) || 0,
+    eff_date: r.eff_date,
+  }))
+}
+
+// Suma total del universo (para la comparativa del periodo anterior). Liviano.
+async function getPeriodRevenue(tenantId, from, to) {
+  const { rows } = await query(`
+    SELECT (
+      COALESCE((SELECT SUM(inv.total_mxn * il.subtotal / NULLIF(inv.total, 0))
+                  FROM invoice_lines il JOIN invoices inv ON inv.id = il.invoice_id
+                 WHERE inv.tenant_id = $1 AND inv.cfdi_type = 'I' AND inv.status = 'stamped'
+                   AND inv.stamp_date >= $2 AND inv.stamp_date < $3), 0)
+      +
+      COALESCE((SELECT SUM(dnl.subtotal)
+                  FROM delivery_note_lines dnl JOIN delivery_notes dn ON dn.id = dnl.delivery_note_id
+                 WHERE dn.tenant_id = $1
+                   AND dn.status IN ('delivered','partially_delivered','issued','sent_by_email')
+                   AND COALESCE(dn.delivered_at, dn.issue_date) >= $2
+                   AND COALESCE(dn.delivered_at, dn.issue_date) <  $3
+                   AND NOT (${LINE_INVOICED})), 0)
+    )::numeric AS revenue
+  `, [tenantId, from, to])
+  return parseFloat(rows[0].revenue) || 0
+}
+
+// Agrega el universo en by_customer / by_product / totals / negative_margins (JS).
+function buildAggregates(rows, costMap) {
+  const grand = rows.reduce((s, r) => s + r.subtotal_mxn, 0)
+
+  // ── Por cliente ──
+  const custMap = new Map()
+  for (const r of rows) {
+    const key = r.partner_id || 'null'
+    let c = custMap.get(key)
+    if (!c) {
+      c = { partner_id: r.partner_id, partner_name: r.partner_name || '(sin cliente)',
+            partner_legal_name: r.partner_legal_name, partner_rfc: r.partner_rfc,
+            revenue: 0, invoiced: 0, uninvoiced: 0, cost: 0, costComplete: true, docs: new Set() }
+      custMap.set(key, c)
+    }
+    c.revenue += r.subtotal_mxn
+    if (r.invoiced) c.invoiced += r.subtotal_mxn; else c.uninvoiced += r.subtotal_mxn
+    c.docs.add(r.doc_id)
+    const cm = r.product_id ? costMap.get(r.product_id) : null
+    if (cm) c.cost += r.qty_base * cm.avg_cost
+    else if (r.qty_base > 0) c.costComplete = false
+  }
+  const byCustomer = [...custMap.values()].map(c => {
+    const margin = c.revenue - c.cost
+    return {
+      partner_id: c.partner_id, partner_name: c.partner_name,
+      partner_legal_name: c.partner_legal_name, partner_rfc: c.partner_rfc,
+      revenue: c.revenue, invoiced_revenue: c.invoiced, uninvoiced_revenue: c.uninvoiced,
+      pct_of_total: grand > 0 ? (c.revenue / grand) * 100 : 0,
+      deliveries: c.docs.size, avg_ticket: c.docs.size > 0 ? c.revenue / c.docs.size : 0,
+      estimated_cost: c.cost, estimated_margin: margin,
+      margin_pct: c.revenue > 0 ? (margin / c.revenue) * 100 : 0,
+      cost_complete: c.costComplete,
+    }
+  }).sort((a, b) => b.revenue - a.revenue)
+
+  // ── Por producto ──
+  const prodMap = new Map()
+  for (const r of rows) {
+    const key = r.product_id || 'null'
+    let p = prodMap.get(key)
+    if (!p) {
+      p = { product_id: r.product_id, sku: r.sku || '—', name: r.product_name || '(sin producto)',
+            type: r.type, length_mm: r.length_mm, base_unit: r.base_unit, sale_unit: r.sale_unit,
+            revenue: 0, invoiced: 0, uninvoiced: 0, qty_sale: 0, qty_base: 0, priceSum: 0, priceN: 0 }
+      prodMap.set(key, p)
+    }
+    p.revenue += r.subtotal_mxn
+    if (r.invoiced) p.invoiced += r.subtotal_mxn; else p.uninvoiced += r.subtotal_mxn
+    p.qty_sale += r.qty_sale
+    p.qty_base += r.qty_base
+    if (r.unit_price) { p.priceSum += r.unit_price; p.priceN++ }
+  }
+  const byProduct = [...prodMap.values()].map(p => {
+    const cm = p.product_id ? costMap.get(p.product_id) : null
+    const cost = cm ? cm.avg_cost * p.qty_base : null
+    const margin = cost !== null ? p.revenue - cost : null
+    const lengthMm = (p.length_mm && p.length_mm > 0) ? p.length_mm : null
+    const meters = lengthMm ? (p.qty_base * lengthMm) / 1000 : null
+    const looksLinear = p.type === 'corner_protector'
+    return {
+      product_id: p.product_id, sku: p.sku, name: p.name, type: p.type,
+      length_mm: lengthMm, sale_unit: p.sale_unit, base_unit: p.base_unit,
+      qty_sold: p.qty_sale, qty_base: p.qty_base,
+      revenue: p.revenue, invoiced_revenue: p.invoiced, uninvoiced_revenue: p.uninvoiced,
+      pct_of_total: grand > 0 ? (p.revenue / grand) * 100 : 0,
+      avg_price: p.priceN > 0 ? p.priceSum / p.priceN : 0,
+      unit_cost: cm ? cm.avg_cost : null,
+      estimated_cost: cost, estimated_margin: margin,
+      margin_pct: (margin !== null && p.revenue > 0) ? (margin / p.revenue) * 100 : null,
+      meters, price_per_meter: (meters && meters > 0) ? p.revenue / meters : null,
+      missing_length: looksLinear && !lengthMm,
+    }
+  }).sort((a, b) => b.revenue - a.revenue)
+
+  // ── Totales ──
+  let totalCost = 0, costComplete = true
+  for (const p of byProduct) {
+    if (p.estimated_cost !== null) totalCost += p.estimated_cost
+    else if (p.qty_base > 0) costComplete = false
+  }
+  const margin = grand - totalCost
+  const totals = {
+    revenue: grand, estimated_cost: totalCost, estimated_margin: margin,
+    margin_pct: grand > 0 ? (margin / grand) * 100 : 0,
+    deliveries: new Set(rows.map(r => r.doc_id)).size,
+    customers: new Set(rows.map(r => r.partner_id).filter(Boolean)).size,
+    cost_complete: costComplete,
+  }
+
+  // ── Alertas de margen negativo ──
+  const negativeMargins = byProduct
+    .filter(p => p.estimated_margin !== null && p.estimated_margin < 0)
+    .map(p => ({
+      product_id: p.product_id, sku: p.sku, name: p.name, type: p.type,
+      avg_price: p.avg_price, unit_cost: p.unit_cost, qty_base: p.qty_base,
+      revenue: p.revenue, cost: p.estimated_cost, loss: Math.abs(p.estimated_margin),
+    }))
+    .sort((a, b) => b.loss - a.loss)
+
+  return { byCustomer, byProduct, totals, negativeMargins }
+}
+
+// Tendencia semanal (lunes de la fecha efectiva: timbrado/entrega). JS.
+function computeWeeklyTrend(rows) {
+  const map = new Map()
+  for (const r of rows) {
+    const [y, m, d] = r.eff_date.split('-').map(Number)
+    const dt = new Date(Date.UTC(y, m - 1, d))
+    const dow = (dt.getUTCDay() + 6) % 7          // 0 = lunes
+    const monday = new Date(dt); monday.setUTCDate(dt.getUTCDate() - dow)
+    const key = monday.toISOString().slice(0, 10)
+    let w = map.get(key)
+    if (!w) { w = { week_start: key, revenue: 0, docs: new Set() }; map.set(key, w) }
+    w.revenue += r.subtotal_mxn
+    w.docs.add(r.doc_id)
+  }
+  return [...map.values()]
+    .sort((a, b) => a.week_start < b.week_start ? -1 : 1)
+    .map(w => ({ week_start: w.week_start, revenue: w.revenue, deliveries: w.docs.size }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Costos
 // ─────────────────────────────────────────────────────────────────────────────
-
-async function getProductIdsInPeriod(tenantId, from, to) {
-  const { rows } = await query(`
-    SELECT DISTINCT dnl.product_id
-      FROM delivery_note_lines dnl
-      JOIN delivery_notes dn ON dn.id = dnl.delivery_note_id
-     WHERE dn.tenant_id = $1
-       AND dn.status IN ('delivered','partially_delivered','issued','sent_by_email')
-       AND COALESCE(dn.delivered_at, dn.issue_date) >= $2
-       AND COALESCE(dn.delivered_at, dn.issue_date) <  $3
-  `, [tenantId, from, to])
-  return rows.map(r => r.product_id)
-}
 
 /**
  * Promedio ponderado de costo unitario por producto en los últimos N días.
@@ -171,276 +363,6 @@ async function getProductCostMap(tenantId, productIds) {
     })
   }
   return m
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Vistas
-// ─────────────────────────────────────────────────────────────────────────────
-
-async function getByCustomer(tenantId, from, to, costMap) {
-  // Una línea de remisión cuenta como "facturada" si tiene una invoice_line
-  // que la referencia (via delivery_note_line_id) y la factura está timbrada.
-  const { rows } = await query(`
-    SELECT bp.id AS partner_id, bp.name AS partner_name, bp.tax_name AS partner_legal_name,
-           bp.rfc AS partner_rfc,
-           SUM(dnl.subtotal)::numeric AS revenue,
-           SUM(CASE WHEN ${LINE_INVOICED} THEN dnl.subtotal ELSE 0 END)::numeric AS invoiced_revenue,
-           SUM(CASE WHEN NOT (${LINE_INVOICED}) THEN dnl.subtotal ELSE 0 END)::numeric AS uninvoiced_revenue,
-           COUNT(DISTINCT dn.id)::int AS deliveries,
-           json_agg(json_build_object(
-             'product_id', dnl.product_id,
-             'quantity',   dnl.quantity_delivered,
-             'subtotal',   dnl.subtotal
-           )) AS lines_raw
-      FROM delivery_note_lines dnl
-      JOIN delivery_notes dn ON dn.id = dnl.delivery_note_id
-      JOIN business_partners bp ON bp.id = dn.partner_id
-     WHERE dn.tenant_id = $1
-       AND dn.status IN ('delivered','partially_delivered','issued','sent_by_email')
-       AND COALESCE(dn.delivered_at, dn.issue_date) >= $2
-       AND COALESCE(dn.delivered_at, dn.issue_date) <  $3
-     GROUP BY bp.id, bp.name, bp.tax_name, bp.rfc
-     ORDER BY revenue DESC
-  `, [tenantId, from, to])
-
-  const grandTotal = rows.reduce((s, r) => s + (parseFloat(r.revenue) || 0), 0)
-
-  return rows.map(r => {
-    const revenue = parseFloat(r.revenue) || 0
-    let cost = 0
-    let costComplete = true
-    for (const l of r.lines_raw || []) {
-      const c = costMap.get(l.product_id)
-      if (c) cost += (parseFloat(l.quantity) || 0) * c.avg_cost
-      else   costComplete = false
-    }
-    const margin = revenue - cost
-    const marginPct = revenue > 0 ? (margin / revenue) * 100 : 0
-    return {
-      partner_id:         r.partner_id,
-      partner_name:       r.partner_name,
-      partner_legal_name: r.partner_legal_name,
-      partner_rfc:        r.partner_rfc,
-      revenue,
-      invoiced_revenue:   parseFloat(r.invoiced_revenue)   || 0,
-      uninvoiced_revenue: parseFloat(r.uninvoiced_revenue) || 0,
-      pct_of_total:       grandTotal > 0 ? (revenue / grandTotal) * 100 : 0,
-      deliveries:         r.deliveries,
-      avg_ticket:         r.deliveries > 0 ? revenue / r.deliveries : 0,
-      estimated_cost:     cost,
-      estimated_margin:   margin,
-      margin_pct:         marginPct,
-      cost_complete:      costComplete,
-    }
-  })
-}
-
-async function getByProduct(tenantId, from, to, costMap) {
-  const { rows } = await query(`
-    SELECT p.id AS product_id, p.sku, p.name, p.type, p.length_mm,
-           p.base_unit, p.sale_unit,
-           SUM(dnl.quantity_delivered)::numeric AS qty_sold,
-           SUM(dnl.quantity_base)::numeric      AS qty_base,
-           SUM(dnl.subtotal)::numeric           AS revenue,
-           SUM(CASE WHEN ${LINE_INVOICED} THEN dnl.subtotal ELSE 0 END)::numeric AS invoiced_revenue,
-           SUM(CASE WHEN NOT (${LINE_INVOICED}) THEN dnl.subtotal ELSE 0 END)::numeric AS uninvoiced_revenue,
-           AVG(dnl.unit_price)::numeric         AS avg_price,
-           COUNT(*)::int                         AS line_count
-      FROM delivery_note_lines dnl
-      JOIN delivery_notes dn ON dn.id = dnl.delivery_note_id
-      JOIN products p        ON p.id = dnl.product_id
-     WHERE dn.tenant_id = $1
-       AND dn.status IN ('delivered','partially_delivered','issued','sent_by_email')
-       AND COALESCE(dn.delivered_at, dn.issue_date) >= $2
-       AND COALESCE(dn.delivered_at, dn.issue_date) <  $3
-     GROUP BY p.id, p.sku, p.name, p.type, p.length_mm, p.base_unit, p.sale_unit
-     ORDER BY revenue DESC
-  `, [tenantId, from, to])
-
-  const grandTotal = rows.reduce((s, r) => s + (parseFloat(r.revenue) || 0), 0)
-
-  return rows.map(r => {
-    const c = costMap.get(r.product_id)
-    const revenue = parseFloat(r.revenue) || 0
-    const qtyBase = parseFloat(r.qty_base) || 0
-    const cost    = c ? c.avg_cost * qtyBase : null
-    const margin  = (cost !== null) ? revenue - cost : null
-    const marginPct = (margin !== null && revenue > 0) ? (margin / revenue) * 100 : null
-
-    // Metros lineales: aplica a cualquier producto con length_mm definido en el catálogo.
-    // (Antes solo se calculaba para type='corner_protector'; ahora cualquier producto
-    // con longitud capturada — esquineros, tubos, perfiles, etc.)
-    const lengthMm = r.length_mm ? parseFloat(r.length_mm) : null
-    const meters = (lengthMm && lengthMm > 0)
-      ? (qtyBase * lengthMm) / 1000
-      : null
-    const pricePerMeter = (meters && meters > 0) ? revenue / meters : null
-
-    // Flag para la UI: producto que parece ser de tipo lineal (legacy corner_protector
-    // o tiene "lineal" en el sale_unit) pero le falta length_mm en catálogo.
-    const looksLinear = r.type === 'corner_protector'
-    const missingLength = looksLinear && !lengthMm
-
-    return {
-      product_id:   r.product_id,
-      sku:          r.sku,
-      name:         r.name,
-      type:         r.type,
-      length_mm:    lengthMm,
-      sale_unit:    r.sale_unit,
-      base_unit:    r.base_unit,
-      qty_sold:     parseFloat(r.qty_sold) || 0,
-      qty_base:     qtyBase,
-      revenue,
-      invoiced_revenue:   parseFloat(r.invoiced_revenue)   || 0,
-      uninvoiced_revenue: parseFloat(r.uninvoiced_revenue) || 0,
-      pct_of_total:       grandTotal > 0 ? (revenue / grandTotal) * 100 : 0,
-      avg_price:    parseFloat(r.avg_price) || 0,
-      unit_cost:    c ? c.avg_cost : null,
-      estimated_cost:   cost,
-      estimated_margin: margin,
-      margin_pct:       marginPct,
-      meters,
-      price_per_meter:  pricePerMeter,
-      missing_length:   missingLength,
-    }
-  })
-}
-
-async function getTopCustomers(tenantId, from, to, limit = 5) {
-  const { rows } = await query(`
-    SELECT bp.id, bp.name, bp.tax_name,
-           SUM(dnl.subtotal)::numeric AS revenue,
-           COUNT(DISTINCT dn.id)::int AS deliveries
-      FROM delivery_note_lines dnl
-      JOIN delivery_notes dn    ON dn.id = dnl.delivery_note_id
-      JOIN business_partners bp ON bp.id = dn.partner_id
-     WHERE dn.tenant_id = $1
-       AND dn.status IN ('delivered','partially_delivered','issued','sent_by_email')
-       AND COALESCE(dn.delivered_at, dn.issue_date) >= $2
-       AND COALESCE(dn.delivered_at, dn.issue_date) <  $3
-     GROUP BY bp.id, bp.name, bp.tax_name
-     ORDER BY revenue DESC
-     LIMIT $4
-  `, [tenantId, from, to, limit])
-
-  return rows.map(r => ({
-    partner_id:   r.id,
-    partner_name: r.name,
-    partner_legal_name: r.tax_name,
-    revenue:      parseFloat(r.revenue) || 0,
-    deliveries:   r.deliveries,
-  }))
-}
-
-async function getNegativeMargins(tenantId, from, to, costMap) {
-  // Buscar productos del periodo cuyo margen unitario es negativo o cuyo
-  // precio promedio está por debajo del costo.
-  const { rows } = await query(`
-    SELECT p.id AS product_id, p.sku, p.name, p.type,
-           AVG(dnl.unit_price)::numeric AS avg_price,
-           SUM(dnl.quantity_base)::numeric AS qty_base,
-           SUM(dnl.subtotal)::numeric AS revenue
-      FROM delivery_note_lines dnl
-      JOIN delivery_notes dn ON dn.id = dnl.delivery_note_id
-      JOIN products p        ON p.id = dnl.product_id
-     WHERE dn.tenant_id = $1
-       AND dn.status IN ('delivered','partially_delivered','issued','sent_by_email')
-       AND COALESCE(dn.delivered_at, dn.issue_date) >= $2
-       AND COALESCE(dn.delivered_at, dn.issue_date) <  $3
-     GROUP BY p.id, p.sku, p.name, p.type
-  `, [tenantId, from, to])
-
-  const alerts = []
-  for (const r of rows) {
-    const c = costMap.get(r.product_id)
-    if (!c) continue
-    const revenue = parseFloat(r.revenue) || 0
-    const qtyBase = parseFloat(r.qty_base) || 0
-    const cost = c.avg_cost * qtyBase
-    const margin = revenue - cost
-    if (margin < 0) {
-      alerts.push({
-        product_id: r.product_id,
-        sku:        r.sku,
-        name:       r.name,
-        type:       r.type,
-        avg_price:  parseFloat(r.avg_price) || 0,
-        unit_cost:  c.avg_cost,
-        qty_base:   qtyBase,
-        revenue,
-        cost,
-        loss:       Math.abs(margin),
-      })
-    }
-  }
-  // Ordenar por mayor pérdida.
-  alerts.sort((a, b) => b.loss - a.loss)
-  return alerts
-}
-
-async function getPeriodTotals(tenantId, from, to, costMap) {
-  const { rows } = await query(`
-    SELECT
-      COALESCE(SUM(dnl.subtotal), 0)::numeric AS revenue,
-      COUNT(DISTINCT dn.id)::int             AS deliveries,
-      COUNT(DISTINCT dn.partner_id)::int     AS customers,
-      json_agg(json_build_object(
-        'product_id', dnl.product_id,
-        'qty_base',   dnl.quantity_base
-      )) AS lines_raw
-      FROM delivery_note_lines dnl
-      JOIN delivery_notes dn ON dn.id = dnl.delivery_note_id
-     WHERE dn.tenant_id = $1
-       AND dn.status IN ('delivered','partially_delivered','issued','sent_by_email')
-       AND COALESCE(dn.delivered_at, dn.issue_date) >= $2
-       AND COALESCE(dn.delivered_at, dn.issue_date) <  $3
-  `, [tenantId, from, to])
-
-  const r = rows[0]
-  const revenue = parseFloat(r.revenue) || 0
-  let cost = 0
-  let costComplete = true
-  for (const l of r.lines_raw || []) {
-    if (!l.product_id) continue
-    const c = costMap.get(l.product_id)
-    if (c) cost += (parseFloat(l.qty_base) || 0) * c.avg_cost
-    else   costComplete = false
-  }
-  const margin = revenue - cost
-  return {
-    revenue,
-    estimated_cost:    cost,
-    estimated_margin:  margin,
-    margin_pct:        revenue > 0 ? (margin / revenue) * 100 : 0,
-    deliveries:        r.deliveries,
-    customers:         r.customers,
-    cost_complete:     costComplete,
-  }
-}
-
-async function getWeeklyTrend(tenantId, from, to) {
-  // Agrupamos por ISO week. PG: date_trunc('week', ...) devuelve el lunes.
-  const { rows } = await query(`
-    SELECT
-      date_trunc('week', COALESCE(dn.delivered_at, dn.issue_date))::date AS week_start,
-      COALESCE(SUM(dnl.subtotal), 0)::numeric AS revenue,
-      COUNT(DISTINCT dn.id)::int              AS deliveries
-      FROM delivery_note_lines dnl
-      JOIN delivery_notes dn ON dn.id = dnl.delivery_note_id
-     WHERE dn.tenant_id = $1
-       AND dn.status IN ('delivered','partially_delivered','issued','sent_by_email')
-       AND COALESCE(dn.delivered_at, dn.issue_date) >= $2
-       AND COALESCE(dn.delivered_at, dn.issue_date) <  $3
-     GROUP BY 1
-     ORDER BY 1
-  `, [tenantId, from, to])
-
-  return rows.map(r => ({
-    week_start: r.week_start,
-    revenue:    parseFloat(r.revenue) || 0,
-    deliveries: r.deliveries,
-  }))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

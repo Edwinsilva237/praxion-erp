@@ -15,7 +15,6 @@
 
 const PDFDocument = require('pdfkit')
 const { getSalesReport } = require('./salesReport')
-const { getSalesSnapshot } = require('./financialSnapshot')
 const storage = require('../../utils/storage')
 const { query } = require('../../db')
 const { addPraxionFooterAllPagesPDF } = require('../../utils/praxionWitnessMark')
@@ -45,9 +44,9 @@ async function generateSalesPdf({ tenantId, from, to }) {
   const logoBuffer  = t.logo_storage_path ? await storage.fetchBuffer(t.logo_storage_path) : null
 
   const data = await getSalesReport({ tenantId, from, to })
-  // Mismo método que el dashboard: Facturado (con IVA) + Sin factura.
-  const snap     = await getSalesSnapshot(tenantId, from, to)
-  const snapPrev = await getSalesSnapshot(tenantId, data.period.previous.from, data.period.previous.to)
+  // Mismo método que el dashboard (lo devuelve getSalesReport): Facturado + Sin factura.
+  const snap     = data.sales_snapshot
+  const snapPrev = data.sales_snapshot_prev
 
   const doc = new PDFDocument({
     size: 'LETTER', margin: MARGIN, info: {
