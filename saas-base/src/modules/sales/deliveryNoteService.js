@@ -28,23 +28,40 @@ const logger = require('../../config/logger')
 
 /**
  * Resuelve el almacén origen para una línea de salida.
- * Prioridad: warehouseId explícito → almacén default del tipo del producto →
- * almacén del tipo alterno (finished_product ↔ resale) si el preferido no
- * está configurado activo.
+ * Prioridad:
+ *   1. warehouseId explícito de la línea.
+ *   2. CONSCIENTE DEL STOCK: el almacén del tipo del producto (finished_product
+ *      para producido, resale para reventa) que TENGA existencia suficiente; si
+ *      el preferido no alcanza, cae al almacén del tipo ALTERNO que sí tenga.
+ *      Esto cubre el doble origen (p. ej. el mismo SKU se fabrica → Fábrica y se
+ *      compra a un maquilador → Distribución): la venta sale de Fábrica y, si no
+ *      alcanza, descuenta del stock maquilado en Distribución.
+ *   3. Si ninguno alcanza, el default del tipo preferido (puede quedar negativo,
+ *      como antes).
  *
- * El fallback entre tipos es útil cuando el tenant no separa físicamente
- * productos propios y de reventa — ambos viven en el mismo almacén.
+ * `productId`/`qtyNeeded` habilitan el paso 2; si no se pasan, cae al
+ * comportamiento previo (almacén default del tipo preferido).
  */
-async function resolveWarehouseForLine(client, tenantId, warehouseId, productType) {
+async function resolveWarehouseForLine(client, tenantId, warehouseId, productType, productId = null, qtyNeeded = 0) {
   if (warehouseId) return warehouseId
   const preferred = productType === 'resale' ? 'resale' : 'finished_product'
   const fallback  = preferred === 'resale' ? 'finished_product' : 'resale'
 
   const { rows } = await client.query(
-    `SELECT id, type FROM warehouses
-      WHERE tenant_id = $1 AND type = ANY($2::warehouse_type[]) AND is_active = true
-      ORDER BY (type = $3) DESC, is_default DESC, created_at ASC, id ASC LIMIT 1`,
-    [tenantId, [preferred, fallback], preferred]
+    `SELECT w.id
+       FROM warehouses w
+       LEFT JOIN inventory_stock s
+         ON s.tenant_id = w.tenant_id AND s.warehouse_id = w.id
+        AND s.item_type = 'product' AND s.item_id = $4::uuid AND s.status = 'available'
+      WHERE w.tenant_id = $1 AND w.type = ANY($2::warehouse_type[]) AND w.is_active = true
+      ORDER BY
+        -- 1) prefiere un almacén con existencia suficiente para la línea
+        (COALESCE(s.quantity, 0) >= $5::numeric) DESC,
+        -- 2) entre esos, el del tipo preferido (Fábrica para producido)
+        (w.type = $3) DESC,
+        w.is_default DESC, w.created_at ASC, w.id ASC
+      LIMIT 1`,
+    [tenantId, [preferred, fallback], preferred, productId, qtyNeeded || 0]
   )
   if (!rows[0]) {
     throw createError(500,
@@ -745,8 +762,17 @@ async function recordDelivery({
       const qtyBase = parseFloat(line.quantity_base || 0)
       if (qtyBase <= 0) continue
       const warehouseId = await resolveWarehouseForLine(
-        client, tenantId, line.warehouse_id, line.product_type
+        client, tenantId, line.warehouse_id, line.product_type, line.product_id, qtyBase
       )
+      // Persistir el almacén elegido en la línea: así una cancelación posterior
+      // devuelve el stock al MISMO almacén del que salió (clave con el fallback
+      // por existencia, que podría elegir distinto en otro momento).
+      if (!line.warehouse_id) {
+        await client.query(
+          `UPDATE delivery_note_lines SET warehouse_id = $1 WHERE id = $2`,
+          [warehouseId, line.id]
+        )
+      }
       await recordMovement(client, {
         tenantId, warehouseId,
         itemType:      'product',
@@ -884,8 +910,11 @@ async function cancelDelivery({ tenantId, noteId, reason, userId, ipAddress, use
       for (const line of linesForStock) {
         const qtyBase = parseFloat(line.quantity_base || 0)
         if (qtyBase <= 0) continue
+        // Para remisiones nuevas, line.warehouse_id ya quedó persistido en la
+        // salida → la reversa devuelve al MISMO almacén. Para remisiones viejas
+        // (warehouse_id NULL) se recalcula best-effort.
         const warehouseId = await resolveWarehouseForLine(
-          client, tenantId, line.warehouse_id, line.product_type
+          client, tenantId, line.warehouse_id, line.product_type, line.product_id, qtyBase
         )
         await recordMovement(client, {
           tenantId, warehouseId,
@@ -1559,4 +1588,5 @@ module.exports = {
   recordDelivery, markAsSentByEmail, setNoInvoice, cancelDelivery, deleteDelivery,
   adjustDeliveryNotePrices, removeDeliveryPhoto,
   generateCXC,  // exportado para test del guard de facturación anticipada
+  resolveWarehouseForLine,  // exportado para test del fallback por existencia
 }
