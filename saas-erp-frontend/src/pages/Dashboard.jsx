@@ -217,7 +217,7 @@ function SalesMonthCard({ data, loading, month }) {
       </div>
     )
   }
-  const d = data || { total: 0, invoiced: 0, uninvoiced: 0, pct_invoiced: 0, pct_uninvoiced: 0, count_invoiced: 0, count_uninvoiced: 0 }
+  const d = data || { total: 0, invoiced: 0, invoiced_subtotal: 0, invoiced_iva: 0, uninvoiced: 0, pct_invoiced: 0, pct_uninvoiced: 0, count_invoiced: 0, count_uninvoiced: 0 }
   const monthLabel = monthLabelFromYM(month)
 
   return (
@@ -247,8 +247,11 @@ function SalesMonthCard({ data, loading, month }) {
             <div className="flex items-start gap-2">
               <span className="w-2.5 h-2.5 bg-brand-500 rounded-sm mt-1.5 shrink-0"></span>
               <div className="min-w-0">
-                <p className="text-[10px] uppercase tracking-wide text-ink-muted">Facturado</p>
+                <p className="text-[10px] uppercase tracking-wide text-ink-muted">Facturado <span className="normal-case">(con IVA)</span></p>
                 <p className="text-base font-semibold text-ink-primary tabular-nums">{fmtCurrency(d.invoiced)}</p>
+                <p className="text-[10px] text-ink-muted tabular-nums">
+                  Subtotal {fmtCurrency(d.invoiced_subtotal)} · IVA {fmtCurrency(d.invoiced_iva)}
+                </p>
                 <p className="text-[10px] text-ink-muted">{d.count_invoiced} factura{d.count_invoiced === 1 ? '' : 's'} · {d.pct_invoiced.toFixed(0)}%</p>
               </div>
             </div>

@@ -35,10 +35,14 @@ async function getFinancialSnapshot({ tenantId, month }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function getSalesSnapshot(tenantId, from, to) {
-  // FACTURADO: facturas timbradas del mes (vigentes, no canceladas).
+  // FACTURADO: facturas timbradas del mes (vigentes, no canceladas). Se desglosa
+  // el IVA: subtotal (sin IVA) + IVA = total. El subtotal en MXN se prorratea
+  // (robusto a moneda y retenciones): subtotal_mxn = total_mxn × subtotal/total.
   const { rows: invRows } = await query(`
     SELECT
       COALESCE(SUM(total_mxn), 0)::numeric AS total_invoiced,
+      COALESCE(SUM(total_mxn * subtotal / NULLIF(total, 0)), 0)::numeric AS subtotal_invoiced,
+      COALESCE(SUM(total_mxn - total_mxn * subtotal / NULLIF(total, 0)), 0)::numeric AS iva_invoiced,
       COUNT(*)::int AS count_invoiced
     FROM invoices
     WHERE tenant_id = $1
@@ -48,13 +52,16 @@ async function getSalesSnapshot(tenantId, from, to) {
   `, [tenantId, from, to])
 
   // SIN FACTURAR: remisiones entregadas en el mes que NO terminaron en
-  // factura timbrada. Evita doble conteo de DOS formas en que una remisión
+  // factura timbrada. Evita doble conteo de las TRES formas en que una remisión
   // puede quedar facturada:
   //   1) Factura INDIVIDUAL → inv.delivery_note_id apunta a la remisión.
-  //   2) Factura CONSOLIDADA (varias remisiones en una) → deja delivery_note_id
-  //      en NULL y la liga vive en invoice_remissions (mig 190). Sin este
-  //      segundo NOT EXISTS las remisiones consolidadas se contaban en
-  //      "invoiced" (vía su factura) Y otra vez en "uninvoiced" → total inflado.
+  //   2) Factura CONSOLIDADA (varias remisiones en una) → delivery_note_id NULL y
+  //      la liga vive en invoice_remissions (mig 190).
+  //   3) Venta ANTICIPADA: el pedido se factura DIRECTO (delivery_note_id NULL, NO
+  //      consolidada) y DESPUÉS se entregan remisiones; la liga es por
+  //      sales_order_line_id (la factura cubre la línea del pedido). Sin esta 3ª
+  //      rama, la remisión de una venta anticipada se contaba en "sin factura"
+  //      ADEMÁS de su factura → doble conteo (mismo criterio que listDeliveryNotes).
   const { rows: dnRows } = await query(`
     SELECT
       COALESCE(SUM(dn.total_mxn), 0)::numeric AS total_uninvoiced,
@@ -75,15 +82,28 @@ async function getSalesSnapshot(tenantId, from, to) {
          WHERE ir.delivery_note_id = dn.id
            AND inv.status = 'stamped'
       )
+      AND NOT EXISTS (
+        SELECT 1 FROM invoices inv
+          JOIN invoice_lines il        ON il.invoice_id = inv.id
+          JOIN delivery_note_lines dnl ON dnl.sales_order_line_id = il.sales_order_line_id
+         WHERE dnl.delivery_note_id = dn.id
+           AND inv.status = 'stamped'
+           AND inv.delivery_note_id IS NULL
+           AND NOT EXISTS (SELECT 1 FROM invoice_remissions ir2 WHERE ir2.invoice_id = inv.id)
+      )
   `, [tenantId, from, to])
 
-  const invoiced   = parseFloat(invRows[0].total_invoiced)   || 0
-  const uninvoiced = parseFloat(dnRows[0].total_uninvoiced) || 0
+  const invoiced          = parseFloat(invRows[0].total_invoiced)    || 0
+  const invoiced_subtotal = parseFloat(invRows[0].subtotal_invoiced) || 0
+  const invoiced_iva      = parseFloat(invRows[0].iva_invoiced)      || 0
+  const uninvoiced        = parseFloat(dnRows[0].total_uninvoiced)   || 0
   const total      = invoiced + uninvoiced
 
   return {
     total,
     invoiced,
+    invoiced_subtotal,   // facturado SIN IVA
+    invoiced_iva,        // IVA del facturado (desglosado)
     uninvoiced,
     count_invoiced:   invRows[0].count_invoiced,
     count_uninvoiced: dnRows[0].count_uninvoiced,

@@ -208,9 +208,13 @@ function addConciliacionSheet(wb, { from, to, recon }) {
   crow(ws, '   · Sin factura (sin IVA)',             r.uninvoiced)
   ws.addRow([])
 
-  // ── B) Dashboard ──
+  // ── B) Dashboard (con IVA desglosado) ──
+  const facSub = b.mes.subtotal_mxn + b.previa.subtotal_mxn + b.directa.subtotal_mxn + b.posterior.subtotal_mxn
+  const facIva = b.mes.iva_mxn + b.previa.iva_mxn + b.directa.iva_mxn + b.posterior.iva_mxn
   crow(ws, '— DASHBOARD "Acumulado del mes" —', null, { bold: true })
-  crow(ws, `Facturado (CON IVA · ${d.invoiced_count} facturas timbradas)`, d.invoiced_with_iva)
+  crow(ws, `Facturado (CON IVA · ${d.invoiced_count} facturas timbradas)`, d.invoiced_with_iva, { bold: true })
+  crow(ws, '   · Subtotal (sin IVA)',                facSub)
+  crow(ws, '   · IVA',                               facIva)
   crow(ws, `Sin factura (sin IVA · ${d.uninvoiced_count} remisiones)`,     d.uninvoiced)
   crow(ws, 'Total dashboard',                        dashTotal,    { bold: true })
   ws.addRow([])

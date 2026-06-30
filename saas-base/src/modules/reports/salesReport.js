@@ -15,13 +15,18 @@ const COST_WINDOW_DAYS = 60
 // ─────────────────────────────────────────────────────────────────────────────
 // Predicados "¿esta remisión/línea ya está facturada?" — reutilizables.
 //
-// Una remisión puede quedar facturada de DOS formas y ambas deben contar como
-// "facturada", o la consolidada se misclasifica como "sin factura":
+// Una remisión puede quedar facturada de TRES formas y todas deben contar como
+// "facturada", o se misclasifica como "sin factura":
 //   1) Factura INDIVIDUAL: liga directa (invoices.delivery_note_id = dn.id) y,
 //      a nivel de línea, invoice_lines.delivery_note_line_id = dnl.id.
 //   2) Factura CONSOLIDADA: deja delivery_note_id en NULL y NO guarda
 //      delivery_note_line_id en sus líneas; la única liga es invoice_remissions
 //      (mig 190). Sin chequear esa tabla, sus remisiones salían como "sin factura".
+//   3) Venta ANTICIPADA: el pedido se factura DIRECTO (delivery_note_id NULL, NO
+//      consolidada) y DESPUÉS se entregan remisiones; la liga es por
+//      sales_order_line_id. Sin esta 3ª rama, la remisión de una venta anticipada
+//      se contaba como "sin factura" además de su factura (mismo criterio que
+//      listDeliveryNotes / getDeliveryNote).
 //
 // LINE_INVOICED: a nivel de LÍNEA de remisión (dnl). Requiere `dnl` en scope.
 // DN_HAS_INVOICE: a nivel de REMISIÓN (dn). Requiere `dn` en scope. $1 = tenant.
@@ -35,6 +40,14 @@ const LINE_INVOICED = `(
     SELECT 1 FROM invoice_remissions ir
      JOIN invoices inv2 ON inv2.id = ir.invoice_id
      WHERE ir.delivery_note_id = dnl.delivery_note_id AND inv2.status = 'stamped'
+  ) OR EXISTS (
+    SELECT 1 FROM invoice_lines il3
+     JOIN invoices inv3 ON inv3.id = il3.invoice_id
+     WHERE il3.sales_order_line_id = dnl.sales_order_line_id
+       AND dnl.sales_order_line_id IS NOT NULL
+       AND inv3.status = 'stamped'
+       AND inv3.delivery_note_id IS NULL
+       AND NOT EXISTS (SELECT 1 FROM invoice_remissions ir3 WHERE ir3.invoice_id = inv3.id)
   )
 )`
 
@@ -46,6 +59,14 @@ const DN_HAS_INVOICE = `(
     SELECT 1 FROM invoice_remissions ir
      JOIN invoices inv2 ON inv2.id = ir.invoice_id
      WHERE ir.delivery_note_id = dn.id AND inv2.status = 'stamped'
+  ) OR EXISTS (
+    SELECT 1 FROM invoices inv3
+     JOIN invoice_lines il3        ON il3.invoice_id = inv3.id
+     JOIN delivery_note_lines dnl3 ON dnl3.sales_order_line_id = il3.sales_order_line_id
+     WHERE dnl3.delivery_note_id = dn.id
+       AND inv3.status = 'stamped'
+       AND inv3.delivery_note_id IS NULL
+       AND NOT EXISTS (SELECT 1 FROM invoice_remissions ir3 WHERE ir3.invoice_id = inv3.id)
   )
 )`
 
@@ -575,6 +596,14 @@ async function getSalesReconciliation({ tenantId, from, to }) {
          SELECT 1 FROM invoice_remissions ir
            JOIN invoices inv ON inv.id = ir.invoice_id
           WHERE ir.delivery_note_id = dn.id AND inv.status = 'stamped')
+       AND NOT EXISTS (
+         SELECT 1 FROM invoices inv
+           JOIN invoice_lines il        ON il.invoice_id = inv.id
+           JOIN delivery_note_lines dnl ON dnl.sales_order_line_id = il.sales_order_line_id
+          WHERE dnl.delivery_note_id = dn.id
+            AND inv.status = 'stamped'
+            AND inv.delivery_note_id IS NULL
+            AND NOT EXISTS (SELECT 1 FROM invoice_remissions ir2 WHERE ir2.invoice_id = inv.id))
   `, [tenantId, from, to])
 
   // 3) Desglose del FACTURADO del dashboard por ORIGEN. Subtotal en MXN prorrateado
@@ -597,6 +626,16 @@ async function getSalesReconciliation({ tenantId, from, to }) {
         FROM stamped s
         JOIN invoice_remissions ir ON ir.invoice_id = s.id
         JOIN delivery_notes dn     ON dn.id = ir.delivery_note_id
+      UNION
+      -- Venta ANTICIPADA: factura directa del pedido ligada a sus remisiones por
+      -- sales_order_line_id (delivery_note_id NULL y NO consolidada).
+      SELECT s.id, COALESCE(dn.delivered_at, dn.issue_date)
+        FROM stamped s
+        JOIN invoices i              ON i.id = s.id AND i.delivery_note_id IS NULL
+        JOIN invoice_lines il        ON il.invoice_id = s.id
+        JOIN delivery_note_lines dnl ON dnl.sales_order_line_id = il.sales_order_line_id
+        JOIN delivery_notes dn       ON dn.id = dnl.delivery_note_id
+       WHERE NOT EXISTS (SELECT 1 FROM invoice_remissions ir WHERE ir.invoice_id = s.id)
     ),
     classified AS (
       SELECT s.id, s.total_mxn, s.subtotal_mxn,
