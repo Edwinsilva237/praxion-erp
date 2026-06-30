@@ -284,27 +284,38 @@ async function createCount({
       throw createError(400, 'No se encontraron items para incluir en el conteo. Ajusta los criterios.')
     }
 
-    // ── Insertar líneas en lote ──────────────────────────────────────────
-    const valuesSql = []
-    const valuesParams = []
-    let pIdx = 1
+    // ── Insertar líneas en lote (por CHUNKS) ──────────────────────────────
+    // Cada línea ata 7 parámetros. Postgres/node-postgres limita un statement a
+    // 65535 bind params (Int16) → con 7 por línea, una sola query revienta a
+    // partir de ~9362 líneas con el error de protocolo 08P01 (se ve como
+    // "Internal server error"). Un cierre de mes (TODOS los almacenes × TODOS
+    // los items) supera ese tope fácil → insertamos en lotes seguros.
+    const PARAMS_PER_LINE = 7
+    const CHUNK_SIZE = 1000 // 1000 × 7 = 7000 params, holgado bajo 65535
 
-    for (const ln of lineRows) {
-      valuesSql.push(`($${pIdx}::uuid, $${pIdx+1}::inventory_item_type, $${pIdx+2}::uuid, $${pIdx+3}::uuid, $${pIdx+4}::numeric, $${pIdx+5}::numeric, $${pIdx+6}::text, 'pending')`)
-      valuesParams.push(
-        header.id, ln.item_type, ln.item_id, ln.warehouse_id,
-        ln.system_qty, ln.system_avg_cost, ln.unit
+    for (let off = 0; off < lineRows.length; off += CHUNK_SIZE) {
+      const chunk = lineRows.slice(off, off + CHUNK_SIZE)
+      const valuesSql = []
+      const valuesParams = []
+      let pIdx = 1
+
+      for (const ln of chunk) {
+        valuesSql.push(`($${pIdx}::uuid, $${pIdx+1}::inventory_item_type, $${pIdx+2}::uuid, $${pIdx+3}::uuid, $${pIdx+4}::numeric, $${pIdx+5}::numeric, $${pIdx+6}::text, 'pending')`)
+        valuesParams.push(
+          header.id, ln.item_type, ln.item_id, ln.warehouse_id,
+          ln.system_qty, ln.system_avg_cost, ln.unit
+        )
+        pIdx += PARAMS_PER_LINE
+      }
+
+      await client.query(
+        `INSERT INTO inventory_count_lines
+           (count_id, item_type, item_id, warehouse_id,
+            system_qty, system_avg_cost, unit, status)
+         VALUES ${valuesSql.join(', ')}`,
+        valuesParams
       )
-      pIdx += 7
     }
-
-    await client.query(
-      `INSERT INTO inventory_count_lines
-         (count_id, item_type, item_id, warehouse_id,
-          system_qty, system_avg_cost, unit, status)
-       VALUES ${valuesSql.join(', ')}`,
-      valuesParams
-    )
 
     await client.query(
       `UPDATE inventory_counts SET total_lines = $1 WHERE id = $2`,
