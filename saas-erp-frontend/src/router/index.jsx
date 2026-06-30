@@ -42,6 +42,7 @@ const AnticiposProveedor      = lazy(() => import('@/pages/Finanzas/AnticiposPro
 const Facturacion             = lazy(() => import('@/pages/Finanzas/Facturacion'))
 const ReporteContable         = lazy(() => import('@/pages/Finanzas/ReporteContable'))
 const ReportesVentas          = lazy(() => import('@/pages/Reportes/ReportesVentas'))
+const ReportesInventario      = lazy(() => import('@/pages/Reportes/ReportesInventario'))
 const ReportesProduccion      = lazy(() => import('@/pages/Reportes/ReportesProduccion'))
 const EstadoDeCuenta          = lazy(() => import('@/pages/Reportes/EstadoDeCuenta'))
 const ConfigNotificaciones    = lazy(() => import('@/pages/Configuracion/Notificaciones'))
@@ -214,6 +215,7 @@ const router = createBrowserRouter([
       { path: '/facturacion/:id',     element: <Facturacion /> },       // deep-link a una factura
       { path: '/finanzas/reporte-contable', element: <ReporteContable /> },
       { path: '/reportes/ventas',           element: <ReportesVentas /> },
+      { path: '/reportes/inventario',       element: <ReportesInventario /> },
       { path: '/reportes/produccion',       element: <ReportesProduccion /> },
       { path: '/reportes/cuentas-por-cobrar', element: <EstadoDeCuenta direction="cuentas-por-cobrar" /> },
       { path: '/reportes/cuentas-por-pagar',  element: <EstadoDeCuenta direction="cuentas-por-pagar" /> },

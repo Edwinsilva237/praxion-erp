@@ -15,6 +15,9 @@ const { generateSalesPdf } = require('./salesReportPdf')
 const { getProductionReport } = require('./productionReport')
 const { generateProductionWorkbook } = require('./productionReportExcel')
 const { generateProductionPdf } = require('./productionReportPdf')
+const { getInventoryReport } = require('./inventoryReport')
+const { generateInventoryWorkbook } = require('./inventoryReportExcel')
+const { generateInventoryPdf } = require('./inventoryReportPdf')
 const { getAccountStatement, getPartnerStatement } = require('./accountStatementReport')
 const { generateAccountStatementWorkbook } = require('./accountStatementExcel')
 const { generateAccountStatementPdf } = require('./accountStatementPdf')
@@ -267,6 +270,49 @@ router.get('/production/pdf',
       const filename = `reporte-produccion-${from}-a-${to}.pdf`
       res.setHeader('Content-Type', 'application/pdf')
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+      res.send(buffer)
+    } catch (err) { next(err) }
+  }
+)
+
+// ─── Inventario — valor y existencias a la fecha ───────────────────────────
+/** GET /api/reports/inventory — snapshot de existencias y valor (JSON). */
+router.get('/inventory',
+  checkPermission('reports', 'inventory'),
+  async (req, res, next) => {
+    try {
+      const data = await getInventoryReport({ tenantId: req.tenant.id })
+      res.json(data)
+    } catch (err) { next(err) }
+  }
+)
+
+/** GET /api/reports/inventory/excel — Excel multi-hoja del inventario. */
+router.get('/inventory/excel',
+  checkPermission('reports', 'inventory'),
+  async (req, res, next) => {
+    try {
+      const { rows } = await query(
+        `SELECT COALESCE(display_name, name) AS tenant_name FROM tenants WHERE id = $1`, [req.tenant.id])
+      const tenantName = rows[0]?.tenant_name || 'Empresa'
+      const buffer = await generateInventoryWorkbook({ tenantId: req.tenant.id, tenantName })
+      const stamp = new Date().toISOString().slice(0, 10)
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      res.setHeader('Content-Disposition', `attachment; filename="reporte-inventario-${stamp}.xlsx"`)
+      res.send(Buffer.from(buffer))
+    } catch (err) { next(err) }
+  }
+)
+
+/** GET /api/reports/inventory/pdf — PDF ejecutivo con gráficos. */
+router.get('/inventory/pdf',
+  checkPermission('reports', 'inventory'),
+  async (req, res, next) => {
+    try {
+      const buffer = await generateInventoryPdf({ tenantId: req.tenant.id })
+      const stamp = new Date().toISOString().slice(0, 10)
+      res.setHeader('Content-Type', 'application/pdf')
+      res.setHeader('Content-Disposition', `attachment; filename="reporte-inventario-${stamp}.pdf"`)
       res.send(buffer)
     } catch (err) { next(err) }
   }

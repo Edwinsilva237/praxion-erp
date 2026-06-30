@@ -60,6 +60,19 @@ export const reportsApi = {
   downloadProductionPdf: ({ from, to }) =>
     api.get(`${B}/production/pdf`, { params: { from, to }, responseType: 'blob' }),
 
+  // ── Inventario — valor y existencias a la fecha ─────────────────────────
+  /** Snapshot de existencias y valor del inventario (JSON). */
+  getInventoryReport: () =>
+    api.get(`${B}/inventory`).then(r => r.data),
+
+  /** Excel multi-hoja del inventario. */
+  downloadInventoryExcel: () =>
+    api.get(`${B}/inventory/excel`, { responseType: 'blob' }),
+
+  /** PDF ejecutivo del inventario con gráficos. */
+  downloadInventoryPdf: () =>
+    api.get(`${B}/inventory/pdf`, { responseType: 'blob' }),
+
   // ── Estado de cuenta — CXC / CXP ────────────────────────────────────────
   // `direction` debe ser 'cuentas-por-cobrar' o 'cuentas-por-pagar'.
   // `filters`: { partnerId, statusFilter, search } — todos opcionales.

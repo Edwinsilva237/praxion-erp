@@ -148,7 +148,7 @@ export const ROLE_TEMPLATES = [
       (p.resource === 'raw_materials' && p.action === 'read') ||
       (p.resource === 'inventory' && p.action === 'read') ||
       (p.resource === 'warehouses' && p.action === 'read') ||
-      (p.resource === 'reports' && p.action === 'cxp'),
+      (p.resource === 'reports' && ['cxp', 'inventory'].includes(p.action)),
   },
   {
     key:   'almacenista',

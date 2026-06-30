@@ -39,6 +39,7 @@ export const NAV_SECTIONS = [
     label: 'Reportes',
     items: [
       { label: 'Ventas',              to: '/reportes/ventas',             iconKey: 'chartBar',  permission: 'reports:sales',       module: 'reports' },
+      { label: 'Inventario',          to: '/reportes/inventario',         iconKey: 'boxes',     permission: 'reports:inventory',   module: 'reports' },
       { label: 'Producción',          to: '/reportes/produccion',         iconKey: 'chartLine', permission: 'reports:production',  module: 'reports' },
       { label: 'Cuentas por cobrar',  to: '/reportes/cuentas-por-cobrar', iconKey: 'card',      permission: 'reports:cxc',         module: 'reports' },
       { label: 'Cuentas por pagar',   to: '/reportes/cuentas-por-pagar',  iconKey: 'money',     permission: 'reports:cxp',         module: 'reports' },
