@@ -297,7 +297,12 @@ function buildAggregates(rows, costMap) {
     .filter(p => p.estimated_margin !== null && p.estimated_margin < 0)
     .map(p => ({
       product_id: p.product_id, sku: p.sku, name: p.name, type: p.type,
-      avg_price: p.avg_price, unit_cost: p.unit_cost, qty_base: p.qty_base,
+      avg_price: p.avg_price, unit_cost: p.unit_cost,
+      qty_base: p.qty_base, qty_sold: p.qty_sold,
+      base_unit: p.base_unit, sale_unit: p.sale_unit,
+      // Precio por UNIDAD BASE (comparable con unit_cost, que también es por base).
+      // avg_price es por unidad de VENTA y NO es comparable con unit_cost.
+      price_per_base: p.qty_base > 0 ? p.revenue / p.qty_base : null,
       revenue: p.revenue, cost: p.estimated_cost, loss: Math.abs(p.estimated_margin),
     }))
     .sort((a, b) => b.loss - a.loss)

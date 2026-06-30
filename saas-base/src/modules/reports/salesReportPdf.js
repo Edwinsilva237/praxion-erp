@@ -188,10 +188,11 @@ function drawKpis(doc, data, primary, secondary, snap, snapPrev) {
      .text(fmtMXNf(total), MARGIN, doc.y)
 
   if (prevTotal > 0) {
-    const arrow = delta > 0 ? '▲' : delta < 0 ? '▼' : '='
+    const sign  = delta > 0 ? '+' : delta < 0 ? '-' : ''
     const color = delta > 0 ? POS : delta < 0 ? NEG : SUB
+    const pctTxt = deltaPct != null ? ` (${deltaPct > 0 ? '+' : deltaPct < 0 ? '-' : ''}${Math.abs(deltaPct).toFixed(1)}%)` : ''
     doc.fillColor(color).font('Helvetica-Bold').fontSize(11)
-       .text(`${arrow} ${fmtMXN(Math.abs(delta))}${deltaPct != null ? ` (${deltaPct > 0 ? '+' : ''}${deltaPct.toFixed(1)}%)` : ''} vs periodo anterior`, MARGIN, doc.y)
+       .text(`${sign}${fmtMXN(Math.abs(delta))} vs periodo anterior${pctTxt}`, MARGIN, doc.y)
   }
   doc.moveDown(1.0)
 
@@ -224,7 +225,7 @@ function drawKpis(doc, data, primary, secondary, snap, snapPrev) {
   if (!c.cost_complete) {
     doc.moveDown(0.4)
     doc.fillColor('#B45309').font('Helvetica-Oblique').fontSize(8)
-       .text('⚠ Algunos productos no tienen costo histórico en el rango de cálculo; la utilidad y el margen son PARCIALES (el margen real puede ser mayor).',
+       .text('(!) Algunos productos no tienen costo histórico en el rango de cálculo; la utilidad y el margen son PARCIALES (el margen real puede ser mayor).',
          MARGIN, doc.y, { width: doc.page.width - 2 * MARGIN })
   }
   doc.moveDown(1.2)
@@ -275,8 +276,11 @@ function drawTable(doc, ctx, { columns, rows, totalRow, rowH = 16, primary }) {
       const v = col.render(row)
       const text  = typeof v === 'object' && v ? v.text  : v
       const color = (typeof v === 'object' && v && v.color) ? v.color : (col.color || INK)
+      // height acota a UNA línea: con width + height + ellipsis, PDFKit trunca con
+      // "…" en vez de envolver a 2 líneas (que se encimaban con la fila siguiente).
       doc.fillColor(color).font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8)
-         .text(text == null ? '' : String(text), x, y, { width: col.width, align: col.align || 'left', ellipsis: true })
+         .text(text == null ? '' : String(text), x, y,
+               { width: col.width, height: 11, align: col.align || 'left', ellipsis: true, lineBreak: true })
       x += col.width
     }
     doc.y = y + rowH
@@ -416,11 +420,11 @@ function drawCustomerProfit(doc, ctx, data) {
 
   doc.moveDown(0.4)
   doc.fillColor(SUB).font('Helvetica').fontSize(8)
-     .text('Utilidad bruta = Ventas − Costo de producción/compra (promedio ponderado). Antes de gastos operativos.',
+     .text('Utilidad bruta = Ventas - Costo de producción/compra (promedio ponderado). Antes de gastos operativos.',
        MARGIN, doc.y, { width: doc.page.width - 2 * MARGIN })
   if (!data.totals_current?.cost_complete) {
     doc.fillColor('#B45309').font('Helvetica-Oblique').fontSize(8)
-       .text('⚠ Costos incompletos para algunos productos: el margen mostrado es parcial.',
+       .text('(!) Costos incompletos para algunos productos: el margen mostrado es parcial.',
          MARGIN, doc.y + 2, { width: doc.page.width - 2 * MARGIN })
   }
   doc.moveDown(1)
@@ -474,23 +478,28 @@ function drawAlerts(doc, ctx, data) {
 
   if (!data.negative_margins.length) {
     doc.fillColor(POS).font('Helvetica').fontSize(10)
-       .text('✓ Sin productos vendidos por debajo del costo en este periodo.', MARGIN, doc.y)
+       .text('Sin productos vendidos por debajo del costo en este periodo.', MARGIN, doc.y)
     return
   }
 
   doc.fillColor('#374151').font('Helvetica').fontSize(10)
-     .text(`${data.negative_margins.length} producto(s) se vendieron por debajo del costo:`, MARGIN, doc.y)
+     .text(`${data.negative_margins.length} producto(s) cuya VENTA total quedó por debajo de su COSTO total:`, MARGIN, doc.y)
   doc.moveDown(0.5)
 
   data.negative_margins.forEach(p => {
     if (doc.y + 28 > bottomLimit(doc)) newContentPage(doc, ctx)
     const y = doc.y
     doc.fillColor(INK).font('Helvetica-Bold').fontSize(9)
-       .text(p.sku + ' — ' + p.name, MARGIN, y, { width: 380, ellipsis: true })
+       .text(p.sku + ' - ' + p.name, MARGIN, y, { width: 380, height: 11, ellipsis: true })
     doc.fillColor(NEG).font('Helvetica-Bold').fontSize(11)
-       .text('−' + fmtMXN(p.loss), 430, y - 2, { width: 110, align: 'right' })
+       .text('-' + fmtMXN(p.loss), 430, y - 2, { width: 110, align: 'right' })
+    // Comparamos en la MISMA unidad (por unidad base): precio/base vs costo/base.
+    // El "precio de venta" por unidad de venta NO es comparable con el costo por base.
+    const u = p.base_unit || 'u'
+    const ppb = p.price_per_base != null ? `${fmtMXNf(p.price_per_base)}/${u}` : 'n/d'
     doc.fillColor(SUB).font('Helvetica').fontSize(8)
-       .text(`Precio venta ${fmtMXNf(p.avg_price)}  ·  Costo ${fmtMXNf(p.unit_cost)}  ·  Cantidad ${fmtNum(p.qty_base)}`, MARGIN, y + 12)
+       .text(`Venta total ${fmtMXNf(p.revenue)}  ·  Costo total ${fmtMXNf(p.cost)}  ·  Precio ${ppb} vs Costo ${fmtMXNf(p.unit_cost)}/${u}`,
+         MARGIN, y + 12, { width: doc.page.width - 2 * MARGIN })
     doc.y = y + 26
   })
 }
