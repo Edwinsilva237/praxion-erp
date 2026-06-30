@@ -689,4 +689,71 @@ async function getSalesReconciliation({ tenantId, from, to }) {
   }
 }
 
-module.exports = { getSalesReport, getSalesDetail, getSalesReconciliation }
+// ─────────────────────────────────────────────────────────────────────────────
+// Integridad de CXC: detecta DOBLE COBRO — remisiones con una cuenta por cobrar
+// de remisión ACTIVA (no cancelada) que ADEMÁS ya están facturadas por cualquiera
+// de las 3 ligas (directa / consolidada / anticipada). En un sistema sano esto
+// debe ser CERO: el saldo del cliente se representa una sola vez (por la factura o
+// por la remisión, no ambas). Escanea TODO el histórico del tenant.
+// ─────────────────────────────────────────────────────────────────────────────
+async function getCxcIntegrity({ tenantId }) {
+  const { rows: dbl } = await query(`
+    SELECT dn.document_number AS remision,
+           bp.name AS cliente,
+           ar.amount_total::numeric            AS monto,
+           (ar.amount_total - ar.amount_paid)::numeric AS saldo,
+           ar.status AS cxc_status,
+           iv.document_number AS factura
+      FROM accounts_receivable ar
+      JOIN delivery_notes dn     ON dn.id = ar.document_id
+      JOIN business_partners bp  ON bp.id = dn.partner_id
+      LEFT JOIN LATERAL (
+        SELECT inv.document_number
+          FROM invoices inv
+         WHERE inv.status = 'stamped'
+           AND ( inv.delivery_note_id = dn.id
+                 OR EXISTS (SELECT 1 FROM invoice_remissions ir
+                             WHERE ir.invoice_id = inv.id AND ir.delivery_note_id = dn.id)
+                 OR ( inv.delivery_note_id IS NULL
+                      AND NOT EXISTS (SELECT 1 FROM invoice_remissions ir2 WHERE ir2.invoice_id = inv.id)
+                      AND EXISTS (SELECT 1 FROM invoice_lines il
+                                    JOIN delivery_note_lines dnl ON dnl.sales_order_line_id = il.sales_order_line_id
+                                   WHERE il.invoice_id = inv.id AND dnl.delivery_note_id = dn.id) ) )
+         ORDER BY inv.stamp_date DESC NULLS LAST
+         LIMIT 1
+      ) iv ON true
+     WHERE ar.tenant_id = $1
+       AND ar.document_type = 'remission'
+       AND ar.status <> 'cancelled'
+       AND iv.document_number IS NOT NULL
+     ORDER BY ar.amount_total DESC
+  `, [tenantId])
+
+  // Integridad inversa: facturas de ingreso timbradas SIN su cuenta por cobrar.
+  const { rows: noar } = await query(`
+    SELECT COUNT(*)::int AS n
+      FROM invoices inv
+     WHERE inv.tenant_id = $1 AND inv.cfdi_type = 'I' AND inv.status = 'stamped'
+       AND NOT EXISTS (
+         SELECT 1 FROM accounts_receivable ar
+          WHERE ar.tenant_id = $1 AND ar.document_type = 'invoice' AND ar.document_id = inv.id)
+  `, [tenantId])
+
+  const doubleCounted = dbl.map(r => ({
+    remision: r.remision,
+    cliente:  r.cliente,
+    factura:  r.factura,
+    cxc_status: r.cxc_status,
+    monto: parseFloat(r.monto) || 0,
+    saldo: parseFloat(r.saldo) || 0,
+  }))
+
+  return {
+    doubleCounted,
+    doubleCountedCount: doubleCounted.length,
+    doubleCountedSaldo: doubleCounted.reduce((s, r) => s + r.saldo, 0),
+    invoicesWithoutAr: noar[0].n,
+  }
+}
+
+module.exports = { getSalesReport, getSalesDetail, getSalesReconciliation, getCxcIntegrity }

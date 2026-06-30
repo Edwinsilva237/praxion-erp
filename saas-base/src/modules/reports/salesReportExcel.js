@@ -5,15 +5,16 @@
 // puede pivotear directamente.
 
 const ExcelJS = require('exceljs')
-const { getSalesReport, getSalesReconciliation } = require('./salesReport')
+const { getSalesReport, getSalesReconciliation, getCxcIntegrity } = require('./salesReport')
 
 async function generateSalesWorkbook({ tenantId, from, to, tenantName }) {
   const wb = new ExcelJS.Workbook()
   wb.creator = 'Praxion Systems'
   wb.created = new Date()
 
-  const data  = await getSalesReport({ tenantId, from, to })
-  const recon = await getSalesReconciliation({ tenantId, from, to })
+  const data      = await getSalesReport({ tenantId, from, to })
+  const recon     = await getSalesReconciliation({ tenantId, from, to })
+  const integrity = await getCxcIntegrity({ tenantId })
 
   addResumenSheet(wb, { from, to, tenantName, data })
   addClientesSheet(wb, data)
@@ -22,7 +23,7 @@ async function generateSalesWorkbook({ tenantId, from, to, tenantName }) {
   addUtilidadesSheet(wb, data)
   addAlertasSheet(wb, data)
   addTendenciaSheet(wb, data)
-  addConciliacionSheet(wb, { from, to, recon })
+  addConciliacionSheet(wb, { from, to, recon, integrity })
 
   return wb.xlsx.writeBuffer()
 }
@@ -183,7 +184,7 @@ function addTendenciaSheet(wb, data) {
 }
 
 // ─── Conciliación Dashboard vs Reporte ───────────────────────────────────────
-function addConciliacionSheet(wb, { from, to, recon }) {
+function addConciliacionSheet(wb, { from, to, recon, integrity }) {
   const ws = wb.addWorksheet('Conciliación')
   ws.columns = [{ width: 52 }, { width: 18 }, { width: 16 }, { width: 18 }, { width: 14 }]
 
@@ -268,6 +269,37 @@ function addConciliacionSheet(wb, { from, to, recon }) {
     '· "Remisiones de periodos posteriores" = remisiones de este periodo cuya factura se timbró DESPUÉS (el reporte ya las cuenta como facturadas).',
     '· La "Diferencia por conciliar" recoge diferencias de precio factura-vs-remisión, facturación parcial y remisiones del periodo facturadas en otro periodo.',
   ].forEach(t => { ws.addRow([t]).font = { italic: true, size: 9, color: { argb: 'FF808080' } } })
+
+  // ── E) Integridad de CXC (todo el histórico) ──
+  if (integrity) {
+    ws.addRow([])
+    crow(ws, '— INTEGRIDAD DE CXC (todo el histórico, no solo el periodo) —', null, { bold: true })
+    const dc = integrity.doubleCountedCount
+    const ok = dc === 0
+    const verdict = ws.addRow([
+      ok
+        ? '✓ Sin doble cobro: ninguna remisión facturada conserva una CXC de remisión activa.'
+        : `⚠ ${dc} remisión(es) cobradas DOBLE (CXC de remisión activa + ya facturadas)`,
+      ok ? '' : integrity.doubleCountedSaldo,
+    ])
+    verdict.font = { bold: true, color: { argb: ok ? 'FF166534' : 'FFB45309' } }
+    if (!ok) verdict.getCell(2).numFmt = '"$"#,##0.00'
+    crow(ws, 'Facturas timbradas sin CXC (debe ser 0)', integrity.invoicesWithoutAr === 0 ? '' : integrity.invoicesWithoutAr)
+      .getCell(2).numFmt = '#,##0'
+
+    if (dc > 0) {
+      ws.addRow([])
+      const hh = ws.addRow(['Remisión (doble cobro)', 'Cliente', 'Factura', 'Estado CXC', 'Saldo'])
+      hh.font = { bold: true }
+      hh.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB45309' } }; c.font = { bold: true, color: { argb: 'FFFFFFFF' } } })
+      integrity.doubleCounted.forEach(r => {
+        const rr = ws.addRow([r.remision, r.cliente, r.factura, r.cxc_status, r.saldo])
+        rr.getCell(5).numFmt = '"$"#,##0.00'
+      })
+    }
+    ws.addRow(['· "Doble cobro" = la misma venta tiene saldo por la factura Y por la remisión. En un sistema sano = 0 (la CXC de la remisión se cancela o no se crea al facturar).'])
+      .font = { italic: true, size: 9, color: { argb: 'FF808080' } }
+  }
 }
 
 function crow(ws, label, value, opts = {}) {
