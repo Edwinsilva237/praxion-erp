@@ -1287,7 +1287,11 @@ async function recomputeAvgCostFromMovements({ tenantId, apply = false }) {
                m.created_at, m.id`,
     [tenantId])
 
-  // Replay del promedio ponderado por renglón (misma lógica que updateStock).
+  // Replay del promedio ponderado REAL por renglón. A DIFERENCIA de updateStock,
+  // aquí una entrada a costo $0 SÍ diluye el promedio (no se endurece): el
+  // recálculo refleja el costo verdadero de TODO lo que entró, incluyendo el stock
+  // sin costear (producción a $0, maquilador a $0). Ese endurecimiento es
+  // justamente lo que dejaba el promedio "pegado" en un valor viejo alto.
   const groups = new Map()
   for (const m of movs) {
     const key = `${m.warehouse_id}|${m.item_type}|${m.item_id}|${m.status}`
@@ -1295,7 +1299,7 @@ async function recomputeAvgCostFromMovements({ tenantId, apply = false }) {
     if (!g) { g = { qty: 0, cost: 0 }; groups.set(key, g) }
     const delta = parseFloat(m.quantity) || 0
     const uc    = parseFloat(m.unit_cost) || 0
-    if (delta > 0 && uc > 0) {
+    if (delta > 0) {  // toda ENTRADA promedia — incluso a $0 (diluye)
       const denom = g.qty + delta
       g.cost = (g.qty > 0 && denom > 0) ? ((g.qty * g.cost) + (delta * uc)) / denom : uc
     }

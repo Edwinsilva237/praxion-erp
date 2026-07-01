@@ -3,9 +3,9 @@
 /**
  * Recalcular costo promedio desde el kardex (recomputeAvgCostFromMovements).
  *
- * Corrige promedios "pegados" en un valor que el kardex no justifica. Reproduce
- * los movimientos con la misma regla de promedio ponderado que updateStock (una
- * entrada a costo $0 NO baja el promedio).
+ * Corrige promedios "pegados" en un valor que el kardex no justifica. Recalcula el
+ * promedio ponderado REAL: a diferencia de updateStock, aquí una entrada a costo
+ * $0 SÍ diluye el promedio (refleja el stock sin costear).
  */
 
 const { createTenant, cleanupTestTenants } = require('../helpers/factory')
@@ -42,17 +42,18 @@ describe('recomputeAvgCostFromMovements', () => {
     expect(r.applied).toBe(false)
     expect(r.count).toBe(1)
     const d = r.diffs[0]
+    // Promedio real: (1000×5.52 + 500×0) / 1500 = 3.68 (el stock a $0 diluye).
     expect(d.currentAvgCost).toBeCloseTo(46.56, 2)
-    expect(d.recomputedAvgCost).toBeCloseTo(5.52, 2)  // $0 no baja el promedio; queda en 5.52
+    expect(d.recomputedAvgCost).toBeCloseTo(3.68, 2)
     expect(d.valueBefore).toBeCloseTo(1500 * 46.56, 2)
-    expect(d.valueAfter).toBeCloseTo(1500 * 5.52, 2)
+    expect(d.valueAfter).toBeCloseTo(1500 * 3.68, 2)
   })
 
   test('apply corrige el avg_cost en inventory_stock', async () => {
     await inventoryService.recomputeAvgCostFromMovements({ tenantId, apply: true })
     const { rows } = await query(
       `SELECT avg_cost FROM inventory_stock WHERE tenant_id=$1 AND item_id=$2 AND status='available'`, [tenantId, prod])
-    expect(parseFloat(rows[0].avg_cost)).toBeCloseTo(5.52, 2)
+    expect(parseFloat(rows[0].avg_cost)).toBeCloseTo(3.68, 2)
 
     // Ya no hay diferencias tras aplicar.
     const r = await inventoryService.recomputeAvgCostFromMovements({ tenantId, apply: false })
