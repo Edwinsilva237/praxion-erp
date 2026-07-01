@@ -631,7 +631,7 @@ export default function Inventario() {
           </div>
 
           {/* ── Escritorio: tabla completa ── */}
-          <div className="table-wrap hidden md:block">
+          <div className="table-wrap-scroll hidden md:block">
             <table className="table">
               <thead>
                 <tr>

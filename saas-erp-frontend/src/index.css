@@ -224,6 +224,18 @@
   .table tbody tr {
     @apply hover:bg-white/[0.025] transition-colors duration-100;
   }
+  /* Tabla ANCHA con scroll interno: el contenedor tiene alto máximo, así la
+     barra de scroll horizontal queda siempre visible en el borde inferior del
+     recuadro (no hay que bajar hasta el final de la tabla para alcanzarla) y el
+     encabezado se fija al hacer scroll vertical. Úsalo en vez de .table-wrap
+     cuando la tabla sea muy ancha. */
+  .table-wrap-scroll {
+    @apply w-full overflow-auto;
+    max-height: 70vh;
+  }
+  .table-wrap-scroll thead th {
+    @apply sticky top-0 z-10 bg-surface-primary;
+  }
 
   /* ── Badges / pills ──────────────────────────────────────────────────── */
   .badge {
