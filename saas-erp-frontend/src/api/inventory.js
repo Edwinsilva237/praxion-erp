@@ -36,6 +36,11 @@ export const inventoryApi = {
   recomputeStock: (apply = false) =>
     api.post(`${BASE}/recompute-stock`, { apply }).then(r => r.data),
 
+  // ── Recalcular COSTO PROMEDIO desde el kardex ──────────────────────────────
+  // Corrige promedios "pegados" que el kardex no justifica. apply=false = preview.
+  recomputeAvgCost: (apply = false) =>
+    api.post(`${BASE}/recompute-avg-cost`, { apply }).then(r => r.data),
+
   // ── Autocomplete de items ─────────────────────────────────────────────────
   searchItems: (params) =>
     api.get(`${BASE}/items/search`, { params }).then(r => r.data),

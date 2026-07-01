@@ -1260,6 +1260,97 @@ async function recomputeStockFromMovements({ tenantId, apply = false }) {
   return { applied: true, count: mapped.length, diffs: mapped }
 }
 
+/**
+ * Recalcula el COSTO PROMEDIO (avg_cost) de cada renglón de inventory_stock
+ * REPRODUCIENDO el kardex cronológicamente con la misma regla de promedio
+ * ponderado que updateStock. Útil cuando el avg_cost quedó "pegado" en un valor
+ * que el kardex no justifica (importación/edición/saldo inicial fuera de kardex),
+ * y las entradas a costo $0 no lo bajan por el endurecimiento de costo.
+ *
+ * apply=false → solo el diff (costo actual vs recalculado). apply=true → aplica.
+ * Solo toca renglones que TIENEN historial en el kardex (para no borrar el costo
+ * de saldos capturados sin movimientos; ésos se auditan con recompute de saldos).
+ */
+async function recomputeAvgCostFromMovements({ tenantId, apply = false }) {
+  const { rows: cfg } = await query(
+    `SELECT allow_negative_stock FROM tenant_process_config WHERE tenant_id = $1`, [tenantId])
+  const allowNeg = cfg[0]?.allow_negative_stock === true
+
+  // Movimientos ordenados por renglón y por tiempo (replay determinista).
+  const { rows: movs } = await query(
+    `SELECT m.warehouse_id, m.item_type::text AS item_type, m.item_id,
+            COALESCE(m.status_to, 'available')::text AS status,
+            m.quantity::numeric AS quantity, m.unit_cost::numeric AS unit_cost
+       FROM inventory_movements m
+      WHERE m.tenant_id = $1
+      ORDER BY m.warehouse_id, m.item_type, m.item_id, COALESCE(m.status_to, 'available'),
+               m.created_at, m.id`,
+    [tenantId])
+
+  // Replay del promedio ponderado por renglón (misma lógica que updateStock).
+  const groups = new Map()
+  for (const m of movs) {
+    const key = `${m.warehouse_id}|${m.item_type}|${m.item_id}|${m.status}`
+    let g = groups.get(key)
+    if (!g) { g = { qty: 0, cost: 0 }; groups.set(key, g) }
+    const delta = parseFloat(m.quantity) || 0
+    const uc    = parseFloat(m.unit_cost) || 0
+    if (delta > 0 && uc > 0) {
+      const denom = g.qty + delta
+      g.cost = (g.qty > 0 && denom > 0) ? ((g.qty * g.cost) + (delta * uc)) / denom : uc
+    }
+    const raw = g.qty + delta
+    g.qty = allowNeg ? raw : Math.max(0, raw)
+  }
+
+  // Comparar contra el avg_cost actual (renglones con existencia).
+  const { rows: stock } = await query(
+    `SELECT s.id, s.warehouse_id, s.item_type::text AS item_type, s.item_id, s.status::text AS status,
+            s.quantity::numeric AS quantity, s.avg_cost::numeric AS avg_cost,
+            w.name AS warehouse_name,
+            CASE s.item_type WHEN 'raw_material' THEN rm.name WHEN 'product' THEN p.name END AS item_name,
+            CASE s.item_type WHEN 'product' THEN p.sku WHEN 'raw_material' THEN rm.code END AS code
+       FROM inventory_stock s
+       JOIN warehouses w ON w.id = s.warehouse_id
+       LEFT JOIN raw_materials rm ON rm.id = s.item_id AND s.item_type = 'raw_material'
+       LEFT JOIN products p       ON p.id  = s.item_id AND s.item_type = 'product'
+      WHERE s.tenant_id = $1 AND s.quantity <> 0`,
+    [tenantId])
+
+  const diffs = []
+  for (const s of stock) {
+    const key = `${s.warehouse_id}|${s.item_type}|${s.item_id}|${s.status}`
+    const g = groups.get(key)
+    if (!g) continue  // sin historial en kardex → no se toca aquí
+    const recomputed = parseFloat(g.cost.toFixed(6))
+    const current    = parseFloat(s.avg_cost)
+    if (Math.abs(recomputed - current) > 0.0001) {
+      const qty = parseFloat(s.quantity)
+      diffs.push({
+        stockId: s.id, warehouseName: s.warehouse_name, itemName: s.item_name, code: s.code || '',
+        quantity: qty,
+        currentAvgCost: current, recomputedAvgCost: recomputed,
+        valueBefore: qty * current, valueAfter: qty * recomputed,
+        valueDelta: qty * (recomputed - current),
+      })
+    }
+  }
+  diffs.sort((a, b) => Math.abs(b.valueDelta) - Math.abs(a.valueDelta))
+
+  if (!apply || diffs.length === 0) {
+    return { applied: false, count: diffs.length, diffs }
+  }
+
+  await withTransaction(async (client) => {
+    for (const d of diffs) {
+      await client.query(
+        `UPDATE inventory_stock SET avg_cost = $1, updated_at = NOW() WHERE id = $2`,
+        [d.recomputedAvgCost.toFixed(6), d.stockId])
+    }
+  })
+  return { applied: true, count: diffs.length, diffs }
+}
+
 async function searchItems({ tenantId, q = '', type = null, warehouseId = null, limit = 20 }) {
   const like = `%${q}%`
   const params = [tenantId, like]
@@ -1331,6 +1422,7 @@ module.exports = {
   listAdjustments,
   getAdjustment,
   recomputeStockFromMovements,
+  recomputeAvgCostFromMovements,
 
   searchItems,
 }

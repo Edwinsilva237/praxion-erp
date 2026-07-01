@@ -64,6 +64,21 @@ router.post('/recompute-stock', checkPermission('inventory', 'adjust'), async (r
   } catch (err) { next(err) }
 })
 
+// ── POST /api/inventory/recompute-avg-cost ────────────────────────────────────
+// Recalcula el COSTO PROMEDIO de inventory_stock reproduciendo el kardex. Corrige
+// promedios "pegados" que el kardex no justifica (entradas $0 no bajan el promedio
+// por endurecimiento de costo). apply=false = preview; apply=true = aplica.
+router.post('/recompute-avg-cost', checkPermission('inventory', 'adjust'), async (req, res, next) => {
+  try {
+    const apply = req.body?.apply === true
+    const data = await inventoryService.recomputeAvgCostFromMovements({
+      tenantId: req.tenant.id,
+      apply,
+    })
+    res.json(data)
+  } catch (err) { next(err) }
+})
+
 // ── GET /api/inventory/movements ─────────────────────────────────────────────
 router.get('/movements', checkPermission('inventory', 'read'), async (req, res, next) => {
   try {
