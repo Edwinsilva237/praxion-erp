@@ -60,18 +60,19 @@ export const reportsApi = {
   downloadProductionPdf: ({ from, to }) =>
     api.get(`${B}/production/pdf`, { params: { from, to }, responseType: 'blob' }),
 
-  // ── Inventario — valor y existencias a la fecha ─────────────────────────
+  // ── Inventario — valor y existencias a la fecha o AL CIERRE DE MES ───────
+  // countId (opcional) → valuación reconstruida de la foto de ese conteo.
   /** Snapshot de existencias y valor del inventario (JSON). */
-  getInventoryReport: () =>
-    api.get(`${B}/inventory`).then(r => r.data),
+  getInventoryReport: (countId = null) =>
+    api.get(`${B}/inventory`, { params: countId ? { countId } : {} }).then(r => r.data),
 
   /** Excel multi-hoja del inventario. */
-  downloadInventoryExcel: () =>
-    api.get(`${B}/inventory/excel`, { responseType: 'blob' }),
+  downloadInventoryExcel: (countId = null) =>
+    api.get(`${B}/inventory/excel`, { params: countId ? { countId } : {}, responseType: 'blob' }),
 
   /** PDF ejecutivo del inventario con gráficos. */
-  downloadInventoryPdf: () =>
-    api.get(`${B}/inventory/pdf`, { responseType: 'blob' }),
+  downloadInventoryPdf: (countId = null) =>
+    api.get(`${B}/inventory/pdf`, { params: countId ? { countId } : {}, responseType: 'blob' }),
 
   // ── Estado de cuenta — CXC / CXP ────────────────────────────────────────
   // `direction` debe ser 'cuentas-por-cobrar' o 'cuentas-por-pagar'.

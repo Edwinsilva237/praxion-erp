@@ -23,7 +23,7 @@ const NEG = '#991B1B', WARN = '#B45309'
 const MARGIN = 40
 const BOTTOM = 60
 
-async function generateInventoryPdf({ tenantId }) {
+async function generateInventoryPdf({ tenantId, countId = null }) {
   const { rows: tRows } = await query(
     `SELECT name, display_name, logo_storage_path, brand_color_primary, brand_color_secondary
        FROM tenants WHERE id = $1`, [tenantId])
@@ -33,11 +33,12 @@ async function generateInventoryPdf({ tenantId }) {
   const secondary  = t.brand_color_secondary || '#3F7324'
   const logo       = t.logo_storage_path ? await storage.fetchBuffer(t.logo_storage_path) : null
 
-  const data = await getInventoryReport({ tenantId })
-  const ctx = { tenantName, primary, secondary, logo }
+  const data = await getInventoryReport({ tenantId, countId })
+  const isClose = data.meta?.mode === 'month_close'
+  const ctx = { tenantName, primary, secondary, logo, isClose }
 
   const doc = new PDFDocument({ size: 'LETTER', margin: MARGIN, info: {
-    Title: `Reporte de Inventario — ${tenantName}`, Author: 'Praxion Systems' } })
+    Title: `Reporte de Inventario${isClose ? ' al cierre de mes' : ''} — ${tenantName}`, Author: 'Praxion Systems' } })
   const chunks = []
   doc.on('data', c => chunks.push(c))
   const done = new Promise(r => doc.on('end', r))
@@ -50,7 +51,7 @@ async function generateInventoryPdf({ tenantId }) {
   drawByType(doc, ctx, data)
   drawAlerts(doc, ctx, data)
 
-  drawFooter(doc, tenantName)
+  drawFooter(doc, tenantName, data)
   addPraxionFooterAllPagesPDF(doc)
   doc.end()
   await done
@@ -66,7 +67,7 @@ function newPage(doc, ctx) {
   doc.rect(0, 0, W, 50).fill(ctx.primary)
   if (ctx.logo) { try { doc.image(ctx.logo, 30, 8, { fit: [50, 34] }) } catch (_) {} }
   doc.fillColor('white').font('Helvetica-Bold').fontSize(11).text(ctx.tenantName.toUpperCase(), 90, 18)
-  doc.font('Helvetica').fontSize(8).text('Reporte de inventario', 90, 32)
+  doc.font('Helvetica').fontSize(8).text(ctx.isClose ? 'Inventario al cierre de mes' : 'Reporte de inventario', 90, 32)
   doc.fillColor(INK); doc.y = 70
 }
 
@@ -79,18 +80,25 @@ function drawCover(doc, ctx, data) {
   const W = doc.page.width, H = doc.page.height
   doc.rect(0, 0, W, 140).fill(ctx.primary)
   if (ctx.logo) { try { doc.image(ctx.logo, 40, 30, { fit: [120, 80] }) } catch (_) {} }
-  doc.fillColor('white').font('Helvetica-Bold').fontSize(28).text('REPORTE DE INVENTARIO', 180, 50)
+  doc.fillColor('white').font('Helvetica-Bold').fontSize(ctx.isClose ? 24 : 28)
+     .text(ctx.isClose ? 'INVENTARIO AL CIERRE DE MES' : 'REPORTE DE INVENTARIO', 180, ctx.isClose ? 52 : 50)
   doc.font('Helvetica').fontSize(14).text(ctx.tenantName.toUpperCase(), 180, 88)
 
-  doc.fillColor(INK).font('Helvetica').fontSize(11).text('VALOR TOTAL DEL INVENTARIO', 40, 200)
+  doc.fillColor(INK).font('Helvetica').fontSize(11)
+     .text(ctx.isClose ? 'VALOR DEL INVENTARIO AL CIERRE' : 'VALOR TOTAL DEL INVENTARIO', 40, 200)
   doc.font('Helvetica-Bold').fontSize(34).fillColor(ctx.primary).text(fmtMXNf(data.totals.total_value), 40, 218)
   doc.rect(40, 270, W - 80, 4).fill(ctx.secondary)
 
   doc.fillColor(SUB).font('Helvetica').fontSize(10).text(
     `${fmtNum(data.totals.distinct_items)} artículos distintos en ${fmtNum(data.totals.warehouses)} almacenes. `
     + 'Valor = existencia × costo promedio ponderado de cada artículo.', 40, 300, { width: W - 80, lineGap: 2 })
+  if (ctx.isClose && data.meta?.partial_scope) {
+    doc.fillColor(WARN).font('Helvetica').fontSize(9).text(
+      'Conteo parcial: la valuación cubre solo los artículos incluidos en el conteo, no todo el inventario.',
+      40, 322, { width: W - 80, lineGap: 2 })
+  }
 
-  doc.fillColor(SUB).font('Helvetica').fontSize(9).text(`Generado el ${new Date().toLocaleString('es-MX')}`, 40, H - 80)
+  doc.fillColor(SUB).font('Helvetica').fontSize(9).text(data.meta?.as_of_label || `Generado el ${new Date().toLocaleString('es-MX')}`, 40, H - 80)
   doc.fillColor('#9CA3AF').font('Helvetica').fontSize(8).text('Documento confidencial · Solo para socios y administración', 40, H - 65)
 }
 
@@ -214,13 +222,16 @@ function drawAlerts(doc, ctx, data) {
   }
 }
 
-function drawFooter(doc, tenantName) {
+function drawFooter(doc, tenantName, data) {
+  const footLabel = data?.meta?.mode === 'month_close'
+    ? (data.meta.as_of_label || 'Inventario al cierre')
+    : `Inventario al ${new Date().toLocaleDateString('es-MX')}`
   const pages = doc.bufferedPageRange()
   for (let i = pages.start; i < pages.start + pages.count; i++) {
     doc.switchToPage(i)
     const W = doc.page.width, H = doc.page.height
     doc.fillColor('#9CA3AF').font('Helvetica').fontSize(8)
-       .text(`${tenantName}  ·  Inventario al ${new Date().toLocaleDateString('es-MX')}`, MARGIN, H - 44, { width: W / 2 - MARGIN })
+       .text(`${tenantName}  ·  ${footLabel}`, MARGIN, H - 44, { width: W / 2 - MARGIN })
     doc.text(`Página ${i + 1} de ${pages.count}`, W / 2, H - 44, { width: W / 2 - MARGIN, align: 'right' })
   }
 }

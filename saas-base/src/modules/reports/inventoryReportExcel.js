@@ -6,12 +6,12 @@
 const ExcelJS = require('exceljs')
 const { getInventoryReport } = require('./inventoryReport')
 
-async function generateInventoryWorkbook({ tenantId, tenantName }) {
+async function generateInventoryWorkbook({ tenantId, tenantName, countId = null }) {
   const wb = new ExcelJS.Workbook()
   wb.creator = 'Praxion Systems'
   wb.created = new Date()
 
-  const data = await getInventoryReport({ tenantId })
+  const data = await getInventoryReport({ tenantId, countId })
 
   addResumen(wb, { tenantName, data })
   addPorAlmacen(wb, data)
@@ -45,10 +45,16 @@ function row(ws, label, value, kind, opts = {}) {
 }
 
 function addResumen(wb, { tenantName, data }) {
+  const isClose = data.meta?.mode === 'month_close'
   const ws = wb.addWorksheet('Resumen')
   ws.columns = [{ width: 40 }, { width: 22 }, { width: 16 }]
-  ws.addRow([`Reporte de Inventario — ${tenantName}`]).font = { bold: true, size: 16 }
-  ws.addRow([`Generado: ${new Date().toLocaleString('es-MX')}`]).font = { italic: true, color: { argb: 'FF606060' } }
+  ws.addRow([`Reporte de Inventario${isClose ? ' al cierre de mes' : ''} — ${tenantName}`]).font = { bold: true, size: 16 }
+  ws.addRow([data.meta?.as_of_label || `Generado: ${new Date().toLocaleString('es-MX')}`])
+    .font = { italic: true, color: { argb: 'FF606060' } }
+  if (isClose && data.meta?.partial_scope) {
+    ws.addRow(['⚠ Conteo parcial: la valuación cubre solo los artículos incluidos en el conteo, no todo el inventario.'])
+      .font = { italic: true, color: { argb: 'FFB45309' } }
+  }
   ws.addRow([])
 
   row(ws, '— VALOR DEL INVENTARIO —', null, null, { bold: true })

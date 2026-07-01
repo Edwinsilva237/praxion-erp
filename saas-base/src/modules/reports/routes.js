@@ -275,13 +275,15 @@ router.get('/production/pdf',
   }
 )
 
-// ─── Inventario — valor y existencias a la fecha ───────────────────────────
-/** GET /api/reports/inventory — snapshot de existencias y valor (JSON). */
+// ─── Inventario — valor y existencias a la fecha o AL CIERRE DE MES ─────────
+// ?countId=<uuid> → valuación reconstruida de la foto de ese conteo (month_close);
+// sin countId → snapshot vivo a la fecha de hoy.
+/** GET /api/reports/inventory — existencias y valor (JSON). */
 router.get('/inventory',
   checkPermission('reports', 'inventory'),
   async (req, res, next) => {
     try {
-      const data = await getInventoryReport({ tenantId: req.tenant.id })
+      const data = await getInventoryReport({ tenantId: req.tenant.id, countId: req.query.countId || null })
       res.json(data)
     } catch (err) { next(err) }
   }
@@ -292,13 +294,15 @@ router.get('/inventory/excel',
   checkPermission('reports', 'inventory'),
   async (req, res, next) => {
     try {
+      const countId = req.query.countId || null
       const { rows } = await query(
         `SELECT COALESCE(display_name, name) AS tenant_name FROM tenants WHERE id = $1`, [req.tenant.id])
       const tenantName = rows[0]?.tenant_name || 'Empresa'
-      const buffer = await generateInventoryWorkbook({ tenantId: req.tenant.id, tenantName })
+      const buffer = await generateInventoryWorkbook({ tenantId: req.tenant.id, tenantName, countId })
       const stamp = new Date().toISOString().slice(0, 10)
+      const suffix = countId ? 'cierre' : stamp
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-      res.setHeader('Content-Disposition', `attachment; filename="reporte-inventario-${stamp}.xlsx"`)
+      res.setHeader('Content-Disposition', `attachment; filename="reporte-inventario-${suffix}.xlsx"`)
       res.send(Buffer.from(buffer))
     } catch (err) { next(err) }
   }
@@ -309,10 +313,12 @@ router.get('/inventory/pdf',
   checkPermission('reports', 'inventory'),
   async (req, res, next) => {
     try {
-      const buffer = await generateInventoryPdf({ tenantId: req.tenant.id })
+      const countId = req.query.countId || null
+      const buffer = await generateInventoryPdf({ tenantId: req.tenant.id, countId })
       const stamp = new Date().toISOString().slice(0, 10)
+      const suffix = countId ? 'cierre' : stamp
       res.setHeader('Content-Type', 'application/pdf')
-      res.setHeader('Content-Disposition', `attachment; filename="reporte-inventario-${stamp}.pdf"`)
+      res.setHeader('Content-Disposition', `attachment; filename="reporte-inventario-${suffix}.pdf"`)
       res.send(buffer)
     } catch (err) { next(err) }
   }

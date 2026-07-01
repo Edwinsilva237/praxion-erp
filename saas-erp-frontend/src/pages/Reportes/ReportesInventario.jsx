@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { reportsApi } from '@/api/reports'
+import { countsApi } from '@/api/counts'
 import Spinner from '@/components/ui/Spinner'
 import clsx from 'clsx'
 
@@ -21,10 +22,24 @@ export default function ReportesInventario() {
   const [search, setSearch] = useState('')
   const [exporting, setExporting] = useState(null)
   const [exportError, setExportError] = useState(null)
+  // Modo del reporte: 'current' (snapshot vivo) | 'close' (al cierre de un conteo month_close).
+  const [mode, setMode] = useState('current')
+  const [countId, setCountId] = useState('')
+
+  // Cierres de mes aplicados, para el selector.
+  const { data: closesRaw } = useQuery({
+    queryKey: ['month-close-counts'],
+    queryFn:  () => countsApi.list({ count_type: 'month_close', status: 'applied', limit: 36 }),
+    staleTime: 60_000,
+  })
+  const closes = closesRaw?.data || []
+
+  const effCountId = mode === 'close' ? (countId || null) : null
 
   const { data, isLoading } = useQuery({
-    queryKey: ['inventory-report'],
-    queryFn:  () => reportsApi.getInventoryReport(),
+    queryKey: ['inventory-report', mode, effCountId],
+    queryFn:  () => reportsApi.getInventoryReport(effCountId),
+    enabled:  mode === 'current' || !!effCountId,
     staleTime: 30_000,
   })
 
@@ -36,12 +51,12 @@ export default function ReportesInventario() {
       const mime = kind === 'excel'
         ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         : 'application/pdf'
-      const res  = await fn()
+      const res  = await fn(effCountId)
       const blob = new Blob([res.data], { type: mime })
       const url  = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `reporte-inventario-${new Date().toISOString().slice(0, 10)}.${ext}`
+      a.download = `reporte-inventario-${effCountId ? 'cierre' : new Date().toISOString().slice(0, 10)}.${ext}`
       document.body.appendChild(a); a.click(); a.remove()
       URL.revokeObjectURL(url)
     } catch (e) {
@@ -72,17 +87,47 @@ export default function ReportesInventario() {
         <p className="eyebrow">REPORTES</p>
         <h1 className="text-xl font-semibold text-ink-primary mt-1">Reporte de inventario</h1>
         <p className="text-sm text-ink-muted mt-1">
-          Valor y existencias del inventario a la fecha actual (existencia × costo promedio).
+          {mode === 'close'
+            ? 'Valor y existencias tal como quedaron al cierre de mes (foto del conteo × costo).'
+            : 'Valor y existencias del inventario a la fecha actual (existencia × costo promedio).'}
         </p>
       </div>
+
+      {/* Modo: actual vs cierre de mes */}
+      <section className="card flex flex-wrap gap-3 items-center">
+        <div className="inline-flex rounded-lg border border-line-subtle overflow-hidden">
+          {[{ id: 'current', label: 'Actual' }, { id: 'close', label: 'Al cierre de mes' }].map(m => (
+            <button key={m.id} onClick={() => setMode(m.id)}
+              className={clsx('px-3 py-1.5 text-sm transition-colors',
+                mode === m.id ? 'bg-brand-500 text-white' : 'bg-surface-primary text-ink-secondary hover:text-ink-primary')}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+        {mode === 'close' && (
+          <select className="select select-sm max-w-xs" value={countId} onChange={e => setCountId(e.target.value)}>
+            <option value="">Selecciona un cierre aplicado…</option>
+            {closes.map(c => (
+              <option key={c.id} value={c.id}>
+                {c.count_number} · {new Date(c.count_date).toLocaleDateString('es-MX')}
+                {c.warehouse_name ? ` · ${c.warehouse_name}` : ''}
+              </option>
+            ))}
+          </select>
+        )}
+        {mode === 'close' && !closes.length && (
+          <span className="text-xs text-ink-muted">No hay cierres de mes aplicados todavía.</span>
+        )}
+      </section>
 
       {/* Export */}
       <section className="card flex flex-wrap gap-3 items-center">
         <span className="text-xs text-ink-muted">
-          {data ? `Corte: ${new Date(data.generated_at).toLocaleString('es-MX')}` : 'Cargando…'}
+          {data ? (data.meta?.as_of_label || `Corte: ${new Date(data.generated_at).toLocaleString('es-MX')}`)
+                : (mode === 'close' && !effCountId ? 'Selecciona un cierre' : 'Cargando…')}
         </span>
         <div className="flex gap-2 ml-auto">
-          <button onClick={() => exportAs('pdf')} disabled={exporting !== null || isLoading}
+          <button onClick={() => exportAs('pdf')} disabled={exporting !== null || isLoading || !data}
             className="btn-primary" title="PDF con gráficos">
             {exporting === 'pdf' ? <Spinner size="sm" /> : (
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -92,7 +137,7 @@ export default function ReportesInventario() {
             )}
             PDF con gráficos
           </button>
-          <button onClick={() => exportAs('excel')} disabled={exporting !== null || isLoading}
+          <button onClick={() => exportAs('excel')} disabled={exporting !== null || isLoading || !data}
             className="btn-secondary" title="Excel con el detalle completo">
             {exporting === 'excel' ? <Spinner size="sm" /> : (
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -106,12 +151,23 @@ export default function ReportesInventario() {
         {exportError && <div className="w-full alert-error text-sm">{exportError}</div>}
       </section>
 
-      {isLoading ? (
+      {mode === 'close' && !effCountId ? (
+        <div className="card text-center text-ink-muted py-12">
+          Elige un cierre de mes aplicado en el selector de arriba para ver el inventario valorizado a esa fecha.
+        </div>
+      ) : isLoading ? (
         <div className="flex justify-center py-16"><Spinner /></div>
       ) : !data ? (
         <div className="alert-error">No se pudo cargar el reporte.</div>
       ) : (
         <>
+          {data.meta?.partial_scope && (
+            <div className="alert-warning text-sm">
+              <strong>Conteo parcial.</strong> Este cierre no cubrió todo el inventario (alcance: {data.meta.scope}),
+              así que la valuación incluye solo los artículos que se contaron.
+            </div>
+          )}
+
           {/* KPIs */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Kpi label="Valor total" value={fmtMXNf(totals.total_value)} highlight />
