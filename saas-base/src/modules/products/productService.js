@@ -48,7 +48,7 @@ async function listProducts({ tenantId, type, resinType, isActive, isProduced, s
             p.units_per_package, p.sale_unit,
             p.sat_product_code, p.sat_unit_code, p.objeto_imp,
             p.tax_factor, p.tax_rate,
-            p.lead_time_days, p.base_price, p.base_currency,
+            p.lead_time_days, p.base_price, p.base_currency, p.standard_cost,
             p.is_active, p.created_at,
             qs.grams_per_linear_meter,
             qs.tolerance_pct,
@@ -131,12 +131,37 @@ async function getProduct({ tenantId, productId }) {
     [tenantId, productId]
   )
 
+  // Costo ACTUAL del inventario por almacén (promedio ponderado vivo, inventory_stock).
+  // El costo NO es atributo del producto: vive por (almacén × estado). Devolvemos el
+  // desglose por almacén + un promedio ponderado global para mostrarlo (solo lectura)
+  // en el form de edición. Se corrige en Inventario (lápiz "Costo prom."), no aquí.
+  const { rows: stockCosts } = await query(
+    `SELECT s.warehouse_id, w.name AS warehouse_name, s.status,
+            s.quantity::numeric  AS quantity,
+            s.avg_cost::numeric   AS avg_cost
+       FROM inventory_stock s
+       JOIN warehouses w ON w.id = s.warehouse_id
+      WHERE s.tenant_id = $1 AND s.item_type = 'product' AND s.item_id = $2
+        AND (s.quantity <> 0 OR s.avg_cost <> 0)
+      ORDER BY w.name, s.status`,
+    [tenantId, productId]
+  )
+  // Promedio ponderado global (Σ valor / Σ cantidad) sobre saldos con cantidad > 0.
+  let totQty = 0, totVal = 0
+  for (const r of stockCosts) {
+    const q = parseFloat(r.quantity)
+    if (q > 0) { totQty += q; totVal += q * parseFloat(r.avg_cost) }
+  }
+  const weightedAvgCost = totQty > 0 ? totVal / totQty : null
+
   return {
     ...product,
     customerPrices:      prices,
     qualitySpec:         specs[0] || null,
     packOptions,
     image_attachment_id: imgRows[0]?.id || null,
+    stockCosts,
+    weightedAvgCost,
   }
 }
 
@@ -300,7 +325,7 @@ async function createProduct({
   tenantId, sku, name, type, isProduced, productKindId, resinType,
   lengthMm, widthMm, thicknessMm, unitsPerPackage, saleUnit, description,
   satProductCode, satUnitCode, objetoImp, taxFactor, taxRate, leadTimeDays,
-  basePrice, baseCurrency,
+  basePrice, baseCurrency, standardCost,
   userId, ipAddress, userAgent,
 }) {
   return withTransaction(async (client) => {
@@ -323,8 +348,8 @@ async function createProduct({
          (tenant_id, sku, name, type, is_produced, product_kind_id, resin_type,
           length_mm, width_mm, thickness_mm, units_per_package, sale_unit, description,
           sat_product_code, sat_unit_code, objeto_imp, lead_time_days,
-          base_price, base_currency, tax_factor, tax_rate)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+          base_price, base_currency, tax_factor, tax_rate, standard_cost)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
        RETURNING *`,
       [
         tenantId,
@@ -348,6 +373,7 @@ async function createProduct({
         baseCurrency || 'MXN',
         taxFactor || 'Tasa',
         taxRate != null && taxRate !== '' ? taxRate : 16,
+        standardCost != null && standardCost !== '' ? standardCost : null,
       ]
     )
     const product = rows[0]
@@ -374,7 +400,7 @@ async function createProduct({
 async function updateProduct({
   tenantId, productId, name, description, saleUnit, isActive,
   satProductCode, satUnitCode, objetoImp, taxFactor, taxRate, leadTimeDays,
-  basePrice, baseCurrency,
+  basePrice, baseCurrency, standardCost,
   expectedSalePrice,        // §6c: NRV multi-calidad (products.expected_sale_price)
   productKindId,            // §6c: clasificación SaaS v2
   defaultQualityGradeId,    // §6c: calidad por defecto del producto
@@ -382,12 +408,13 @@ async function updateProduct({
   userId, ipAddress, userAgent,
 }) {
   return withTransaction(async (client) => {
-    // base_price / expected_sale_price tienen semántica especial: '' o null lo limpian a NULL.
+    // base_price / expected_sale_price / standard_cost tienen semántica especial: '' o null lo limpian a NULL.
     const basePriceProvided         = basePrice         !== undefined
     const baseCurrencyProvided      = baseCurrency      !== undefined
     const expectedSalePriceProvided = expectedSalePrice !== undefined
     const productKindIdProvided     = productKindId     !== undefined
     const defaultGradeIdProvided    = defaultQualityGradeId !== undefined
+    const standardCostProvided      = standardCost      !== undefined
 
     await assertValidSatUnitCode(client, satUnitCode)
 
@@ -443,7 +470,8 @@ async function updateProduct({
          default_quality_grade_id = CASE WHEN $17::boolean THEN $18::uuid          ELSE default_quality_grade_id END,
          is_produced           = COALESCE($19, is_produced),
          tax_factor            = COALESCE($22, tax_factor),
-         tax_rate              = COALESCE($23, tax_rate)
+         tax_rate              = COALESCE($23, tax_rate),
+         standard_cost         = CASE WHEN $25::boolean THEN $24::numeric ELSE standard_cost END
        WHERE id = $20 AND tenant_id = $21
        RETURNING *`,
       [
@@ -470,6 +498,8 @@ async function updateProduct({
         tenantId,
         taxFactor || null,
         taxRate != null && taxRate !== '' ? taxRate : null,
+        standardCostProvided ? (standardCost === '' || standardCost === null ? null : standardCost) : null,
+        standardCostProvided,
       ]
     )
     if (rows.length === 0) return null

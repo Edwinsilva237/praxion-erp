@@ -65,6 +65,8 @@ const schema = z.object({
   leadTimeDays:    z.coerce.number().min(0).max(365).optional(),
   basePrice:       z.union([z.coerce.number().positive('Debe ser > 0'), z.literal('')]).optional(),
   baseCurrency:    z.enum(['MXN', 'USD']).optional(),
+  // Costo estándar/estimado (MXN): paracaídas de valuación cuando una entrada llega en $0.
+  standardCost:    z.union([z.coerce.number().nonnegative('No puede ser negativo'), z.literal(''), z.null()]).optional(),
 
   // Campos opcionales del modelo lineal (esquineros, tubos, perfiles, etc.).
   // No son obligatorios — si el tenant no produce lineales, los deja vacíos.
@@ -192,6 +194,7 @@ function ProductModal({ product: initialProduct, cloneFrom = null, onClose }) {
       leadTimeDays:    source?.lead_time_days   ?? 7,
       basePrice:       source?.base_price != null ? Number(source.base_price) : '',
       baseCurrency:    source?.base_currency    || 'MXN',
+      standardCost:    source?.standard_cost != null ? Number(source.standard_cost) : '',
       // Campos del modelo lineal — vacíos por default. Si el origen ya tiene spec,
       // los precargamos para no perder datos (también al clonar).
       gramsPerLinearMeter: source?.qualitySpec?.grams_per_linear_meter
@@ -237,6 +240,16 @@ function ProductModal({ product: initialProduct, cloneFrom = null, onClose }) {
     return productKinds.some(k =>
       opt.requiresKind.includes(String(k.code || '').toLowerCase())
     )
+  })
+
+  // Detalle del producto para mostrar el COSTO ACTUAL de inventario (solo edición).
+  // El costo vive por almacén en inventory_stock; getProduct devuelve stockCosts[]
+  // + weightedAvgCost (promedio ponderado global). Read-only: se corrige en Inventario.
+  const { data: productDetail } = useQuery({
+    queryKey: ['product-detail', product?.id],
+    queryFn:  () => productsApi.get(product.id),
+    enabled:  !!product?.id,
+    staleTime: 30000,
   })
 
   // ── Stash para modo creación: assets que se suben tras crear el producto.
@@ -595,9 +608,63 @@ function ProductModal({ product: initialProduct, cloneFrom = null, onClose }) {
             </p>
           </Section>
 
+          {/* ── 2b. Costo ── */}
+          <Section number="2b" title="Costo" badge="opcional" className="hidden sm:block">
+            <Field label="Costo estimado (MXN)"
+              error={errors.standardCost?.message}
+              hint="Costo de referencia. Se usa como paracaídas cuando una entrada llega en $0 (producción o maquilador sin costo), para que el inventario no quede valuado en cero. El costo real de una compra siempre tiene prioridad.">
+              <input {...register('standardCost')} type="number" step="0.000001" min="0"
+                placeholder="0.00"
+                className={clsx('input', errors.standardCost && 'input-error')} />
+            </Field>
+
+            {/* Costo ACTUAL del inventario (solo lectura) — solo en edición. */}
+            {isEditing && (
+              <div className="mt-3 rounded-xl border border-line-subtle bg-surface-elevated/40 px-4 py-3">
+                <p className="text-xs font-semibold text-ink-secondary mb-1.5">
+                  Costo actual del inventario
+                </p>
+                {Array.isArray(productDetail?.stockCosts) && productDetail.stockCosts.length > 0 ? (
+                  <>
+                    <ul className="space-y-1 text-[13px]">
+                      {productDetail.stockCosts.map((s, i) => (
+                        <li key={i} className="flex items-center justify-between gap-3">
+                          <span className="text-ink-secondary truncate">
+                            {s.warehouse_name}
+                            {s.status !== 'available' && (
+                              <span className="text-ink-muted"> · {s.status}</span>
+                            )}
+                          </span>
+                          <span className="text-ink-primary tabular-nums whitespace-nowrap">
+                            {Number(s.avg_cost).toLocaleString('es-MX', { style: 'currency', currency: 'MXN', minimumFractionDigits: 2, maximumFractionDigits: 6 })}
+                            <span className="text-ink-muted"> · {Number(s.quantity).toLocaleString('es-MX')} u</span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    {productDetail.weightedAvgCost != null && (
+                      <div className="flex items-center justify-between gap-3 mt-2 pt-2 border-t border-line-subtle text-[13px]">
+                        <span className="font-medium text-ink-secondary">Promedio ponderado</span>
+                        <span className="font-semibold text-ink-primary tabular-nums">
+                          {Number(productDetail.weightedAvgCost).toLocaleString('es-MX', { style: 'currency', currency: 'MXN', minimumFractionDigits: 2, maximumFractionDigits: 6 })}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-[13px] text-ink-muted">Sin existencias con costo todavía.</p>
+                )}
+                <p className="text-[11px] text-ink-muted mt-2 leading-tight">
+                  ⓘ Promedio ponderado vivo del kardex, por almacén. Para corregirlo usa el
+                  lápiz de <strong>Inventario → Costo prom.</strong>
+                </p>
+              </div>
+            )}
+          </Section>
+
           {/* ── 2c. Presentaciones de venta ── */}
           {isEditing && (
-            <Section number="2b" title="Presentaciones de venta" badge="cómo se vende y factura" className="hidden sm:block">
+            <Section number="2c" title="Presentaciones de venta" badge="cómo se vende y factura" className="hidden sm:block">
               <PackOptionsEditor product={product} />
             </Section>
           )}

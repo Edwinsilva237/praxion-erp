@@ -90,6 +90,22 @@ async function updateStock(client, {
   quantityDelta, unitCost = 0, status = 'available',
   validateStock = false, allowNegative = false,
 }) {
+  // Paracaídas de costo (mig 219): si ENTRA stock de un PRODUCTO sin costo ($0)
+  // —producción con turno mal costeado, entrada de maquilador sin precio— y el
+  // producto tiene un costo estándar/estimado > 0, lo usamos en lugar de $0 para
+  // que el inventario no quede valuado en cero. El costo REAL siempre gana: si la
+  // entrada ya trae unitCost > 0, no consultamos nada. Solo aplica a productos
+  // (el estándar vive en products.standard_cost); raw_materials no lo tienen.
+  let effUnitCost = unitCost
+  if (itemType === 'product' && quantityDelta > 0 && !(unitCost > 0)) {
+    const { rows: sc } = await client.query(
+      `SELECT standard_cost FROM products WHERE id = $1 AND tenant_id = $2`,
+      [itemId, tenantId]
+    )
+    const std = parseFloat(sc[0]?.standard_cost || 0)
+    if (std > 0) effUnitCost = std
+  }
+
   const { rows } = await client.query(
     `SELECT id, quantity, avg_cost FROM inventory_stock
      WHERE tenant_id=$1 AND warehouse_id=$2 AND item_type=$3 AND item_id=$4 AND status=$5
@@ -113,11 +129,11 @@ async function updateStock(client, {
     const newQty = allowNegative ? rawQty : Math.max(0, rawQty)
 
     let newCost = curCost
-    if (quantityDelta > 0 && unitCost > 0) {
+    if (quantityDelta > 0 && effUnitCost > 0) {
       const denom = curQty + quantityDelta
       newCost = (curQty > 0 && denom > 0)
-        ? ((curQty * curCost) + (quantityDelta * unitCost)) / denom
-        : unitCost
+        ? ((curQty * curCost) + (quantityDelta * effUnitCost)) / denom
+        : effUnitCost
     }
 
     await client.query(
@@ -134,7 +150,7 @@ async function updateStock(client, {
       `INSERT INTO inventory_stock
          (tenant_id, warehouse_id, item_type, item_id, status, quantity, unit, avg_cost, last_movement_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
-      [tenantId, warehouseId, itemType, itemId, status, qty.toFixed(4), unit || 'kg', (unitCost || 0).toFixed(6)]
+      [tenantId, warehouseId, itemType, itemId, status, qty.toFixed(4), unit || 'kg', (effUnitCost || 0).toFixed(6)]
     )
     return qty
   }
