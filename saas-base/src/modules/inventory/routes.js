@@ -64,16 +64,19 @@ router.post('/recompute-stock', checkPermission('inventory', 'adjust'), async (r
   } catch (err) { next(err) }
 })
 
-// ── POST /api/inventory/recompute-avg-cost ────────────────────────────────────
-// Recalcula el COSTO PROMEDIO de inventory_stock reproduciendo el kardex. Corrige
-// promedios "pegados" que el kardex no justifica (entradas $0 no bajan el promedio
-// por endurecimiento de costo). apply=false = preview; apply=true = aplica.
-router.post('/recompute-avg-cost', checkPermission('inventory', 'adjust'), async (req, res, next) => {
+// ── POST /api/inventory/stock/cost ────────────────────────────────────────────
+// Edita manualmente el COSTO UNITARIO (avg_cost) de un artículo en un almacén.
+// Para corregir productos a $0 o mal costeados. Registra auditoría. Gated a
+// inventory:adjust (acción sensible: cambia la valuación).
+router.post('/stock/cost', checkPermission('inventory', 'adjust'), async (req, res, next) => {
   try {
-    const apply = req.body?.apply === true
-    const data = await inventoryService.recomputeAvgCostFromMovements({
-      tenantId: req.tenant.id,
-      apply,
+    const { itemType, itemId, warehouseId, status, unitCost, note } = req.body || {}
+    const data = await inventoryService.setStockCost({
+      tenantId:   req.tenant.id,
+      itemType, itemId, warehouseId, status, unitCost, note,
+      userId:     req.auth.userId,
+      ipAddress:  req.ip,
+      userAgent:  req.get('user-agent'),
     })
     res.json(data)
   } catch (err) { next(err) }

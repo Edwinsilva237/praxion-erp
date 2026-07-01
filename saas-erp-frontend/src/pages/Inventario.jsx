@@ -8,7 +8,7 @@ import AdjustmentModal        from '@/components/inventario/AdjustmentModal'
 import AdjustmentDetallePanel from '@/components/inventario/AdjustmentDetallePanel'
 import ItemDetailPanel        from '@/components/inventario/ItemDetailPanel'
 import RecomputeStockModal    from '@/components/inventario/RecomputeStockModal'
-import RecomputeAvgCostModal  from '@/components/inventario/RecomputeAvgCostModal'
+import EditCostModal          from '@/components/inventario/EditCostModal'
 import ScanButton             from '@/components/scanner/ScanButton'
 import clsx from 'clsx'
 
@@ -189,7 +189,7 @@ export default function Inventario() {
   // UI state
   const [showAdjustModal, setShowAdjustModal] = useState(false)
   const [showRecompute, setShowRecompute] = useState(false)
-  const [showRecomputeCost, setShowRecomputeCost] = useState(false)
+  const [editCostRow, setEditCostRow] = useState(null)
   const [selectedAdjustId, setSelectedAdjustId] = useState(null)
   const [selectedStockItem, setSelectedStockItem] = useState(null)  // {itemType, itemId, warehouseId}
   const [createdMsg, setCreatedMsg] = useState(null)
@@ -339,13 +339,6 @@ export default function Inventario() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
               Recalcular saldos
-            </button>
-            <button onClick={() => setShowRecomputeCost(true)} className="btn-secondary"
-              title="Recalcula el COSTO PROMEDIO a partir del kardex. Corrige promedios pegados en un valor que los movimientos no justifican.">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              Recalcular costo
             </button>
             <button onClick={() => setShowAdjustModal(true)} className="btn-primary">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -716,7 +709,22 @@ export default function Inventario() {
                         ? <span className="text-status-warning">+{fmtNum(inTransit)} <span className="text-ink-muted text-xs">{row.unit}</span></span>
                         : <span className="text-ink-muted">—</span>}
                     </td>
-                    <td className="text-right font-mono text-sm text-ink-secondary">{fmtMXN(row.avg_cost)}</td>
+                    <td className="text-right font-mono text-sm text-ink-secondary" onClick={e => e.stopPropagation()}>
+                      <span className={clsx(parseFloat(row.avg_cost) === 0 && row.warehouse_id && 'text-status-warning')}>
+                        {fmtMXN(row.avg_cost)}
+                      </span>
+                      {row.warehouse_id && (
+                        <Can do="inventory:adjust">
+                          <button onClick={() => setEditCostRow(row)}
+                            className="ml-1.5 align-middle text-ink-muted hover:text-brand-300"
+                            title="Editar costo unitario">
+                            <svg className="w-3.5 h-3.5 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+                        </Can>
+                      )}
+                    </td>
                     <td className="text-right font-mono text-sm font-semibold">{fmtMXN(row.total_value)}</td>
                     <td className="text-xs text-ink-muted">{fmtDate(row.last_movement_at)}</td>
                   </tr>
@@ -972,14 +980,15 @@ export default function Inventario() {
         />
       )}
 
-      {/* ── Modal: recalcular costo promedio desde el kardex ──────────── */}
-      {showRecomputeCost && (
-        <RecomputeAvgCostModal
-          onClose={() => setShowRecomputeCost(false)}
-          onApplied={(res) => {
-            setCreatedMsg(`Costo promedio recalculado: ${res.count} corrección(es) aplicada(s) desde el kardex.`)
-            setTimeout(() => setCreatedMsg(null), 6000)
-            setShowRecomputeCost(false)
+      {/* ── Modal: editar costo promedio de un artículo ──────────────── */}
+      {editCostRow && (
+        <EditCostModal
+          row={editCostRow}
+          onClose={() => setEditCostRow(null)}
+          onSaved={() => {
+            setCreatedMsg(`Costo actualizado para ${editCostRow.item_name}.`)
+            setTimeout(() => setCreatedMsg(null), 5000)
+            setEditCostRow(null)
           }}
         />
       )}

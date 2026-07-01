@@ -36,10 +36,9 @@ export const inventoryApi = {
   recomputeStock: (apply = false) =>
     api.post(`${BASE}/recompute-stock`, { apply }).then(r => r.data),
 
-  // ── Recalcular COSTO PROMEDIO desde el kardex ──────────────────────────────
-  // Corrige promedios "pegados" que el kardex no justifica. apply=false = preview.
-  recomputeAvgCost: (apply = false) =>
-    api.post(`${BASE}/recompute-avg-cost`, { apply }).then(r => r.data),
+  // ── Editar el costo unitario (avg_cost) de un artículo en un almacén ───────
+  setStockCost: ({ itemType, itemId, warehouseId, status = 'available', unitCost, note }) =>
+    api.post(`${BASE}/stock/cost`, { itemType, itemId, warehouseId, status, unitCost, note }).then(r => r.data),
 
   // ── Autocomplete de items ─────────────────────────────────────────────────
   searchItems: (params) =>
