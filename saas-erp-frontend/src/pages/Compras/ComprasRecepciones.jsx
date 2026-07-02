@@ -490,7 +490,11 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
 
               {/* Líneas */}
               {(receipt.lines || []).length > 0 && (
-                <div className="border border-line-subtle rounded-xl overflow-hidden">
+                // shrink-0: sin esto, este bloque (overflow≠visible → min-height:0)
+                // se comprime dentro del flex-col del panel y el overflow recorta
+                // todas las filas menos la primera (+ el pie de Total). overflow-x-auto:
+                // tabla ancha (5 columnas) → scroll horizontal para P. Unit./Importe.
+                <div className="border border-line-subtle rounded-xl overflow-x-auto shrink-0">
                   <table className="table text-xs">
                     <thead>
                       <tr>
