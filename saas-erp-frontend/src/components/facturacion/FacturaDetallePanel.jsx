@@ -10,6 +10,8 @@ import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob } from '@/utils/downloadBlob'
 import useAuthStore from '@/store/useAuthStore'
 import SatCatalogSelect from '@/components/fiscal/SatCatalogSelect'
+import SatUnitCombobox from '@/components/productos/SatUnitCombobox'
+import SatProductCodeCombobox from '@/components/productos/SatProductCodeCombobox'
 import Can from '@/components/auth/Can'
 import clsx from 'clsx'
 
@@ -94,8 +96,90 @@ function DatosGenerales({ invoice }) {
   )
 }
 
+// ── Modal: corregir claves fiscales de una línea (solo borrador) ─────────────
+// Destraba el caso "el producto traía una clave/unidad SAT errónea que se
+// arrastró a la factura y el candado de timbrado la rechaza" sin cancelar ni
+// regenerar la remisión/pedido. Solo metadatos fiscales; no toca importes.
+function EditLineModal({ invoiceId, line, onClose, onSaved }) {
+  const [unit, setUnit]                 = useState(line.unit || '')
+  const [satUnitCode, setSatUnitCode]   = useState(line.sat_unit_code || '')
+  const [satProductCode, setSatProduct] = useState(line.sat_product_code || '')
+  const [description, setDescription]   = useState(line.description || '')
+  const [error, setError]               = useState(null)
+
+  const mutation = useMutation({
+    mutationFn: () => invoicingApi.updateLine(invoiceId, line.id, {
+      unit:           unit.trim() || undefined,
+      satUnitCode:    satUnitCode || undefined,
+      satProductCode: satProductCode || undefined,
+      description:    description.trim() || undefined,
+    }),
+    onSuccess: () => onSaved(),
+    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al guardar'),
+  })
+
+  const canSave = !mutation.isPending &&
+    String(satUnitCode || '').trim() && String(satProductCode || '').trim() && description.trim()
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-lg p-5 max-h-[92vh] overflow-y-auto">
+        <h3 className="text-base font-semibold text-ink-primary mb-1">Corregir claves de la línea</h3>
+        <p className="text-xs text-ink-muted mb-4">
+          Corrige las claves fiscales de esta línea sin cancelar la factura, la remisión ni el pedido.
+          No cambia cantidades ni importes. Corrige también la presentación del producto en el
+          catálogo para que no se repita en documentos futuros.
+        </p>
+
+        {error && (
+          <div className="mb-3 bg-status-danger/10 border border-status-danger/40 rounded-lg px-3 py-2">
+            <p className="text-xs text-status-danger">{error}</p>
+          </div>
+        )}
+
+        <div className="flex flex-col gap-3">
+          <div>
+            <label className="label">Descripción <span className="text-status-danger">*</span></label>
+            <input className="input" value={description}
+              onChange={e => setDescription(e.target.value)} disabled={mutation.isPending} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Unidad (etiqueta)</label>
+              <input className="input" value={unit}
+                onChange={e => setUnit(e.target.value)}
+                placeholder="p.ej. caja, rollo, pieza" disabled={mutation.isPending} />
+              <p className="text-[11px] text-ink-muted mt-1">Lo que se imprime; no es la clave SAT.</p>
+            </div>
+            <div>
+              <label className="label">Clave unidad SAT <span className="text-status-danger">*</span></label>
+              <SatUnitCombobox value={satUnitCode} onChange={setSatUnitCode} disabled={mutation.isPending} />
+            </div>
+          </div>
+          <div>
+            <label className="label">Clave producto SAT <span className="text-status-danger">*</span></label>
+            <SatProductCodeCombobox value={satProductCode} onChange={setSatProduct} disabled={mutation.isPending} />
+          </div>
+        </div>
+
+        <div className="flex gap-2 mt-5">
+          <button onClick={onClose} className="btn-secondary flex-1" disabled={mutation.isPending}>Cancelar</button>
+          <button onClick={() => { setError(null); mutation.mutate() }}
+            className="btn-primary flex-1" disabled={!canSave}>
+            {mutation.isPending ? <Spinner size="sm" /> : 'Guardar'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 // ── Tabla de líneas ──────────────────────────────────────────────────────────
 function LineasTable({ invoice }) {
+  const qc = useQueryClient()
+  const isDraft = invoice.status === 'draft'
+  const [editLine, setEditLine] = useState(null)
   const lines = invoice.lines || []
   if (lines.length === 0) {
     return <p className="text-sm text-ink-muted text-center py-4">Sin líneas</p>
@@ -105,6 +189,7 @@ function LineasTable({ invoice }) {
   const total    = parseFloat(invoice.total || subtotal + tax)
 
   return (
+    <>
     <div className="border border-line-subtle rounded-xl overflow-x-auto">
       <table className="table text-xs min-w-full">
         <thead>
@@ -129,6 +214,23 @@ function LineasTable({ invoice }) {
                 <td>
                   <p className="font-medium text-ink-primary">{l.description || l.product_name}</p>
                   {l.sku && <p className="text-[10px] text-ink-muted font-mono">{l.sku}</p>}
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <p className="text-[10px] text-ink-muted">
+                      SAT <span className="font-mono">{l.sat_product_code || '—'}</span>
+                      {' · unidad '}
+                      <span className="font-mono">{l.sat_unit_code || '—'}</span>
+                    </p>
+                    {isDraft && (
+                      <button type="button" onClick={() => setEditLine(l)}
+                        className="text-brand-300 hover:text-brand-200 shrink-0"
+                        title="Corregir claves SAT de esta línea">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                        </svg>
+                      </button>
+                    )}
+                  </div>
                 </td>
                 <td className="text-right font-mono tabular-nums">
                   {fmtNum(qty, 3)} {l.unit}
@@ -171,6 +273,19 @@ function LineasTable({ invoice }) {
         </div>
       </div>
     </div>
+
+    {editLine && (
+      <EditLineModal
+        invoiceId={invoice.id}
+        line={editLine}
+        onClose={() => setEditLine(null)}
+        onSaved={() => {
+          setEditLine(null)
+          qc.invalidateQueries({ queryKey: ['invoice', invoice.id] })
+        }}
+      />
+    )}
+    </>
   )
 }
 

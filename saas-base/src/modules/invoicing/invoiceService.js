@@ -1401,6 +1401,100 @@ async function updateInvoice({ tenantId, invoiceId, fields, userId, ipAddress, u
 }
 
 /**
+ * Corrige claves fiscales de una LÍNEA de factura en BORRADOR: clave unidad SAT
+ * (c_ClaveUnidad), clave producto SAT (c_ClaveProdServ), la unidad de display y
+ * la descripción del concepto.
+ *
+ * Existe para destrabar el caso "el producto traía una clave SAT errónea (ej.
+ * 'caja' en el campo de clave en vez de 'XBX') que se arrastró hasta la factura,
+ * y el candado de timbrado la rechaza — pero las líneas no se pueden corregir".
+ * Con esto se corrige EN la factura sin cancelar/regenerar la cadena
+ * remisión→pedido.
+ *
+ * Solo toca metadatos fiscales/descriptivos: NO cambia cantidad, precio,
+ * importes ni impuestos, así que los totales del CFDI no se alteran. Las claves
+ * se validan contra los catálogos oficiales del SAT — misma regla que el
+ * candado de timbrado (`satCatalogValidator`), así lo que aquí pasa, timbra.
+ *
+ * OJO: esto arregla SOLO esta factura. La raíz (catálogo del producto/
+ * presentación) hay que corregirla aparte para que no se repita.
+ */
+async function updateInvoiceLineSatCodes({
+  tenantId, invoiceId, lineId, satUnitCode, satProductCode, unit, description,
+  userId, ipAddress, userAgent,
+}) {
+  return withTransaction(async (client) => {
+    const { rows: invRows } = await client.query(
+      `SELECT status FROM invoices WHERE id = $1 AND tenant_id = $2`,
+      [invoiceId, tenantId]
+    )
+    if (!invRows.length) throw createError(404, 'Factura no encontrada.')
+    if (invRows[0].status !== 'draft') {
+      throw createError(409, `No se puede editar una factura en estado '${invRows[0].status}'. Solo borradores.`)
+    }
+
+    const { rows: lineRows } = await client.query(
+      `SELECT id FROM invoice_lines WHERE id = $1 AND invoice_id = $2`,
+      [lineId, invoiceId]
+    )
+    if (!lineRows.length) throw createError(404, 'La línea no pertenece a esta factura.')
+
+    const sets = []
+    const params = [lineId, invoiceId]
+
+    if (satUnitCode !== undefined) {
+      const code = String(satUnitCode || '').trim().toUpperCase()
+      if (!code) throw createError(400, 'La clave de unidad SAT no puede quedar vacía.')
+      const { rows } = await client.query(`SELECT 1 FROM sat_unit_codes WHERE code = $1`, [code])
+      if (!rows.length) {
+        throw createError(422,
+          `La clave de unidad SAT "${code}" no existe en el catálogo del SAT (c_ClaveUnidad). ` +
+          `Elige una válida del selector — ej. XBX (Caja), H87 (Pieza), KGM (Kilogramo), MTR (Metro).`)
+      }
+      params.push(code); sets.push(`sat_unit_code = $${params.length}`)
+    }
+
+    if (satProductCode !== undefined) {
+      const code = String(satProductCode || '').trim()
+      if (!code) throw createError(400, 'La clave de producto SAT no puede quedar vacía.')
+      const { rows } = await client.query(`SELECT 1 FROM sat_product_codes WHERE code = $1`, [code])
+      if (!rows.length) {
+        throw createError(422,
+          `La clave de producto SAT "${code}" no existe en el catálogo del SAT (c_ClaveProdServ). ` +
+          `Elige una válida del selector.`)
+      }
+      params.push(code); sets.push(`sat_product_code = $${params.length}`)
+    }
+
+    if (unit !== undefined) {
+      params.push(String(unit || '').trim() || null); sets.push(`unit = $${params.length}`)
+    }
+    if (description !== undefined) {
+      const d = String(description || '').trim()
+      if (!d) throw createError(400, 'La descripción no puede quedar vacía.')
+      params.push(d); sets.push(`description = $${params.length}`)
+    }
+
+    if (!sets.length) throw createError(400, 'Nada que actualizar.')
+
+    const { rows } = await client.query(
+      `UPDATE invoice_lines SET ${sets.join(', ')}
+        WHERE id = $1 AND invoice_id = $2
+        RETURNING *`,
+      params
+    )
+
+    await audit({
+      tenantId, userId, action: 'invoice.line_fiscal_corrected',
+      resource: 'invoice_lines', resourceId: lineId,
+      payload: { invoiceId, satUnitCode, satProductCode, unit, description }, ipAddress, userAgent,
+    })
+
+    return rows[0]
+  })
+}
+
+/**
  * Reversa el efecto en AR cuando una factura ligada a una remisión se cancela.
  * Maneja tanto el caso de cobertura completa legacy (AR migrado) como el
  * de split parcial (AR-factura nuevo + AR-remisión activo o cancelado).
@@ -1730,7 +1824,7 @@ function createError(status, message) {
 module.exports = {
   listInvoices, getInvoice,
   createFromRemission, createFromRemissions, createDirect, createOccasional,
-  updateInvoice,
+  updateInvoice, updateInvoiceLineSatCodes,
   cancelInvoice, deleteDraftInvoice,
   revertInvoiceArOnCancel,
 }

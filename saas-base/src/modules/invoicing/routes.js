@@ -176,6 +176,29 @@ router.patch('/invoices/:id', checkPermission('invoicing', 'update'), async (req
 })
 
 /**
+ * PATCH /api/invoicing/invoices/:id/lines/:lineId
+ * Corrige claves fiscales de UNA línea en un borrador: clave unidad SAT
+ * (satUnitCode), clave producto SAT (satProductCode), unidad de display (unit)
+ * y descripción (description). Valida contra los catálogos del SAT. No cambia
+ * cantidades, precios ni importes.
+ */
+router.patch('/invoices/:id/lines/:lineId', checkPermission('invoicing', 'update'), async (req, res, next) => {
+  try {
+    const line = await invoiceService.updateInvoiceLineSatCodes({
+      tenantId:       req.tenant.id,
+      invoiceId:      req.params.id,
+      lineId:         req.params.lineId,
+      satUnitCode:    req.body?.satUnitCode,
+      satProductCode: req.body?.satProductCode,
+      unit:           req.body?.unit,
+      description:    req.body?.description,
+      userId:         req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json({ ...line, message: 'Línea corregida.' })
+  } catch (err) { next(err) }
+})
+
+/**
  * POST /api/invoicing/invoices/:id/cancel
  * Cancela una factura en borrador.
  * Body: { reason? }

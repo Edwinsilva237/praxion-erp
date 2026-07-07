@@ -16,6 +16,11 @@ export const invoicingApi = {
   // Editar metadatos de un borrador (no toca las líneas de producto)
   update:        (id, body) => api.patch(`${B}/invoices/${id}`, body).then(r => r.data),
 
+  // Corregir claves fiscales de UNA línea de un borrador (clave unidad/producto
+  // SAT, unidad, descripción). No cambia cantidades ni importes.
+  updateLine:    (invoiceId, lineId, body) =>
+    api.patch(`${B}/invoices/${invoiceId}/lines/${lineId}`, body).then(r => r.data),
+
   // Cancelar borrador (local)
   cancel:        (id, body) => api.post(`${B}/invoices/${id}/cancel`, body).then(r => r.data),
 
