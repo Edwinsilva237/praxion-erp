@@ -2,6 +2,7 @@
 
 const { query } = require('../../db')
 const { buildOrderBy } = require('../../utils/sortOrder')
+const { LOCAL_TODAY } = require('../../utils/sqlTime')
 
 // Orden de la lista CXP (default: vencimiento más próximo arriba = pagos).
 const CXP_SORT_COLUMNS = {
@@ -67,7 +68,7 @@ async function listCXP({ tenantId, status, partnerId, from, to, sortBy, sortDir,
                  AND apa.partner_id = ap.partner_id
                  AND apa.amount_applied < apa.amount
             ), 0)::numeric AS partner_advance_available,
-            CASE WHEN ap.due_date < CURRENT_DATE AND ap.status NOT IN ('paid','cancelled')
+            CASE WHEN ap.due_date < ${LOCAL_TODAY} AND ap.status NOT IN ('paid','cancelled')
               THEN true ELSE false END AS is_overdue
      FROM accounts_payable ap
      JOIN business_partners bp     ON bp.id = ap.partner_id
@@ -97,7 +98,7 @@ async function getCXP({ tenantId, apId }) {
             bp.supplier_credit_days, bp.supplier_bank_name,
             bp.supplier_account_holder, bp.supplier_account_number,
             bp.supplier_clabe, bp.supplier_swift,
-            CASE WHEN ap.due_date < CURRENT_DATE AND ap.status NOT IN ('paid','cancelled')
+            CASE WHEN ap.due_date < ${LOCAL_TODAY} AND ap.status NOT IN ('paid','cancelled')
               THEN true ELSE false END AS is_overdue
        FROM accounts_payable ap
        JOIN business_partners bp ON bp.id = ap.partner_id

@@ -4,6 +4,7 @@ const { query, withTransaction } = require('../../db')
 const { audit }                  = require('../../utils/audit')
 const { stampPaymentComplement, stampPaymentComplementGroup, cancelComplement, maybeAutoSendComplement } = require('../invoicing/paymentComplementService')
 const { buildOrderBy } = require('../../utils/sortOrder')
+const { LOCAL_TODAY } = require('../../utils/sqlTime')
 const logger = require('../../config/logger')
 
 // Orden de la lista CXC (default: vencimiento más próximo arriba = cobranza).
@@ -50,7 +51,7 @@ async function getCustomerStatement({ tenantId, partnerId, from, to }) {
     `SELECT ar.id, ar.document_type, ar.document_number,
             ar.issue_date, ar.due_date, ar.status,
             ar.amount_total, ar.amount_paid, ar.amount_pending,
-            CASE WHEN ar.due_date < CURRENT_DATE AND ar.status NOT IN ('paid','cancelled')
+            CASE WHEN ar.due_date < ${LOCAL_TODAY} AND ar.status NOT IN ('paid','cancelled')
               THEN true ELSE false END AS is_overdue,
             -- Datos fiscales del documento origen (solo cuando es factura).
             -- Sirven para que el modal de pago bloquee las PPD timbradas
@@ -72,7 +73,7 @@ async function getCustomerStatement({ tenantId, partnerId, from, to }) {
        COALESCE(SUM(amount_pending), 0) AS total_pending,
        COUNT(*) FILTER (WHERE status = 'pending')                                          AS docs_pending,
        COUNT(*) FILTER (WHERE status = 'partial')                                          AS docs_partial,
-       COUNT(*) FILTER (WHERE due_date < CURRENT_DATE AND status NOT IN ('paid','cancelled')) AS docs_overdue
+       COUNT(*) FILTER (WHERE due_date < ${LOCAL_TODAY} AND status NOT IN ('paid','cancelled')) AS docs_overdue
      FROM accounts_receivable
      WHERE tenant_id = $1 AND partner_id = $2`,
     [tenantId, partnerId]
@@ -149,7 +150,7 @@ async function listCXC({ tenantId, status, partnerId, from, to, search, sortBy, 
               WHEN COALESCE(pc.complement_total, 0) >= ar.amount_paid - 0.01 THEN 'complete'
               ELSE 'partial'
             END AS complement_status,
-            CASE WHEN ar.due_date < CURRENT_DATE AND ar.status NOT IN ('paid','cancelled')
+            CASE WHEN ar.due_date < ${LOCAL_TODAY} AND ar.status NOT IN ('paid','cancelled')
               THEN true ELSE false END AS is_overdue
      FROM accounts_receivable ar
      JOIN business_partners bp ON bp.id = ar.partner_id
@@ -173,7 +174,7 @@ async function listCXC({ tenantId, status, partnerId, from, to, search, sortBy, 
             COALESCE(SUM(ar.amount_total),   0)                                 AS total_invoiced,
             COALESCE(SUM(ar.amount_paid),    0)                                 AS total_paid,
             COALESCE(SUM(ar.amount_pending), 0)                                 AS total_pending,
-            COUNT(*) FILTER (WHERE ar.due_date < CURRENT_DATE
+            COUNT(*) FILTER (WHERE ar.due_date < ${LOCAL_TODAY}
                                AND ar.status NOT IN ('paid','cancelled'))       AS docs_overdue
        FROM accounts_receivable ar
        JOIN business_partners bp ON bp.id = ar.partner_id
@@ -537,7 +538,7 @@ async function getCXC({ tenantId, arId }) {
             bp.name AS partner_name, bp.rfc AS partner_rfc,
             bp.cfdi_use, bp.payment_method AS partner_payment_method,
             bp.credit_type, bp.credit_days, bp.billing_notes,
-            CASE WHEN ar.due_date < CURRENT_DATE AND ar.status NOT IN ('paid','cancelled')
+            CASE WHEN ar.due_date < ${LOCAL_TODAY} AND ar.status NOT IN ('paid','cancelled')
               THEN true ELSE false END AS is_overdue
        FROM accounts_receivable ar
        JOIN business_partners bp ON bp.id = ar.partner_id

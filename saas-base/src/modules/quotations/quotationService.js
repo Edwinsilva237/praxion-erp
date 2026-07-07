@@ -3,6 +3,7 @@
 const { randomUUID } = require('crypto')
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
+const { LOCAL_TODAY } = require('../../utils/sqlTime')
 const { enqueueEmail: sendMail } = require('../../queues/emailQueue')
 const { quotationEmail } = require('../email/templates/sales')
 const { generateQuotationPDF } = require('./quotationPdfService')
@@ -757,7 +758,7 @@ async function expireStaleQuotations() {
         SET status = 'expired', expired_at = NOW()
       WHERE status IN ('draft', 'sent')
         AND valid_until IS NOT NULL
-        AND valid_until < CURRENT_DATE`
+        AND valid_until < ${LOCAL_TODAY}`
   )
   return { expired: rowCount }
 }

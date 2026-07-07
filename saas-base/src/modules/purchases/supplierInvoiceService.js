@@ -3,6 +3,7 @@
 const { query, withTransaction } = require('../../db')
 const { audit }                  = require('../../utils/audit')
 const { buildOrderBy }           = require('../../utils/sortOrder')
+const { LOCAL_TODAY }            = require('../../utils/sqlTime')
 const { getRateForDate }         = require('../exchange-rates/exchangeRateService')
 const { enqueueEmail }           = require('../../queues/emailQueue')
 const { expenseInvoiceRequestEmail } = require('../email/templates/sales')
@@ -461,7 +462,7 @@ async function listInvoices({ tenantId, type, status, supplierId, from, to, sort
                  AND a.entity_type = 'supplier_invoice'
                  AND a.entity_id   = si.id
             ), 0)::int AS attachment_count,
-            CASE WHEN si.due_date < CURRENT_DATE
+            CASE WHEN si.due_date < ${LOCAL_TODAY}
                   AND si.status NOT IN ('paid','cancelled')
                  THEN true ELSE false END AS is_overdue
      FROM supplier_invoices si
@@ -782,7 +783,7 @@ async function getSupplierStatement({ tenantId, supplierId, from, to }) {
             ap.issue_date, ap.due_date, ap.status,
             ap.amount_total, ap.amount_paid, ap.amount_pending,
             si.uuid_sat, si.rfc_emisor,
-            CASE WHEN ap.due_date < CURRENT_DATE AND ap.status NOT IN ('paid','cancelled')
+            CASE WHEN ap.due_date < ${LOCAL_TODAY} AND ap.status NOT IN ('paid','cancelled')
               THEN true ELSE false END AS is_overdue
      FROM accounts_payable ap
      LEFT JOIN supplier_invoices si ON si.id = ap.document_id
@@ -798,7 +799,7 @@ async function getSupplierStatement({ tenantId, supplierId, from, to }) {
        COALESCE(SUM(amount_pending), 0) AS total_pending,
        COUNT(*) FILTER (WHERE status = 'pending') AS invoices_pending,
        COUNT(*) FILTER (WHERE status = 'partial')  AS invoices_partial,
-       COUNT(*) FILTER (WHERE due_date < CURRENT_DATE AND status NOT IN ('paid','cancelled')) AS invoices_overdue
+       COUNT(*) FILTER (WHERE due_date < ${LOCAL_TODAY} AND status NOT IN ('paid','cancelled')) AS invoices_overdue
      FROM accounts_payable
      WHERE tenant_id = $1 AND partner_id = $2 AND status <> 'cancelled'`,
     [tenantId, supplierId]
@@ -844,7 +845,7 @@ async function listExpenses({ tenantId, categoryId, status, hasCfdi, from, to, s
             ap.id AS ap_id, ap.status AS ap_status,
             ap.amount_paid AS ap_amount_paid, ap.amount_pending AS ap_amount_pending,
             (si.uuid_sat IS NOT NULL) AS has_cfdi,
-            CASE WHEN si.due_date < CURRENT_DATE AND si.status NOT IN ('paid','cancelled')
+            CASE WHEN si.due_date < ${LOCAL_TODAY} AND si.status NOT IN ('paid','cancelled')
                  THEN true ELSE false END AS is_overdue
      FROM supplier_invoices si
      LEFT JOIN business_partners bp ON bp.id = si.partner_id
@@ -938,7 +939,7 @@ async function getExpense({ tenantId, id }) {
             ap.id AS ap_id, ap.status AS ap_status,
             ap.amount_paid AS ap_amount_paid, ap.amount_pending AS ap_amount_pending,
             (si.uuid_sat IS NOT NULL) AS has_cfdi,
-            CASE WHEN ap.due_date < CURRENT_DATE AND ap.status NOT IN ('paid','cancelled')
+            CASE WHEN ap.due_date < ${LOCAL_TODAY} AND ap.status NOT IN ('paid','cancelled')
                  THEN true ELSE false END AS is_overdue
        FROM supplier_invoices si
        LEFT JOIN business_partners bp ON bp.id = si.partner_id

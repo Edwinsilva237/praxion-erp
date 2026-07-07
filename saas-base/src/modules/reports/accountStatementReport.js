@@ -9,6 +9,7 @@
 // no actividad histórica.
 
 const { query } = require('../../db')
+const { LOCAL_TODAY } = require('../../utils/sqlTime')
 
 const DUE_SOON_DAYS = 7
 
@@ -56,8 +57,8 @@ function getConfig(direction) {
 const STATUS_CASE = `
   CASE
     WHEN d.due_date IS NULL                                 THEN 'no_due'
-    WHEN d.due_date <  CURRENT_DATE                         THEN 'overdue'
-    WHEN d.due_date <= CURRENT_DATE + INTERVAL '${DUE_SOON_DAYS} days' THEN 'due_soon'
+    WHEN d.due_date <  ${LOCAL_TODAY}                         THEN 'overdue'
+    WHEN d.due_date <= ${LOCAL_TODAY} + INTERVAL '${DUE_SOON_DAYS} days' THEN 'due_soon'
     ELSE 'current'
   END
 `
@@ -172,7 +173,7 @@ async function getOpenDocuments(tenantId, cfg, filters) {
            ${STATUS_CASE} AS aging_status,
            (CASE
              WHEN d.due_date IS NULL THEN NULL
-             ELSE (CURRENT_DATE - d.due_date)
+             ELSE (${LOCAL_TODAY} - d.due_date)
            END)::int AS days_overdue
       FROM ${cfg.docsTable} d
       JOIN business_partners bp ON bp.id = d.partner_id
@@ -241,7 +242,7 @@ async function getByPartner(tenantId, cfg, filters) {
            COALESCE(SUM(d.amount_pending) FILTER (WHERE ${STATUS_CASE} = 'current'),0)::numeric AS current_amount,
            COUNT(*) FILTER (WHERE ${STATUS_CASE} = 'no_due')::int             AS no_due_count,
            COALESCE(SUM(d.amount_pending) FILTER (WHERE ${STATUS_CASE} = 'no_due'),0)::numeric  AS no_due_amount,
-           MAX(CURRENT_DATE - d.due_date) FILTER (WHERE d.due_date IS NOT NULL AND d.due_date < CURRENT_DATE)::int AS max_days_overdue
+           MAX(${LOCAL_TODAY} - d.due_date) FILTER (WHERE d.due_date IS NOT NULL AND d.due_date < ${LOCAL_TODAY})::int AS max_days_overdue
       FROM ${cfg.docsTable} d
       JOIN business_partners bp ON bp.id = d.partner_id
      WHERE ${conditions.join(' AND ')}

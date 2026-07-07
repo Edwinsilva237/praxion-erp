@@ -72,6 +72,14 @@ const config = {
     }
   })(),
 
+  // Zona horaria del negocio. Se usa para calcular "hoy" en las comparaciones
+  // de vencimiento (is_overdue, aging) del lado SQL: Render corre en UTC, así
+  // que CURRENT_DATE se adelanta un día durante la tarde-noche de México
+  // (UTC−6) y marcaba documentos como vencidos ~6h antes. Ver utils/sqlTime.js.
+  // Multi-tenant a futuro: si hay tenants en otra zona, migrar a una columna
+  // por-tenant; por ahora un valor único configurable cubre a todos (todos MX).
+  timezone: optional('APP_TIMEZONE', 'America/Mexico_City'),
+
   // URL pública del FRONTEND. Se usa para construir los links en correos
   // (reset password, invitación, bienvenida) y el allowlist de CORS.
   // OJO: NO es la URL del backend (Express) — esa es PORT + bind local.
