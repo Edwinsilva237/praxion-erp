@@ -42,6 +42,37 @@ function maybeAlertEmailFailure(data, err) {
   } catch { /* best-effort */ }
 }
 
+// Traduce un error crudo de nodemailer/SMTP a un Error con `status` != 500 y un
+// mensaje accionable para el usuario. Clave: el error handler de app.js
+// reemplaza el mensaje por "Internal server error" SOLO cuando el status es 500
+// (o ausente). Al marcar 502 el mensaje sobrevive al filtro de producción y el
+// frontend puede mostrarlo. Se preserva el error original en la traza para logs.
+function friendlyEmailError(err) {
+  const raw = (err && err.message) || ''
+  const isAuth = /invalid login|535|badcredentials|username and password not accepted/i.test(raw)
+  const isConn = /econnrefused|etimedout|enotfound|eai_again|connection|greeting never received|socket|network/i.test(raw)
+  const notConfigured = /smtp no configurado|email_from no configurado/i.test(raw)
+
+  let msg
+  if (notConfigured) {
+    msg = 'No se pudo enviar el correo: el servidor de correo (SMTP) no está configurado.'
+  } else if (isAuth) {
+    msg = 'No se pudo enviar el correo: el proveedor rechazó las credenciales SMTP. '
+        + 'Revisa SMTP_USER/SMTP_PASS — la App Password de Google pudo caducar (se revoca al cambiar la contraseña o la verificación en 2 pasos).'
+  } else if (isConn) {
+    msg = 'No se pudo enviar el correo: no se pudo conectar al servidor SMTP. Intenta de nuevo en unos minutos.'
+  } else {
+    msg = `No se pudo enviar el correo: ${raw || 'error desconocido del servidor de correo.'}`
+  }
+
+  const e = new Error(msg)
+  e.status = 502
+  e.code   = 'EMAIL_SEND_FAILED'
+  e.cause  = err
+  if (err && err.stack) e.stack = `${e.message}\nCaused by: ${err.stack}`
+  return e
+}
+
 const emailQueue = createQueue(QUEUE_NAME)
 
 /**
@@ -64,8 +95,11 @@ async function enqueueEmail(opts, jobOpts = {}) {
     } catch (err) {
       // Aun en modo síncrono, avisamos del fallo (si el correo es tenant-scoped)
       // y re-lanzamos para preservar el contrato (el caller best-effort decide).
+      // Se traduce a un error 502 con mensaje accionable: los callers directos
+      // (enviar complemento/recibo por correo) lo propagan al usuario en vez de
+      // un "Internal server error" genérico; los best-effort igual lo atrapan.
       maybeAlertEmailFailure(opts, err)
-      throw err
+      throw friendlyEmailError(err)
     }
   }
 
