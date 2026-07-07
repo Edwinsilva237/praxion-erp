@@ -11,7 +11,7 @@ import { PedidoFormModal } from '@/components/ventas/PedidoFormModal'
 import { PedidoDetallePanel } from '@/components/ventas/PedidoDetallePanel'
 import CollapsibleFilters from '@/components/ui/CollapsibleFilters'
 import ScanButton from '@/components/scanner/ScanButton'
-import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtDateOnly, parseDateOnly } from '@/utils/fmt'
 import { LIVE_LIST } from '@/config/livePolling'
 import DocLink from '@/components/ui/DocLink'
 import { useDeepLinkDoc } from '@/hooks/useDeepLinkDoc'
@@ -49,10 +49,18 @@ function DeliveryProgress({ delivered, remisioned, total }) {
 //   - Pedido NO entregado y la fecha programada ya pasó (vencido)
 function isOrderLate(order) {
   if (!order.scheduled_date) return false
-  const scheduled = new Date(order.scheduled_date)
+  // scheduled_date es una columna DATE (sin hora). new Date("2026-07-07") la
+  // parsearía como medianoche UTC → en México (UTC−6) cae un día antes, así que
+  // un pedido "para hoy" se veía vencido. parseDateOnly la ancla a medianoche
+  // LOCAL para que el día de calendario no se mueva.
+  const scheduled = parseDateOnly(order.scheduled_date)
   if (order.status === 'delivered') {
     if (!order.last_delivered_at) return false
-    return new Date(order.last_delivered_at) > scheduled
+    // last_delivered_at SÍ es un timestamp real: comparamos su día de calendario
+    // local contra el programado (entregar el mismo día NO es tarde).
+    const deliveredDay = new Date(order.last_delivered_at)
+    deliveredDay.setHours(0, 0, 0, 0)
+    return deliveredDay > scheduled
   }
   if (['draft', 'cancelled'].includes(order.status)) return false
   // En flujo activo: vencido si la fecha programada ya pasó
@@ -85,7 +93,10 @@ const PENDING_STATUSES = ['confirmed', 'in_delivery', 'partially_delivered']
 function getDeliveryUrgency(scheduledDate) {
   if (!scheduledDate) return 'none'
   const today = new Date(); today.setHours(0, 0, 0, 0)
-  const sched = new Date(scheduledDate); sched.setHours(0, 0, 0, 0)
+  // parseDateOnly ancla la fecha DATE a medianoche LOCAL (ver isOrderLate); sin
+  // esto un pedido programado para HOY se clasificaba 'overdue' en vez de 'today'.
+  const sched = parseDateOnly(scheduledDate)
+  if (!sched) return 'none'
   const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1)
   if (sched < today) return 'overdue'
   if (sched.getTime() === today.getTime())    return 'today'

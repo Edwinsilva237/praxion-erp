@@ -10,7 +10,7 @@ import Can from '@/components/auth/Can'
 import { RemisionFormModal } from '@/components/ventas/RemisionFormModal'
 import { RemisionDetallePanel } from '@/components/ventas/RemisionDetallePanel'
 import CollapsibleFilters from '@/components/ui/CollapsibleFilters'
-import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
+import { fmtMXN, fmtDate, fmtDateOnly, parseDateOnly } from '@/utils/fmt'
 import { LIVE_LIST } from '@/config/livePolling'
 import DocLink from '@/components/ui/DocLink'
 import { useDeepLinkDoc } from '@/hooks/useDeepLinkDoc'
@@ -37,7 +37,11 @@ const PENDING_STATUSES = ['issued', 'sent_by_email', 'partially_delivered']
 function getDeliveryUrgency(issueDate) {
   if (!issueDate) return 'none'
   const today = new Date(); today.setHours(0, 0, 0, 0)
-  const sched = new Date(issueDate); sched.setHours(0, 0, 0, 0)
+  // issue_date es una columna DATE: parseDateOnly la ancla a medianoche LOCAL
+  // para no desfasarla −1 día en México (UTC−6) — si no, una remisión emitida
+  // HOY se marcaba 'overdue'. (Mismo fix que VentasPedidos.)
+  const sched = parseDateOnly(issueDate)
+  if (!sched) return 'none'
   if (sched < today) return 'overdue'
   if (sched.getTime() === today.getTime()) return 'today'
   return 'future'
