@@ -49,6 +49,7 @@ async function listProducts({ tenantId, type, resinType, isActive, isProduced, s
             p.sat_product_code, p.sat_unit_code, p.objeto_imp,
             p.tax_factor, p.tax_rate,
             p.lead_time_days, p.base_price, p.base_currency, p.standard_cost,
+            p.second_quality_product_id,
             p.is_active, p.created_at,
             qs.grams_per_linear_meter,
             qs.tolerance_pct,
@@ -325,7 +326,7 @@ async function createProduct({
   tenantId, sku, name, type, isProduced, productKindId, resinType,
   lengthMm, widthMm, thicknessMm, unitsPerPackage, saleUnit, description,
   satProductCode, satUnitCode, objetoImp, taxFactor, taxRate, leadTimeDays,
-  basePrice, baseCurrency, standardCost,
+  basePrice, baseCurrency, standardCost, secondQualityProductId,
   userId, ipAddress, userAgent,
 }) {
   return withTransaction(async (client) => {
@@ -348,8 +349,9 @@ async function createProduct({
          (tenant_id, sku, name, type, is_produced, product_kind_id, resin_type,
           length_mm, width_mm, thickness_mm, units_per_package, sale_unit, description,
           sat_product_code, sat_unit_code, objeto_imp, lead_time_days,
-          base_price, base_currency, tax_factor, tax_rate, standard_cost)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+          base_price, base_currency, tax_factor, tax_rate, standard_cost,
+          second_quality_product_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
        RETURNING *`,
       [
         tenantId,
@@ -374,6 +376,7 @@ async function createProduct({
         taxFactor || 'Tasa',
         taxRate != null && taxRate !== '' ? taxRate : 16,
         standardCost != null && standardCost !== '' ? standardCost : null,
+        secondQualityProductId || null,
       ]
     )
     const product = rows[0]
@@ -405,6 +408,7 @@ async function updateProduct({
   productKindId,            // §6c: clasificación SaaS v2
   defaultQualityGradeId,    // §6c: calidad por defecto del producto
   isProduced,               // §6c: flag explícito de producto fabricado
+  secondQualityProductId,   // mig 221: SKU de 2ª calidad por defecto
   userId, ipAddress, userAgent,
 }) {
   return withTransaction(async (client) => {
@@ -415,6 +419,7 @@ async function updateProduct({
     const productKindIdProvided     = productKindId     !== undefined
     const defaultGradeIdProvided    = defaultQualityGradeId !== undefined
     const standardCostProvided      = standardCost      !== undefined
+    const secondQProvided           = secondQualityProductId !== undefined
 
     await assertValidSatUnitCode(client, satUnitCode)
 
@@ -471,7 +476,8 @@ async function updateProduct({
          is_produced           = COALESCE($19, is_produced),
          tax_factor            = COALESCE($22, tax_factor),
          tax_rate              = COALESCE($23, tax_rate),
-         standard_cost         = CASE WHEN $25::boolean THEN $24::numeric ELSE standard_cost END
+         standard_cost         = CASE WHEN $25::boolean THEN $24::numeric ELSE standard_cost END,
+         second_quality_product_id = CASE WHEN $26::boolean THEN $27::uuid ELSE second_quality_product_id END
        WHERE id = $20 AND tenant_id = $21
        RETURNING *`,
       [
@@ -500,6 +506,8 @@ async function updateProduct({
         taxRate != null && taxRate !== '' ? taxRate : null,
         standardCostProvided ? (standardCost === '' || standardCost === null ? null : standardCost) : null,
         standardCostProvided,
+        secondQProvided,
+        secondQProvided ? (secondQualityProductId || null) : null,
       ]
     )
     if (rows.length === 0) return null

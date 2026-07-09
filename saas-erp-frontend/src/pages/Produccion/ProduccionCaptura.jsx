@@ -1204,7 +1204,13 @@ export default function ProduccionCaptura() {
 
           <label className="flex items-center gap-3 cursor-pointer">
             <input type="checkbox" checked={isSecondQ}
-              onChange={(e) => { setIsSecondQ(e.target.checked); setSecondQProdId('') }}
+              onChange={(e) => {
+                setIsSecondQ(e.target.checked)
+                // mig 221: al marcar 2ª, autoseleccionar el producto de 2ª por
+                // defecto del artículo activo (si está configurado). El capturista
+                // aún puede cambiarlo. Sin default → queda vacío (elige a mano).
+                setSecondQProdId(e.target.checked ? (activeProduct?.second_quality_product_id || '') : '')
+              }}
               className="w-5 h-5 accent-amber-500" />
             <span className="text-sm text-ink-secondary">Segunda calidad</span>
           </label>

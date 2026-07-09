@@ -67,6 +67,8 @@ const schema = z.object({
   baseCurrency:    z.enum(['MXN', 'USD']).optional(),
   // Costo estándar/estimado (MXN): paracaídas de valuación cuando una entrada llega en $0.
   standardCost:    z.union([z.coerce.number().nonnegative('No puede ser negativo'), z.literal(''), z.null()]).optional(),
+  // Producto de 2ª calidad por defecto (mig 221): se autoselecciona en captura.
+  secondQualityProductId: z.union([z.string().uuid(), z.literal(''), z.null()]).optional(),
 
   // Campos opcionales del modelo lineal (esquineros, tubos, perfiles, etc.).
   // No son obligatorios — si el tenant no produce lineales, los deja vacíos.
@@ -195,6 +197,7 @@ function ProductModal({ product: initialProduct, cloneFrom = null, onClose }) {
       basePrice:       source?.base_price != null ? Number(source.base_price) : '',
       baseCurrency:    source?.base_currency    || 'MXN',
       standardCost:    source?.standard_cost != null ? Number(source.standard_cost) : '',
+      secondQualityProductId: source?.second_quality_product_id || '',
       // Campos del modelo lineal — vacíos por default. Si el origen ya tiene spec,
       // los precargamos para no perder datos (también al clonar).
       gramsPerLinearMeter: source?.qualitySpec?.grams_per_linear_meter
@@ -251,6 +254,16 @@ function ProductModal({ product: initialProduct, cloneFrom = null, onClose }) {
     enabled:  !!product?.id,
     staleTime: 30000,
   })
+
+  // Catálogo de productos para elegir el "producto de 2ª calidad" por defecto
+  // (mig 221). Excluimos el propio producto en edición.
+  const { data: productsRaw } = useQuery({
+    queryKey: ['products-for-second-quality'],
+    queryFn:  () => productsApi.list({ limit: 200 }),
+    staleTime: 60000,
+  })
+  const secondQualityOptions = (Array.isArray(productsRaw) ? productsRaw : (productsRaw?.data || []))
+    .filter(p => p.id !== product?.id)
 
   // ── Stash para modo creación: assets que se suben tras crear el producto.
   const [pendingImage, setPendingImage]   = useState(null)
@@ -616,6 +629,16 @@ function ProductModal({ product: initialProduct, cloneFrom = null, onClose }) {
               <input {...register('standardCost')} type="number" step="0.000001" min="0"
                 placeholder="0.00"
                 className={clsx('input', errors.standardCost && 'input-error')} />
+            </Field>
+
+            <Field label="Producto de 2ª calidad (opcional)"
+              hint="El SKU donde entran las piezas de 2ª calidad de este producto (ej. su variante 'Comercial'). Al capturar 2ª, el sistema lo autoselecciona en vez de mostrar toda la lista. Déjalo vacío para elegir manualmente.">
+              <select {...register('secondQualityProductId')} className="select">
+                <option value="">— Sin default (elegir al capturar) —</option>
+                {secondQualityOptions.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}{p.sku ? ` — ${p.sku}` : ''}</option>
+                ))}
+              </select>
             </Field>
 
             {/* Costo ACTUAL del inventario (solo lectura) — solo en edición. */}

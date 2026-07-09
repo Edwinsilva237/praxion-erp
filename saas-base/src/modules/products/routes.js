@@ -155,6 +155,7 @@ router.post('/', checkPermission('products', 'create'), async (req, res, next) =
       unitsPerPackage, saleUnit, description,
       satProductCode, satUnitCode, objetoImp, taxFactor, taxRate, leadTimeDays,
       basePrice, baseCurrency, standardCost, standard_cost,
+      secondQualityProductId, second_quality_product_id,
     } = req.body
 
     // type queda como dato legacy. Aceptamos isProduced como nuevo discriminador;
@@ -173,6 +174,7 @@ router.post('/', checkPermission('products', 'create'), async (req, res, next) =
       unitsPerPackage, saleUnit, description,
       satProductCode, satUnitCode, objetoImp, taxFactor, taxRate, leadTimeDays,
       basePrice, baseCurrency, standardCost: standardCost ?? standard_cost,
+      secondQualityProductId: secondQualityProductId ?? second_quality_product_id,
       userId:    req.auth.userId,
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
@@ -197,6 +199,7 @@ router.patch('/:id', checkPermission('products', 'update'), async (req, res, nex
       productKindId,     product_kind_id,
       defaultQualityGradeId, default_quality_grade_id,
       isProduced,        is_produced,
+      secondQualityProductId, second_quality_product_id,
     } = req.body
 
     const product = await productService.updateProduct({
@@ -210,6 +213,7 @@ router.patch('/:id', checkPermission('products', 'update'), async (req, res, nex
       productKindId:          productKindId          ?? product_kind_id,
       defaultQualityGradeId:  defaultQualityGradeId  ?? default_quality_grade_id,
       isProduced:             isProduced             ?? is_produced,
+      secondQualityProductId: secondQualityProductId ?? second_quality_product_id,
       userId:    req.auth.userId,
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
