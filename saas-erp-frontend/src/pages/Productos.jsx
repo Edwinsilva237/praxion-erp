@@ -18,6 +18,7 @@ import { PendingSheetsPicker } from '@/components/productos/PendingSheetsPicker'
 import { PendingInventoryLevel } from '@/components/productos/PendingInventoryLevel'
 import { inventoryApi } from '@/api/inventory'
 import Can from '@/components/auth/Can'
+import ProductDetailModal from '@/components/productos/ProductDetailModal'
 import SatUnitCombobox from '@/components/productos/SatUnitCombobox'
 import SatProductCodeCombobox from '@/components/productos/SatProductCodeCombobox'
 import IvaTreatmentSelect from '@/components/fiscal/IvaTreatmentSelect'
@@ -1029,6 +1030,7 @@ export default function Productos() {
   const [filterActive, setFilterActive] = useState('')
   const [page,         setPage]         = useState(1)
   const [modal,        setModal]        = useState(null)
+  const [detailProduct, setDetailProduct] = useState(null)
   const [sortBy,       setSortBy]       = useState(null)
   const [sortDir,      setSortDir]      = useState('asc')
   const [exporting,    setExporting]    = useState(false)
@@ -1218,7 +1220,10 @@ export default function Productos() {
               </thead>
               <tbody>
                 {products.map((p) => (
-                  <tr key={p.id}>
+                  <tr key={p.id}
+                    onClick={() => setDetailProduct(p)}
+                    className="cursor-pointer hover:bg-surface-elevated/30 transition-colors"
+                    title="Ver detalle">
                     <td>
                       <ProductThumbnail
                         productId={p.id}
@@ -1258,7 +1263,7 @@ export default function Productos() {
                         label={p.is_active ? 'Activo' : 'Inactivo'}
                       />
                     </td>
-                    <td>
+                    <td onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
                         <Can do="products:update">
                           <button onClick={() => openEdit(p)}
@@ -1299,6 +1304,14 @@ export default function Productos() {
           </div>
         )}
       </div>
+
+      {detailProduct && (
+        <ProductDetailModal
+          productId={detailProduct.id}
+          onClose={() => setDetailProduct(null)}
+          onEdit={(full) => { setDetailProduct(null); setModal(full) }}
+        />
+      )}
 
       {modal && (
         <ProductModal

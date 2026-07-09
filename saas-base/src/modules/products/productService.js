@@ -85,7 +85,12 @@ async function listProducts({ tenantId, type, resinType, isActive, isProduced, s
 
 async function getProduct({ tenantId, productId }) {
   const { rows } = await query(
-    `SELECT p.* FROM products p WHERE p.id = $1 AND p.tenant_id = $2`,
+    `SELECT p.*,
+            sq.name AS second_quality_product_name,
+            sq.sku  AS second_quality_product_sku
+       FROM products p
+       LEFT JOIN products sq ON sq.id = p.second_quality_product_id
+      WHERE p.id = $1 AND p.tenant_id = $2`,
     [productId, tenantId]
   )
   if (rows.length === 0) return null
