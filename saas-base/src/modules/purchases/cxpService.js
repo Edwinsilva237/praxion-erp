@@ -116,7 +116,7 @@ async function getCXP({ tenantId, apId }) {
             si.subtotal, si.tax, si.total, si.total_mxn,
             si.invoice_date, si.due_date, si.received_date,
             si.reconciliation_status, si.reconciliation_diff,
-            si.notes,
+            si.notes, si.supplier_receipt_id,
             po.order_number AS purchase_order_number,
             sr.receipt_number AS receipt_number, sr.received_date AS receipt_date
        FROM supplier_invoices si
@@ -126,6 +126,35 @@ async function getCXP({ tenantId, apId }) {
     [ap.document_id, tenantId]
   )
   sourceDoc = invRows[0] || null
+
+  // Detalle de LÍNEAS del documento (productos + precios) — para "recordar qué se
+  // está pagando". Vive en supplier_receipt_lines: primero las marcadas como
+  // facturadas por esta factura (invoiced_by_invoice_id); si no hay marca por
+  // línea (recepción completa / remisión), cae a todas las líneas de la recepción
+  // ligada. Facturas de gasto/CFDI sin recepción → sin líneas (arreglo vacío).
+  if (sourceDoc) {
+    const LINE_SELECT = `
+      SELECT srl.id, srl.description, srl.quantity_received AS quantity, srl.unit,
+             srl.unit_price, srl.subtotal, srl.item_type, srl.item_id, srl.line_number,
+             COALESCE(p.name, rm.name, srl.description) AS item_name, p.sku AS item_sku
+        FROM supplier_receipt_lines srl
+        LEFT JOIN products p       ON p.id  = srl.item_id AND srl.item_type = 'product'
+        LEFT JOIN raw_materials rm ON rm.id = srl.item_id AND srl.item_type = 'raw_material'`
+
+    const { rows: byInvoice } = await query(
+      `${LINE_SELECT} WHERE srl.invoiced_by_invoice_id = $1 ORDER BY srl.line_number`,
+      [ap.document_id]
+    )
+    let lines = byInvoice
+    if (lines.length === 0 && sourceDoc.supplier_receipt_id) {
+      const { rows: byReceipt } = await query(
+        `${LINE_SELECT} WHERE srl.supplier_receipt_id = $1 ORDER BY srl.line_number`,
+        [sourceDoc.supplier_receipt_id]
+      )
+      lines = byReceipt
+    }
+    sourceDoc.lines = lines
+  }
 
   // Pagos aplicados al AP — vía supplier_payments + supplier_payment_applications
   const { rows: payments } = await query(

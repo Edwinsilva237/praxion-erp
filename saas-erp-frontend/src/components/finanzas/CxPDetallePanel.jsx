@@ -36,6 +36,61 @@ const PAYMENT_METHOD_LABEL = {
   credit_card:         'Tarjeta de crédito',
 }
 
+// ── Detalle de líneas (productos + precios) del documento ──────────────────
+function LineasDocumento({ lines }) {
+  const [open, setOpen] = useState(false)
+  if (!lines || lines.length === 0) return null
+
+  const total = lines.reduce((s, l) => s + parseFloat(l.subtotal || 0), 0)
+
+  return (
+    <div className="mt-1 border-t border-line-subtle/60 pt-2">
+      <button type="button" onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 text-xs font-semibold text-ink-secondary hover:text-ink-primary">
+        <svg className={clsx('w-3.5 h-3.5 transition-transform', open && 'rotate-90')} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+        {open ? 'Ocultar' : 'Ver'} productos ({lines.length})
+      </button>
+      {open && (
+        <div className="mt-2 rounded-lg border border-line-subtle bg-surface-primary/60 overflow-x-auto">
+          <table className="table text-xs min-w-full">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th className="text-right">Cant.</th>
+                <th className="text-right">P. unit.</th>
+                <th className="text-right">Importe</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map(l => (
+                <tr key={l.id}>
+                  <td className="text-ink-primary">
+                    {l.item_name || l.description || '—'}
+                    {l.item_sku && <span className="text-ink-muted font-mono text-[10px]"> · {l.item_sku}</span>}
+                  </td>
+                  <td className="text-right font-mono tabular-nums text-ink-secondary whitespace-nowrap">
+                    {new Intl.NumberFormat('es-MX', { maximumFractionDigits: 4 }).format(l.quantity || 0)} {l.unit}
+                  </td>
+                  <td className="text-right font-mono tabular-nums text-ink-secondary">{fmtMXN(l.unit_price)}</td>
+                  <td className="text-right font-mono tabular-nums font-semibold text-ink-primary">{fmtMXN(l.subtotal)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-line-subtle">
+                <td colSpan={3} className="text-right text-ink-muted">Subtotal</td>
+                <td className="text-right font-mono tabular-nums font-semibold">{fmtMXN(total)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Documento origen (factura/remisión de proveedor) ───────────────────────
 function DocumentoOrigen({ ap }) {
   const src = ap.sourceDoc
@@ -112,6 +167,7 @@ function DocumentoOrigen({ ap }) {
           </div>
         )}
       </div>
+      <LineasDocumento lines={src.lines} />
     </div>
   )
 }
