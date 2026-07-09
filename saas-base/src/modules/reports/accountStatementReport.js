@@ -367,4 +367,65 @@ function buildSummary(documents, advances, creditNotes) {
   }
 }
 
-module.exports = { getAccountStatement, getPartnerStatement, DUE_SOON_DAYS }
+/**
+ * Líneas (productos + precios) de UN documento del estado de cuenta, para
+ * expandir in-line y "recordar qué se está pagando/cobrando". Recibe el id de la
+ * cuenta (accounts_payable/receivable) + dirección; resuelve el documento origen:
+ *   - out (CxP): supplier_receipt_lines (por factura; fallback recepción).
+ *   - in  (CxC): invoice_lines (factura) o delivery_note_lines (remisión).
+ * Documentos sin líneas (CFDI de gasto sin recepción) → { lines: [] }.
+ */
+async function getDocumentLines({ tenantId, direction, docId }) {
+  const cfg = getConfig(direction)  // valida direction ('in'|'out')
+  const { rows: dr } = await query(
+    `SELECT document_id, document_type FROM ${cfg.docsTable} WHERE id = $1 AND tenant_id = $2`,
+    [docId, tenantId]
+  )
+  if (!dr[0] || !dr[0].document_id) return { lines: [] }
+  const { document_id, document_type } = dr[0]
+
+  if (direction === 'out') {
+    const LINE_SELECT = `
+      SELECT srl.id, srl.unit, srl.unit_price, srl.subtotal,
+             srl.quantity_received AS quantity,
+             COALESCE(p.name, rm.name, srl.description) AS item_name, p.sku AS item_sku
+        FROM supplier_receipt_lines srl
+        LEFT JOIN products p       ON p.id  = srl.item_id AND srl.item_type = 'product'
+        LEFT JOIN raw_materials rm ON rm.id = srl.item_id AND srl.item_type = 'raw_material'`
+    let { rows } = await query(
+      `${LINE_SELECT} WHERE srl.invoiced_by_invoice_id = $1 ORDER BY srl.line_number`, [document_id])
+    if (rows.length === 0) {
+      const { rows: rc } = await query(
+        `SELECT supplier_receipt_id FROM supplier_invoices WHERE id = $1 AND tenant_id = $2`,
+        [document_id, tenantId])
+      if (rc[0]?.supplier_receipt_id) {
+        rows = (await query(
+          `${LINE_SELECT} WHERE srl.supplier_receipt_id = $1 ORDER BY srl.line_number`,
+          [rc[0].supplier_receipt_id])).rows
+      }
+    }
+    return { lines: rows }
+  }
+
+  // direction === 'in' (CxC)
+  if (document_type === 'invoice') {
+    const { rows } = await query(
+      `SELECT il.id, il.unit, il.unit_price, il.subtotal, il.quantity,
+              COALESCE(p.name, il.description) AS item_name, p.sku AS item_sku
+         FROM invoice_lines il LEFT JOIN products p ON p.id = il.product_id
+        WHERE il.invoice_id = $1 ORDER BY il.line_number`, [document_id])
+    return { lines: rows }
+  }
+  if (document_type === 'remission') {
+    const { rows } = await query(
+      `SELECT dnl.id, dnl.unit, dnl.unit_price, dnl.subtotal,
+              dnl.quantity_delivered AS quantity,
+              p.name AS item_name, p.sku AS item_sku
+         FROM delivery_note_lines dnl LEFT JOIN products p ON p.id = dnl.product_id
+        WHERE dnl.delivery_note_id = $1 ORDER BY dnl.line_number`, [document_id])
+    return { lines: rows }
+  }
+  return { lines: [] }
+}
+
+module.exports = { getAccountStatement, getPartnerStatement, getDocumentLines, DUE_SOON_DAYS }

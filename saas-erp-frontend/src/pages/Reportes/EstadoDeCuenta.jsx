@@ -415,6 +415,86 @@ function PartnersTable({ data, labels, direction, onOpenPartner }) {
 }
 
 // ── Modal de detalle del partner ────────────────────────────────────────────
+// Fila de documento expandible: al hacer clic muestra sus productos + precios
+// (líneas del documento origen), cargados de forma perezosa.
+function StatementDocumentRow({ d, direction }) {
+  const [open, setOpen] = useState(false)
+  const meta = STATUS_META[d.aging_status] || STATUS_META.no_due
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['statement-doc-lines', direction, d.id],
+    queryFn:  () => reportsApi.getStatementDocumentLines({ direction, docId: d.id }),
+    enabled:  open,
+    staleTime: 60000,
+  })
+  const lines = data?.lines || []
+
+  return (
+    <>
+      <tr className={clsx(meta.rowClass, 'cursor-pointer')} onClick={() => setOpen(o => !o)} title="Ver productos">
+        <td>
+          <span className={clsx('text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full', meta.pillClass)}>
+            {meta.label}
+          </span>
+        </td>
+        <td>
+          <span className="inline-flex items-center gap-1">
+            <svg className={clsx('w-3 h-3 text-ink-muted transition-transform', open && 'rotate-90')} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+            <span className="font-mono font-semibold text-brand-300">{d.document_number}</span>
+          </span>
+          <span className="ml-2 text-[10px] text-ink-muted">{DOC_TYPE_LABEL[d.document_type] || d.document_type}</span>
+        </td>
+        <td className="text-xs">{fmtDate(d.issue_date)}</td>
+        <td className="text-xs">{fmtDate(d.due_date)}{d.days_overdue > 0 && <span className="text-[10px] text-status-danger ml-1">+{d.days_overdue}d</span>}</td>
+        <td className="text-right font-mono tabular-nums">{fmtMXN(d.amount_total)}</td>
+        <td className="text-right font-mono tabular-nums text-status-success">{fmtMXN(d.amount_paid)}</td>
+        <td className="text-right font-mono tabular-nums font-semibold">{fmtMXN(d.amount_pending)}</td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={7} className="p-0 bg-surface-elevated/30">
+            {isLoading ? (
+              <div className="py-3 text-center text-xs text-ink-muted">Cargando productos…</div>
+            ) : lines.length === 0 ? (
+              <div className="py-3 text-center text-xs text-ink-muted">Sin detalle de productos para este documento.</div>
+            ) : (
+              <div className="px-4 py-2 overflow-x-auto">
+                <table className="table text-xs min-w-full">
+                  <thead>
+                    <tr>
+                      <th>Producto</th>
+                      <th className="text-right">Cant.</th>
+                      <th className="text-right">P. unit.</th>
+                      <th className="text-right">Importe</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lines.map(l => (
+                      <tr key={l.id}>
+                        <td className="text-ink-primary">
+                          {l.item_name || '—'}
+                          {l.item_sku && <span className="text-ink-muted font-mono text-[10px]"> · {l.item_sku}</span>}
+                        </td>
+                        <td className="text-right font-mono tabular-nums text-ink-secondary whitespace-nowrap">
+                          {new Intl.NumberFormat('es-MX', { maximumFractionDigits: 4 }).format(l.quantity || 0)} {l.unit}
+                        </td>
+                        <td className="text-right font-mono tabular-nums text-ink-secondary">{fmtMXN(l.unit_price)}</td>
+                        <td className="text-right font-mono tabular-nums font-semibold text-ink-primary">{fmtMXN(l.subtotal)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
 function PartnerStatementModal({ direction, partnerId, labels, onClose }) {
   const { data, isLoading } = useQuery({
     queryKey: ['partner-statement', direction, partnerId],
@@ -533,27 +613,9 @@ function PartnerStatementContent({ data }) {
               </tr>
             </thead>
             <tbody>
-              {data.documents.map(d => {
-                const meta = STATUS_META[d.aging_status] || STATUS_META.no_due
-                return (
-                  <tr key={d.id} className={meta.rowClass}>
-                    <td>
-                      <span className={clsx('text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full', meta.pillClass)}>
-                        {meta.label}
-                      </span>
-                    </td>
-                    <td>
-                      <span className="font-mono font-semibold text-brand-300">{d.document_number}</span>
-                      <span className="ml-2 text-[10px] text-ink-muted">{DOC_TYPE_LABEL[d.document_type] || d.document_type}</span>
-                    </td>
-                    <td className="text-xs">{fmtDate(d.issue_date)}</td>
-                    <td className="text-xs">{fmtDate(d.due_date)}{d.days_overdue > 0 && <span className="text-[10px] text-status-danger ml-1">+{d.days_overdue}d</span>}</td>
-                    <td className="text-right font-mono tabular-nums">{fmtMXN(d.amount_total)}</td>
-                    <td className="text-right font-mono tabular-nums text-status-success">{fmtMXN(d.amount_paid)}</td>
-                    <td className="text-right font-mono tabular-nums font-semibold">{fmtMXN(d.amount_pending)}</td>
-                  </tr>
-                )
-              })}
+              {data.documents.map(d => (
+                <StatementDocumentRow key={d.id} d={d} direction={direction} />
+              ))}
             </tbody>
           </table>
         )}

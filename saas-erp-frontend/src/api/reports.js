@@ -94,6 +94,10 @@ export const reportsApi = {
   getPartnerStatement: ({ direction, partnerId }) =>
     api.get(`${B}/account-statement/${direction}/partners/${partnerId}`).then(r => r.data),
 
+  /** Líneas (productos + precios) de un documento del estado de cuenta. */
+  getStatementDocumentLines: ({ direction, docId }) =>
+    api.get(`${B}/account-statement/${direction}/documents/${docId}/lines`).then(r => r.data),
+
   /** PDF individual del partner (para enviar a cobranza). */
   downloadPartnerStatementPdf: ({ direction, partnerId }) =>
     api.get(`${B}/account-statement/${direction}/partners/${partnerId}/pdf`, { responseType: 'blob' }),
