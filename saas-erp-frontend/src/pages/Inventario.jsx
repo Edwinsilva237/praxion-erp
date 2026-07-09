@@ -11,62 +11,12 @@ import RecomputeStockModal    from '@/components/inventario/RecomputeStockModal'
 import EditCostModal          from '@/components/inventario/EditCostModal'
 import ReleaseBlockedModal    from '@/components/inventario/ReleaseBlockedModal'
 import KardexItemFilter       from '@/components/inventario/KardexItemFilter'
+import MovementDetailModal     from '@/components/inventario/MovementDetailModal'
+import { MOVEMENT_LABELS, MOVEMENT_BADGE, REFERENCE_LABELS } from '@/config/inventoryLabels'
 import ScanButton             from '@/components/scanner/ScanButton'
 import clsx from 'clsx'
 
 // ── Catálogos ─────────────────────────────────────────────────────────────────
-
-const MOVEMENT_LABELS = {
-  purchase_entry:            'Compra',
-  production_mp_consumption: 'Consumo MP',
-  production_mp_reserve:     'MP → WIP',
-  production_mp_return:      'Devolución MP',
-  production_pt_entry:       'Entrada PT',
-  production_wip_entry:      'Entrada WIP',
-  production_wip_to_pt:      'WIP → PT',
-  sale_exit:                 'Venta',
-  adjustment_in:             'Ajuste entrada',
-  adjustment_out:            'Ajuste salida',
-  scrap_entry:               'Entrada merma',
-  scrap_disposal:            'Baja merma',
-  scrap_to_regrind:          'Merma → Regrind',
-  transfer_in:               'Transferencia entrada',
-  transfer_out:              'Transferencia salida',
-}
-
-const MOVEMENT_BADGE = {
-  purchase_entry:            'green',
-  production_mp_consumption: 'red',
-  production_mp_reserve:     'amber',
-  production_mp_return:      'blue',
-  production_pt_entry:       'green',
-  production_wip_entry:      'blue',
-  production_wip_to_pt:      'purple',
-  adjustment_in:             'blue',
-  adjustment_out:            'amber',
-  sale_exit:                 'purple',
-  scrap_entry:               'gray',
-  scrap_disposal:            'gray',
-  scrap_to_regrind:          'amber',
-  transfer_in:               'blue',
-  transfer_out:              'amber',
-  default:                   'gray',
-}
-
-// Etiquetas legibles para la columna "Referencia" del kardex
-const REFERENCE_LABELS = {
-  supplier_receipt:               'Recepción',
-  supplier_invoice:               'Factura proveedor',
-  shift_progress:                 'Captura turno',
-  production_shift:               'Turno producción',
-  production_order:               'Orden producción',
-  inventory_adjustment:           'Ajuste',
-  inventory_adjustment_reversal:  'Reversión ajuste',
-  manual_adjustment:              'Ajuste manual',
-  sales_order:                    'Pedido',
-  delivery_note:                  'Remisión',
-  invoice:                        'Factura',
-}
 
 // ── Helpers de formato ────────────────────────────────────────────────────────
 function fmtNum(n, decimals = 2) {
@@ -177,6 +127,7 @@ export default function Inventario() {
   const [dateTo, setDateTo]     = useState('')
   const [movItem, setMovItem]   = useState(null)   // { id, item_type, name, sku } | null
   const [movPage, setMovPage]   = useState(1)
+  const [detailMovement, setDetailMovement] = useState(null)  // movement id | null
 
   // Filtros ajustes
   const [adjStatus, setAdjStatus] = useState('')   // '' | 'active' | 'cancelled'
@@ -781,7 +732,8 @@ export default function Inventario() {
               {movData.data.map(m => {
                 const isPositive = parseFloat(m.quantity) >= 0
                 return (
-                  <div key={m.id} className="bg-surface-primary border border-line-subtle rounded-xl p-3">
+                  <div key={m.id} onClick={() => setDetailMovement(m.id)}
+                    className="bg-surface-primary border border-line-subtle rounded-xl p-3 cursor-pointer active:bg-surface-elevated/40">
                     <div className="flex items-start justify-between gap-2">
                       <p className="font-medium text-ink-primary text-sm truncate min-w-0">{m.item_name}</p>
                       <span className={clsx(
@@ -833,7 +785,10 @@ export default function Inventario() {
                   {movData.data.map(m => {
                     const isPositive = parseFloat(m.quantity) >= 0
                     return (
-                      <tr key={m.id}>
+                      <tr key={m.id}
+                        onClick={() => setDetailMovement(m.id)}
+                        className="cursor-pointer hover:bg-surface-elevated/30 transition-colors"
+                        title="Ver detalle y documento origen">
                         <td className="text-xs text-ink-muted whitespace-nowrap">{fmtDate(m.created_at)}</td>
                         <td className="font-medium text-ink-primary text-sm">{m.item_name}</td>
                         <td>
@@ -1018,6 +973,14 @@ export default function Inventario() {
             setTimeout(() => setCreatedMsg(null), 5000)
             setEditCostRow(null)
           }}
+        />
+      )}
+
+      {/* ── Modal: detalle de movimiento del kardex (trazabilidad) ───── */}
+      {detailMovement && (
+        <MovementDetailModal
+          movementId={detailMovement}
+          onClose={() => setDetailMovement(null)}
         />
       )}
 

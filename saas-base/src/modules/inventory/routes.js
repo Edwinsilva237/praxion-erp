@@ -101,6 +101,19 @@ router.post('/stock/release-blocked', checkPermission('inventory', 'adjust'), as
   } catch (err) { next(err) }
 })
 
+// ── GET /api/inventory/movements/:id ─────────────────────────────────────────
+// Detalle de un movimiento del kardex + su documento origen resuelto (remisión,
+// recepción, ajuste, turno, etc.) para trazabilidad.
+router.get('/movements/:id', checkPermission('inventory', 'read'), async (req, res, next) => {
+  try {
+    const data = await inventoryService.getMovementDetail({
+      tenantId: req.tenant.id, movementId: req.params.id,
+    })
+    if (!data) return res.status(404).json({ error: 'Movimiento no encontrado.' })
+    res.json(data)
+  } catch (err) { next(err) }
+})
+
 // ── GET /api/inventory/movements ─────────────────────────────────────────────
 router.get('/movements', checkPermission('inventory', 'read'), async (req, res, next) => {
   try {

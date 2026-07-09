@@ -18,6 +18,9 @@ export const inventoryApi = {
   getMovements: (params) =>
     api.get(`${BASE}/movements`, { params }).then(r => r.data),
 
+  getMovement: (id) =>
+    api.get(`${BASE}/movements/${id}`).then(r => r.data),
+
   // ── Documentos de ajuste ──────────────────────────────────────────────────
   listAdjustments: (params) =>
     api.get(`${BASE}/adjustments`, { params }).then(r => r.data),

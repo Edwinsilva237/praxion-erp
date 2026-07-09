@@ -956,6 +956,115 @@ async function getMovements({ tenantId, itemType, itemId, warehouseId, movementT
   return { data: movRes.rows, total: parseInt(countRes.rows[0].total), page, limit }
 }
 
+// Etiqueta legible por reference_type (fallback cuando no resolvemos el documento).
+const REFERENCE_LABELS = {
+  delivery_note: 'Remisión', supplier_receipt: 'Recepción de compra',
+  supplier_return: 'Devolución a proveedor', inventory_adjustment: 'Ajuste de inventario',
+  inventory_adjustment_reversal: 'Cancelación de ajuste', production_shift: 'Validación de turno',
+  shift_progress: 'Captura de producción', shift_mp_load: 'Carga de MP', shift_scrap: 'Merma de turno',
+  quality_release: 'Liberación de 2ª calidad',
+}
+
+/**
+ * Resuelve el DOCUMENTO ORIGEN de un movimiento (reference_type + reference_id) a
+ * algo legible: tipo, folio, socio, fecha y módulo. Defensivo: si no resuelve,
+ * cae a una etiqueta genérica. Para la trazabilidad del kardex ("¿en qué remisión
+ * / recepción / ajuste / turno se movió?").
+ */
+async function resolveMovementSource(m, tenantId) {
+  const rt = m.reference_type
+  const rid = m.reference_id
+  if (!rt)  return { type: 'manual', label: 'Movimiento sin documento de origen' }
+  const generic = () => ({ type: rt, label: REFERENCE_LABELS[rt] || rt })
+  if (!rid) return generic()
+
+  try {
+    switch (rt) {
+      case 'delivery_note': {
+        const { rows } = await query(
+          `SELECT dn.document_number AS folio, dn.created_at AS date, bp.name AS partner
+             FROM delivery_notes dn LEFT JOIN business_partners bp ON bp.id = dn.partner_id
+            WHERE dn.id = $1 AND dn.tenant_id = $2`, [rid, tenantId])
+        if (!rows[0]) break
+        return { type: rt, module: 'ventas', docId: rid, folio: rows[0].folio,
+          partner: rows[0].partner, date: rows[0].date, label: `Remisión ${rows[0].folio}` }
+      }
+      case 'supplier_receipt': {
+        const { rows } = await query(
+          `SELECT sr.receipt_number AS folio, sr.created_at AS date, bp.name AS partner
+             FROM supplier_receipts sr LEFT JOIN business_partners bp ON bp.id = sr.partner_id
+            WHERE sr.id = $1 AND sr.tenant_id = $2`, [rid, tenantId])
+        if (!rows[0]) break
+        return { type: rt, module: 'compras', docId: rid, folio: rows[0].folio,
+          partner: rows[0].partner, date: rows[0].date, label: `Recepción ${rows[0].folio}` }
+      }
+      case 'supplier_return': {
+        const { rows } = await query(
+          `SELECT sr.return_number AS folio, sr.created_at AS date, bp.name AS partner
+             FROM supplier_returns sr LEFT JOIN business_partners bp ON bp.id = sr.partner_id
+            WHERE sr.id = $1 AND sr.tenant_id = $2`, [rid, tenantId])
+        if (!rows[0]) break
+        return { type: rt, module: 'compras', docId: rid, folio: rows[0].folio,
+          partner: rows[0].partner, date: rows[0].date, label: `Devolución a proveedor ${rows[0].folio}` }
+      }
+      case 'inventory_adjustment':
+      case 'inventory_adjustment_reversal': {
+        const { rows } = await query(
+          `SELECT adjustment_number AS folio, adjustment_date AS date, reason
+             FROM inventory_adjustments WHERE id = $1 AND tenant_id = $2`, [rid, tenantId])
+        if (!rows[0]) break
+        const prefix = rt === 'inventory_adjustment_reversal' ? 'Cancelación de ajuste' : 'Ajuste'
+        return { type: rt, module: 'inventario', docId: rid, folio: rows[0].folio,
+          date: rows[0].date, note: rows[0].reason, label: `${prefix} ${rows[0].folio}` }
+      }
+      case 'production_shift':
+      case 'shift_progress':
+      case 'shift_mp_load':
+      case 'shift_scrap': {
+        const childTable = { shift_progress: 'shift_progress', shift_mp_load: 'shift_mp_loads', shift_scrap: 'shift_scrap' }[rt]
+        let shiftId = rid
+        if (childTable) {
+          const { rows: ch } = await query(`SELECT shift_id FROM ${childTable} WHERE id = $1`, [rid])
+          shiftId = ch[0]?.shift_id
+        }
+        if (!shiftId) break
+        const { rows } = await query(
+          `SELECT shift_number, shift_date FROM production_shifts WHERE id = $1 AND tenant_id = $2`, [shiftId, tenantId])
+        if (!rows[0]) break
+        const kind = { production_shift: 'Validación de turno', shift_progress: 'Captura de producción',
+          shift_mp_load: 'Carga de MP', shift_scrap: 'Merma de turno' }[rt]
+        return { type: rt, module: 'produccion', docId: shiftId, folio: `Turno #${rows[0].shift_number}`,
+          date: rows[0].shift_date, label: `${kind} — Turno #${rows[0].shift_number}` }
+      }
+      case 'quality_release':
+        return { type: rt, label: 'Liberación de 2ª calidad a disponible' }
+    }
+  } catch (e) {
+    console.warn('[inventory] resolveMovementSource falló:', e.message)
+  }
+  return generic()
+}
+
+/** Detalle de UN movimiento del kardex + su documento origen resuelto. */
+async function getMovementDetail({ tenantId, movementId }) {
+  const { rows } = await query(
+    `SELECT m.*, w.name AS warehouse_name,
+            CASE m.item_type WHEN 'raw_material' THEN rm.name WHEN 'product' THEN p.name ELSE 'Desconocido' END AS item_name,
+            CASE m.item_type WHEN 'product' THEN p.sku ELSE NULL END AS item_sku,
+            u.full_name AS created_by_name
+       FROM inventory_movements m
+       JOIN warehouses w ON w.id = m.warehouse_id
+       LEFT JOIN raw_materials rm ON rm.id = m.item_id AND m.item_type = 'raw_material'
+       LEFT JOIN products p       ON p.id  = m.item_id AND m.item_type = 'product'
+       LEFT JOIN users u          ON u.id  = m.created_by
+      WHERE m.id = $1 AND m.tenant_id = $2`,
+    [movementId, tenantId])
+  if (!rows[0]) return null
+  const m = rows[0]
+  const source = await resolveMovementSource(m, tenantId)
+  return { ...m, source }
+}
+
 // ─── Documentos de ajuste ─────────────────────────────────────────────────────
 
 async function nextAdjustmentNumber(client, tenantId, opts = {}) {
@@ -1526,6 +1635,7 @@ module.exports = {
   recomputeStockFromMovements,
   setStockCost,
   releaseBlockedStock,
+  getMovementDetail,
 
   searchItems,
 }
