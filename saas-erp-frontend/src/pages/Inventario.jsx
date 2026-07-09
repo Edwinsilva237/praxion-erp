@@ -9,6 +9,7 @@ import AdjustmentDetallePanel from '@/components/inventario/AdjustmentDetallePan
 import ItemDetailPanel        from '@/components/inventario/ItemDetailPanel'
 import RecomputeStockModal    from '@/components/inventario/RecomputeStockModal'
 import EditCostModal          from '@/components/inventario/EditCostModal'
+import ReleaseBlockedModal    from '@/components/inventario/ReleaseBlockedModal'
 import ScanButton             from '@/components/scanner/ScanButton'
 import clsx from 'clsx'
 
@@ -190,6 +191,7 @@ export default function Inventario() {
   const [showAdjustModal, setShowAdjustModal] = useState(false)
   const [showRecompute, setShowRecompute] = useState(false)
   const [editCostRow, setEditCostRow] = useState(null)
+  const [releaseRow, setReleaseRow] = useState(null)
   const [selectedAdjustId, setSelectedAdjustId] = useState(null)
   const [selectedStockItem, setSelectedStockItem] = useState(null)  // {itemType, itemId, warehouseId}
   const [createdMsg, setCreatedMsg] = useState(null)
@@ -623,6 +625,15 @@ export default function Inventario() {
                     <div className="text-right">
                       <Badge variant={statusVariant} label={statusLabel} />
                       <p className="text-xs text-ink-secondary font-mono mt-1">{fmtMXN(row.total_value)}</p>
+                      {row.status === 'blocked' && parseFloat(row.quantity) > 0 && row.warehouse_id && (
+                        <Can do="inventory:adjust">
+                          <span role="button" tabIndex={0}
+                            onClick={e => { e.stopPropagation(); setReleaseRow(row) }}
+                            className="inline-block mt-1 text-[11px] text-brand-300 underline decoration-dotted cursor-pointer">
+                            Liberar a disponible
+                          </span>
+                        </Can>
+                      )}
                     </div>
                   </div>
                 </button>
@@ -699,6 +710,15 @@ export default function Inventario() {
                           : row.status
                         }
                       />
+                      {row.status === 'blocked' && parseFloat(row.quantity) > 0 && row.warehouse_id && (
+                        <Can do="inventory:adjust">
+                          <button onClick={e => { e.stopPropagation(); setReleaseRow(row) }}
+                            className="ml-2 align-middle text-[11px] text-brand-300 hover:text-brand-200 underline decoration-dotted"
+                            title="Liberar a disponible para poder venderlo">
+                            Liberar
+                          </button>
+                        </Can>
+                      )}
                     </td>
                     <td className={clsx('text-right font-mono text-sm',
                       parseFloat(row.quantity) < 0 && 'text-status-danger font-semibold')}>
@@ -989,6 +1009,19 @@ export default function Inventario() {
             setCreatedMsg(`Costo actualizado para ${editCostRow.item_name}.`)
             setTimeout(() => setCreatedMsg(null), 5000)
             setEditCostRow(null)
+          }}
+        />
+      )}
+
+      {/* ── Modal: liberar 2ª calidad (blocked → available) ──────────── */}
+      {releaseRow && (
+        <ReleaseBlockedModal
+          row={releaseRow}
+          onClose={() => setReleaseRow(null)}
+          onSaved={() => {
+            setCreatedMsg(`2ª calidad liberada a disponible para ${releaseRow.item_name}.`)
+            setTimeout(() => setCreatedMsg(null), 5000)
+            setReleaseRow(null)
           }}
         />
       )}

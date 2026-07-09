@@ -82,6 +82,25 @@ router.post('/stock/cost', checkPermission('inventory', 'adjust'), async (req, r
   } catch (err) { next(err) }
 })
 
+// ── POST /api/inventory/stock/release-blocked ────────────────────────────────
+// Libera stock de 2ª calidad ('blocked') a 'available' para poder venderlo.
+// Mueve dentro del mismo almacén conservando el costo. Gated a inventory:adjust.
+router.post('/stock/release-blocked', checkPermission('inventory', 'adjust'), async (req, res, next) => {
+  try {
+    const { itemId, warehouseId, quantity, note } = req.body || {}
+    const data = await inventoryService.releaseBlockedStock({
+      tenantId:    req.tenant.id,
+      itemId, warehouseId,
+      quantity:    quantity != null && quantity !== '' ? quantity : null,
+      note,
+      userId:      req.auth.userId,
+      ipAddress:   req.ip,
+      userAgent:   req.get('user-agent'),
+    })
+    res.json(data)
+  } catch (err) { next(err) }
+})
+
 // ── GET /api/inventory/movements ─────────────────────────────────────────────
 router.get('/movements', checkPermission('inventory', 'read'), async (req, res, next) => {
   try {

@@ -40,6 +40,10 @@ export const inventoryApi = {
   setStockCost: ({ itemType, itemId, warehouseId, status = 'available', unitCost, note }) =>
     api.post(`${BASE}/stock/cost`, { itemType, itemId, warehouseId, status, unitCost, note }).then(r => r.data),
 
+  // ── Liberar 2ª calidad (blocked → available) para poder venderla ──────────
+  releaseBlockedStock: ({ itemId, warehouseId, quantity, note }) =>
+    api.post(`${BASE}/stock/release-blocked`, { itemId, warehouseId, quantity, note }).then(r => r.data),
+
   // ── Autocomplete de items ─────────────────────────────────────────────────
   searchItems: (params) =>
     api.get(`${BASE}/items/search`, { params }).then(r => r.data),

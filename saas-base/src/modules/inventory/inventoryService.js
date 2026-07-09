@@ -1392,6 +1392,67 @@ async function setStockCost({ tenantId, itemType, itemId, warehouseId, status = 
            valueBefore: qty * prevCost, valueAfter: qty * cost }
 }
 
+/**
+ * Libera stock de PRODUCTO de estado 'blocked' (2ª calidad apartada de venta) a
+ * 'available', dentro del MISMO almacén, para poderlo vender como disponible.
+ * Conserva el costo del bloqueado (se promedia en el saldo disponible). Registra
+ * dos movimientos de ajuste (kardex auditable: salida de blocked + entrada a
+ * available) + auditoría. Gated a inventory:adjust (cambia disponibilidad y
+ * valuación). quantity=null libera TODO el bloqueado.
+ */
+async function releaseBlockedStock({ tenantId, warehouseId, itemId, quantity = null, note = null, userId, ipAddress = null, userAgent = null }) {
+  if (!itemId || !warehouseId) throw createError(400, 'itemId y warehouseId son requeridos.')
+
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT id, quantity::numeric AS quantity, avg_cost::numeric AS avg_cost, unit
+         FROM inventory_stock
+        WHERE tenant_id=$1 AND item_type='product' AND item_id=$2
+          AND warehouse_id=$3 AND status='blocked'
+        FOR UPDATE`,
+      [tenantId, itemId, warehouseId])
+    const blocked = rows[0]
+    const blockedQty = blocked ? parseFloat(blocked.quantity) : 0
+    if (!blocked || blockedQty <= 0) {
+      throw createError(404, 'No hay stock bloqueado de este producto en el almacén.')
+    }
+
+    const qty = quantity == null ? blockedQty : parseFloat(quantity)
+    if (isNaN(qty) || qty <= 0) throw createError(400, 'La cantidad a liberar debe ser un número positivo.')
+    if (qty > blockedQty + 1e-6) {
+      throw createError(400, `Solo hay ${blockedQty.toFixed(4)} bloqueadas; no puedes liberar ${qty.toFixed(4)}.`)
+    }
+
+    const cost = parseFloat(blocked.avg_cost)
+    const unit = blocked.unit || 'pza'
+    const ref  = { referenceType: 'quality_release', referenceId: blocked.id }
+    const notes = (note && String(note).trim()) || 'Liberación de 2ª calidad a disponible'
+
+    await recordMovement(client, {
+      tenantId, warehouseId, itemType: 'product', itemId,
+      movementType: 'adjustment_out', quantity: -qty, unit, unitCost: cost,
+      statusTo: 'blocked', ...ref, validateStock: true,
+      notes, createdBy: userId,
+    })
+    await recordMovement(client, {
+      tenantId, warehouseId, itemType: 'product', itemId,
+      movementType: 'adjustment_in', quantity: qty, unit, unitCost: cost,
+      statusTo: 'available', ...ref,
+      notes, createdBy: userId,
+    })
+
+    await audit({
+      tenantId, userId, action: 'inventory.blocked_released',
+      resource: 'inventory_stock', resourceId: blocked.id,
+      payload: { itemId, warehouseId, quantity: qty, unitCost: cost,
+                 remaining_blocked: blockedQty - qty, note },
+      ipAddress, userAgent,
+    })
+
+    return { itemId, warehouseId, released: qty, remainingBlocked: blockedQty - qty, unitCost: cost }
+  })
+}
+
 async function searchItems({ tenantId, q = '', type = null, warehouseId = null, limit = 20 }) {
   const like = `%${q}%`
   const params = [tenantId, like]
@@ -1464,6 +1525,7 @@ module.exports = {
   getAdjustment,
   recomputeStockFromMovements,
   setStockCost,
+  releaseBlockedStock,
 
   searchItems,
 }
