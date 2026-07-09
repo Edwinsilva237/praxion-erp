@@ -10,6 +10,7 @@ import ItemDetailPanel        from '@/components/inventario/ItemDetailPanel'
 import RecomputeStockModal    from '@/components/inventario/RecomputeStockModal'
 import EditCostModal          from '@/components/inventario/EditCostModal'
 import ReleaseBlockedModal    from '@/components/inventario/ReleaseBlockedModal'
+import KardexItemFilter       from '@/components/inventario/KardexItemFilter'
 import ScanButton             from '@/components/scanner/ScanButton'
 import clsx from 'clsx'
 
@@ -174,6 +175,7 @@ export default function Inventario() {
   const [movType, setMovType]   = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo]     = useState('')
+  const [movItem, setMovItem]   = useState(null)   // { id, item_type, name, sku } | null
   const [movPage, setMovPage]   = useState(1)
 
   // Filtros ajustes
@@ -232,12 +234,14 @@ export default function Inventario() {
   })
 
   const { data: movData, isLoading: loadingMov } = useQuery({
-    queryKey: ['inv-movements', warehouseFilter, movType, dateFrom, dateTo, movPage],
+    queryKey: ['inv-movements', warehouseFilter, movType, dateFrom, dateTo, movItem?.id, movItem?.item_type, movPage],
     queryFn:  () => inventoryApi.getMovements({
       warehouse_id:  warehouseFilter || undefined,
       movement_type: movType         || undefined,
       date_from:     dateFrom        || undefined,
       date_to:       dateTo          || undefined,
+      item_id:       movItem?.id        || undefined,
+      item_type:     movItem?.item_type || undefined,
       page:          movPage,
       limit: 50,
     }),
@@ -488,6 +492,10 @@ export default function Inventario() {
 
         {tab === 'movimientos' && (
           <>
+            <KardexItemFilter
+              value={movItem}
+              onSelect={(it) => { setMovItem(it); setMovPage(1) }}
+            />
             <select
               className="select w-44"
               value={movType}
