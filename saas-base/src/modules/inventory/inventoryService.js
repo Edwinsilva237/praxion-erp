@@ -483,6 +483,58 @@ async function recordProductionValidation(client, { tenantId, shift, userId }) {
       })
     }
   } else {
+    // Robustez ante cambio de flag (2026-07-09): si el turno se CAPTURÓ con
+    // pt_goes_to_wip_first=true (el producto quedó en "En proceso"/wip) pero se
+    // VALIDA ahora con el flag en false, la rama directa NO drenaba el WIP → el
+    // producto quedaba VARADO en wip para siempre (bug reportado en gh-insumos).
+    // Aquí drenamos a PT lo que este turno haya dejado en WIP, ACOTADO al stock
+    // realmente presente para no drenar de más ni duplicar (idempotente: si ya se
+    // drenó, drain=0 y no hace nada). Un turno capturado en flujo directo puro no
+    // tiene entradas wip → wipIn=0 → se salta y cae al revalúo de abajo.
+    for (const grp of pkgGroups) {
+      if (!grp.product_id || !grp.total_units) continue
+      const costUnit = effectiveCostUnit(grp)
+      const isSecond = grp.is_second_quality
+      const ptStatus = isSecond ? 'blocked' : 'available'
+
+      const { rows: wr } = await client.query(
+        `SELECT COALESCE(SUM(quantity),0)::numeric AS wip_in
+           FROM inventory_movements
+          WHERE tenant_id=$1 AND item_type='product' AND item_id=$2
+            AND movement_type='production_wip_entry'
+            AND reference_type='shift_progress'
+            AND reference_id IN (SELECT id FROM shift_progress WHERE shift_id=$3)`,
+        [tenantId, grp.product_id, shift.id]
+      )
+      const wipIn = parseFloat(wr[0].wip_in || 0)
+      if (wipIn <= 0) continue  // flujo directo puro: nada que drenar
+
+      const { rows: sr } = await client.query(
+        `SELECT COALESCE(SUM(quantity),0)::numeric AS wip_qty
+           FROM inventory_stock
+          WHERE tenant_id=$1 AND warehouse_id=$2 AND item_type='product'
+            AND item_id=$3 AND status='wip'`,
+        [tenantId, warehouseWIP, grp.product_id]
+      )
+      const drain = Math.min(wipIn, parseFloat(sr[0].wip_qty || 0))
+      if (drain <= 0) continue  // ya drenado (idempotencia)
+
+      await recordMovement(client, {
+        tenantId, warehouseId: warehouseWIP, itemType: 'product', itemId: grp.product_id,
+        movementType: 'production_wip_to_pt', quantity: -drain, unit: 'pza',
+        unitCost: costUnit, statusTo: 'wip', ...ref,
+        notes: `WIP→PT turno #${shift.shift_number} (drenado tardío por cambio de flag)`,
+        createdBy: userId,
+      })
+      await recordMovement(client, {
+        tenantId, warehouseId: warehousePT, itemType: 'product', itemId: grp.product_id,
+        movementType: 'production_pt_entry', quantity: drain, unit: 'pza',
+        unitCost: costUnit, statusTo: ptStatus, ...ref,
+        notes: `Entrada PT turno #${shift.shift_number}${isSecond ? ' — bloqueada para venta' : ''} (drenado tardío)`,
+        createdBy: userId,
+      })
+    }
+
     // §6d fix (2026-05-29): flujo directo (pt_goes_to_wip_first=false). El PT ya
     // entró al almacén de producto terminado en la captura con costo 0 (el costo
     // del turno aún no se conocía). Ahora que validamos y tenemos cost_per_unit,
