@@ -12,6 +12,7 @@ import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
 import clsx from 'clsx'
 import SatCatalogSelect from '@/components/fiscal/SatCatalogSelect'
+import PartnerDetailModal from '@/components/socios/PartnerDetailModal'
 
 // ─── Catálogos SAT ────────────────────────────────────────────────────────────
 const REGIMENES = [
@@ -1315,6 +1316,7 @@ export default function Socios() {
   const [showOccasional, setShowOccasional] = useState(false)
   const [page, setPage]             = useState(1)
   const [modal, setModal]           = useState(null)
+  const [detailPartner, setDetailPartner] = useState(null)
   const [searchParams, setSearchParams] = useSearchParams()
 
   const { data, isLoading } = useQuery({
@@ -1411,7 +1413,10 @@ export default function Socios() {
                   </td>
                 </tr>
               ) : partners.map((p) => (
-                <tr key={p.id}>
+                <tr key={p.id}
+                  onClick={() => setDetailPartner(p)}
+                  className="cursor-pointer hover:bg-surface-elevated/30 transition-colors"
+                  title="Ver detalle">
                   <td>
                     <div className="font-medium text-ink-primary">{p.name}</div>
                     {p.internal_code && <div className="text-xs text-ink-muted">{p.internal_code}</div>}
@@ -1430,7 +1435,7 @@ export default function Socios() {
                   <td>
                     <Badge variant={p.is_active ? 'green' : 'gray'} label={p.is_active ? 'Activo' : 'Inactivo'} />
                   </td>
-                  <td>
+                  <td onClick={e => e.stopPropagation()}>
                     <Can do="business_partners:update">
                       <button onClick={() => setModal(p)}
                         className="btn-ghost btn-sm btn-icon text-ink-muted hover:text-ink-secondary" title="Editar">
@@ -1459,6 +1464,14 @@ export default function Socios() {
           </div>
         )}
       </div>
+
+      {detailPartner && (
+        <PartnerDetailModal
+          partnerId={detailPartner.id}
+          onClose={() => setDetailPartner(null)}
+          onEdit={(full) => { setDetailPartner(null); setModal(full) }}
+        />
+      )}
 
       {modal === 'quick' && (
         <QuickPartnerModal
