@@ -4331,6 +4331,21 @@ async function validateShift({ tenantId, shiftId, approved, supervisorNotes, use
     await audit({ tenantId, userId, action:'shift.validated', resource:'production_shifts',
       resourceId: shiftId, payload:{ costPerUnit, totalCost, goodUnits, nrvLowerGrades, nrvWarning, packagingCost }, ipAddress, userAgent })
 
+    // Aviso de costeo en cero (2026-07-08): el turno produjo piezas pero su costo
+    // salió $0 — sin base de MP (sin cargas, sin blended, fórmula en $0) y sin
+    // overhead/empaque. El PT solo tendrá costo si los paracaídas de updateStock
+    // (standard_cost → último WAC conocido) lo rescataron. Dejamos rastro para que
+    // el supervisor sepa que se valuó con estimado y revise la captura de MP.
+    if (goodUnits > 0 && !(costPerUnit > 0)) {
+      console.warn(`[costeo] Turno #${closed[0]?.shift_number} validado con cost_per_unit=0 (sin base de costo de MP). PT valuado por paracaídas si el producto tenía costo previo.`)
+      try {
+        await audit({ tenantId, userId, action:'shift.costed_zero', resource:'production_shifts',
+          resourceId: shiftId, payload:{ shiftNumber: closed[0]?.shift_number, goodUnits, avgCostPerKg, overheadCost, packagingCost }, ipAddress, userAgent })
+      } catch (auditErr) {
+        console.error('[audit] Error al registrar shift.costed_zero:', auditErr.message)
+      }
+    }
+
     return closed[0]
   })
 }

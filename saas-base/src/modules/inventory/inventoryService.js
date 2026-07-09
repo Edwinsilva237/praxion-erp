@@ -96,6 +96,14 @@ async function updateStock(client, {
   // que el inventario no quede valuado en cero. El costo REAL siempre gana: si la
   // entrada ya trae unitCost > 0, no consultamos nada. Solo aplica a productos
   // (el estándar vive en products.standard_cost); raw_materials no lo tienen.
+  //
+  // 2º paracaídas (2026-07-08): si NO hay standard_cost, caemos al ÚLTIMO COSTO
+  // CONOCIDO del producto = promedio ponderado de su stock existente en CUALQUIER
+  // almacén (avg_cost > 0). Cubre el caso real que seguía dando $0: turno sin base
+  // de costo de MP (sin cargas / fórmula en $0) y producto SIN standard_cost, pero
+  // que ya se costeó en corridas anteriores. Solo si un SKU nunca tuvo costo en
+  // ningún lado (ni real, ni estándar, ni histórico) queda en $0 — ahí no hay de
+  // dónde inferir y validateShift lo deja auditado.
   let effUnitCost = unitCost
   if (itemType === 'product' && quantityDelta > 0 && !(unitCost > 0)) {
     const { rows: sc } = await client.query(
@@ -103,7 +111,19 @@ async function updateStock(client, {
       [itemId, tenantId]
     )
     const std = parseFloat(sc[0]?.standard_cost || 0)
-    if (std > 0) effUnitCost = std
+    if (std > 0) {
+      effUnitCost = std
+    } else {
+      const { rows: lk } = await client.query(
+        `SELECT SUM(quantity * avg_cost) / NULLIF(SUM(quantity), 0) AS wac
+           FROM inventory_stock
+          WHERE tenant_id = $1 AND item_type = 'product' AND item_id = $2
+            AND quantity > 0 AND avg_cost > 0`,
+        [tenantId, itemId]
+      )
+      const wac = parseFloat(lk[0]?.wac || 0)
+      if (wac > 0) effUnitCost = wac
+    }
   }
 
   const { rows } = await client.query(

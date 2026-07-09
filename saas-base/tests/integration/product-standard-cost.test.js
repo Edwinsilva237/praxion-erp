@@ -100,6 +100,27 @@ describe('product standard_cost', () => {
     expect(d.standard_cost).toBeNull()
   })
 
+  test('2º paracaídas: sin standard_cost, la entrada en $0 toma el último WAC conocido en otro almacén', async () => {
+    const id = await newProduct('STD-WAC', null)          // SIN standard_cost
+    await entry(id, 100, 12)                                // Fábrica: 100 @ $12 (costo real previo)
+
+    // Segundo almacén (Distribución). Entrada en $0 → debe tomar el WAC global (12).
+    const wh2 = (await withBypass(() => query(
+      `INSERT INTO warehouses (tenant_id,name,type,is_active)
+       VALUES ($1,'Distribucion','finished_product',true) RETURNING id`, [tenantId]))).rows[0].id
+    await withTransaction((c) => inventoryService.recordMovement(c, {
+      tenantId, warehouseId: wh2, itemType: 'product', itemId: id,
+      movementType: 'adjustment_in', quantity: 40, unit: 'pza', unitCost: 0,
+      statusTo: 'available', notes: 'entrada $0 en 2º almacén', createdBy: userId,
+    }))
+
+    const { rows } = await withBypass(() => query(
+      `SELECT avg_cost::numeric AS avg_cost FROM inventory_stock
+        WHERE tenant_id=$1 AND warehouse_id=$2 AND item_type='product' AND item_id=$3 AND status='available'`,
+      [tenantId, wh2, id]))
+    expect(parseFloat(rows[0].avg_cost)).toBeCloseTo(12, 4)   // NO $0
+  })
+
   test('getProduct expone stockCosts por almacén y promedio ponderado global', async () => {
     const id = await newProduct('STD-7', 4)
     await entry(id, 50, 4)
