@@ -714,6 +714,18 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const reconDiff = +(expSubtotal - coveredSubtotal).toFixed(2)
   const reconOk = Math.abs(reconDiff) < 0.01
   const checkedCount = Object.values(checkedLines).filter(Boolean).length
+  // Modo por MONTO: si el usuario deja marcadas TODAS las líneas pendientes, el
+  // vínculo es "whole-reception por monto" → esta factura cubre min(su subtotal,
+  // saldo por facturar). Permite que 2+ facturas dividan el mismo material (975 =
+  // 500 + 475). Si desmarca líneas → modo por LÍNEAS (materiales distintos).
+  const pendingLineIds = (receiptDetail?.lines || []).filter(l => l.invoice_pending).map(l => l.id)
+  const amountMode = pendingLineIds.length > 0 && pendingLineIds.every(lid => checkedLines[lid])
+  const receiptSubtotal = parseFloat(receiptDetail?.receipt_subtotal || 0)
+  const invoicedAmount  = parseFloat(receiptDetail?.invoiced_amount || 0)
+  const remainingAmount = +(receiptSubtotal - invoicedAmount).toFixed(2)
+  const amountCoverage  = Math.min(expSubtotal, Math.max(remainingAmount, 0))
+  const remainingAfter  = +(remainingAmount - amountCoverage).toFixed(2)
+  const amountOvershoot = +(expSubtotal - amountCoverage).toFixed(2)   // factura > saldo restante
   const resetLink = () => { setLinkOpen(false); setLinkReceiptId(''); setPickedReceipts({}); setCheckedLines({}) }
 
   return createPortal(
@@ -1086,21 +1098,50 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
                           </div>
                         ))}
                       </div>
-                      {/* Conciliación: subtotal de la factura vs líneas marcadas */}
-                      <div className={`rounded-lg px-3 py-2 text-xs flex flex-col gap-0.5 ${reconOk ? 'bg-status-success/10' : 'bg-amber-500/10'}`}>
-                        <div className="flex justify-between"><span className="text-ink-muted">Factura (subtotal)</span><span className="tabular-nums">{fmtMXN(expSubtotal)}</span></div>
-                        <div className="flex justify-between"><span className="text-ink-muted">Líneas marcadas</span><span className="tabular-nums">{fmtMXN(coveredSubtotal)}</span></div>
-                        <div className="flex justify-between font-medium">
-                          <span>{reconOk ? '✓ Cuadra' : 'Diferencia'}</span>
-                          <span className={`tabular-nums ${reconOk ? 'text-status-success' : 'text-amber-400'}`}>{fmtMXN(reconDiff)}</span>
+                      {/* Conciliación */}
+                      {amountMode ? (
+                        /* Por MONTO: esta factura cubre parte del saldo de la recepción
+                           (permite varias facturas para el mismo material). */
+                        <div className={`rounded-lg px-3 py-2 text-xs flex flex-col gap-0.5 ${(remainingAfter > 0.01 || amountOvershoot > 0.01) ? 'bg-amber-500/10' : 'bg-status-success/10'}`}>
+                          <div className="flex justify-between"><span className="text-ink-muted">Factura (subtotal)</span><span className="tabular-nums">{fmtMXN(expSubtotal)}</span></div>
+                          <div className="flex justify-between"><span className="text-ink-muted">Total recepción</span><span className="tabular-nums">{fmtMXN(receiptSubtotal)}</span></div>
+                          {invoicedAmount > 0.01 && (
+                            <div className="flex justify-between"><span className="text-ink-muted">Ya facturado</span><span className="tabular-nums">{fmtMXN(invoicedAmount)}</span></div>
+                          )}
+                          <div className="flex justify-between font-medium">
+                            <span>Esta factura cubre</span>
+                            <span className="tabular-nums text-status-success">{fmtMXN(amountCoverage)}</span>
+                          </div>
+                          {remainingAfter > 0.01 && (
+                            <div className="flex justify-between text-amber-400">
+                              <span>Quedan por facturar</span><span className="tabular-nums">{fmtMXN(remainingAfter)}</span>
+                            </div>
+                          )}
+                          {amountOvershoot > 0.01 && (
+                            <div className="text-amber-400 mt-0.5">⚠ La factura excede el saldo por {fmtMXN(amountOvershoot)} — revisa antes de vincular.</div>
+                          )}
                         </div>
-                      </div>
+                      ) : (
+                        /* Por LÍNEAS: subtotal de la factura vs líneas marcadas */
+                        <div className={`rounded-lg px-3 py-2 text-xs flex flex-col gap-0.5 ${reconOk ? 'bg-status-success/10' : 'bg-amber-500/10'}`}>
+                          <div className="flex justify-between"><span className="text-ink-muted">Factura (subtotal)</span><span className="tabular-nums">{fmtMXN(expSubtotal)}</span></div>
+                          <div className="flex justify-between"><span className="text-ink-muted">Líneas marcadas</span><span className="tabular-nums">{fmtMXN(coveredSubtotal)}</span></div>
+                          <div className="flex justify-between font-medium">
+                            <span>{reconOk ? '✓ Cuadra' : 'Diferencia'}</span>
+                            <span className={`tabular-nums ${reconOk ? 'text-status-success' : 'text-amber-400'}`}>{fmtMXN(reconDiff)}</span>
+                          </div>
+                        </div>
+                      )}
                       <div className="flex gap-2">
                         <button type="button" className="btn-ghost text-xs"
                           onClick={() => { setLinkReceiptId(''); setCheckedLines({}) }}>Atrás</button>
                         <button type="button" className="btn-primary text-xs"
-                          disabled={checkedCount === 0 || linkReceipt.isPending}
-                          onClick={() => { setError(null); linkReceipt.mutate({ receiptId: linkReceiptId, lineIds: Object.keys(checkedLines).filter(k => checkedLines[k]) }) }}>
+                          disabled={(amountMode ? remainingAmount <= 0.01 : checkedCount === 0) || linkReceipt.isPending}
+                          onClick={() => {
+                            setError(null)
+                            if (amountMode) linkReceipt.mutate({ receiptId: linkReceiptId })
+                            else linkReceipt.mutate({ receiptId: linkReceiptId, lineIds: Object.keys(checkedLines).filter(k => checkedLines[k]) })
+                          }}>
                           {linkReceipt.isPending ? <Spinner size="sm" /> : 'Confirmar vínculo'}
                         </button>
                       </div>

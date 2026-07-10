@@ -460,14 +460,19 @@ router.get('/receipts/pending-invoice', checkPermission('purchases', 'read'), as
                  WHERE irl.supplier_receipt_id = sr.id
                    AND si.status <> 'cancelled' AND si.type = 'remission'
               ) AS has_remission,
-              -- Saldo POR FACTURAR = subtotal de las líneas aún sin factura real activa
-              -- (NULL, cancelada, o cubierta por remisión = reemplazable). Con facturación
-              -- parcial esto es menor al total de la recepción.
+              -- Saldo POR FACTURAR (por MONTO) = subtotal total de la recepción menos lo
+              -- ya cubierto por facturas REALES activas (invoice_receipt_links). Cubre
+              -- tanto la facturación parcial por líneas (materiales distintos) como la
+              -- parcial por monto (varias facturas dividen el mismo material).
               COALESCE((
                 SELECT SUM(srl.subtotal) FROM supplier_receipt_lines srl
-                  LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
                  WHERE srl.supplier_receipt_id = sr.id
-                   AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled' OR ci.type = 'remission')
+              ), 0)::numeric
+              - COALESCE((
+                SELECT SUM(irl.amount_applied) FROM invoice_receipt_links irl
+                  JOIN supplier_invoices si ON si.id = irl.supplier_invoice_id
+                 WHERE irl.supplier_receipt_id = sr.id
+                   AND si.status <> 'cancelled' AND si.type = 'invoice'
               ), 0)::numeric AS total_mxn
        FROM supplier_receipts sr
        LEFT JOIN business_partners bp ON bp.id = sr.partner_id

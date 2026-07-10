@@ -1390,8 +1390,18 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLin
     if (e.status === 'cancelled') throw createError(409, 'El gasto está cancelado.')
     if (!e.partner_id) throw createError(400, 'El gasto no tiene proveedor del catálogo; no se puede vincular a una recepción.')
 
+    // Subtotal del gasto en MXN (para cobertura por monto y conciliación).
+    const round2 = (n) => parseFloat(Number(n || 0).toFixed(2))
+    const expenseSubtotalMxn = e.currency === 'USD'
+      ? round2(parseFloat(e.subtotal || 0) * parseFloat(e.exchange_rate_value || 1))
+      : round2(e.subtotal)
+    // Cobertura por MONTO (varias facturas dividen el mismo material) SÓLO aplica al
+    // caso de UNA recepción; con varias (una factura cubre N recepciones completas) se
+    // mantiene la cobertura por líneas pendientes.
+    const singleReceipt = reqReceipts.length === 1
+
     // 2. Por cada recepción: validar (confirmada, mismo proveedor) y recolectar
-    //    las líneas a cubrir (las seleccionadas o TODAS las pendientes).
+    //    las líneas / el monto a cubrir.
     const perReceipt = []
     for (const rr of reqReceipts) {
       const { rows: rc } = await client.query(
@@ -1403,8 +1413,8 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLin
       if (rc[0].status !== 'confirmed') throw createError(409, 'Una recepción seleccionada no está confirmada.')
       if (rc[0].partner_id !== e.partner_id) throw createError(400, 'Una recepción seleccionada es de otro proveedor.')
 
-      let lines
       if (rr.lineIds.length > 0) {
+        // ── Cobertura por LÍNEAS explícitas (materiales distintos) ──
         const { rows } = await client.query(
           `SELECT srl.id, srl.subtotal, ci.type AS cover_type, ci.status AS cover_status
              FROM supplier_receipt_lines srl
@@ -1420,8 +1430,44 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLin
             throw createError(409, 'Alguna línea seleccionada ya está cubierta por otra factura activa.')
           }
         }
-        lines = rows
+        if (!rows.length) continue
+        const coverage = round2(rows.reduce((s, l) => s + parseFloat(l.subtotal || 0), 0))
+        perReceipt.push({ receiptId: rr.receiptId, lineIds: rows.map(l => l.id), coverage })
+      } else if (singleReceipt) {
+        // ── Cobertura por MONTO (una recepción, factura parcial) ──
+        // Permite que 2+ facturas dividan el MISMO material: cada factura cubre
+        // min(su subtotal, saldo por facturar). Los renglones se bloquean SÓLO al
+        // completar el 100%, así la recepción reaparece para la siguiente factura.
+        const { rows: allLines } = await client.query(
+          `SELECT srl.id, srl.subtotal,
+                  (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled' OR ci.type = 'remission') AS pending
+             FROM supplier_receipt_lines srl
+             LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+            WHERE srl.supplier_receipt_id = $1`,
+          [rr.receiptId]
+        )
+        const receiptSubtotal = round2(allLines.reduce((s, l) => s + parseFloat(l.subtotal || 0), 0))
+        const { rows: cov } = await client.query(
+          `SELECT COALESCE(SUM(irl.amount_applied), 0)::numeric AS covered
+             FROM invoice_receipt_links irl
+             JOIN supplier_invoices si ON si.id = irl.supplier_invoice_id
+            WHERE irl.supplier_receipt_id = $1 AND si.tenant_id = $2
+              AND si.type = 'invoice' AND si.status <> 'cancelled'`,
+          [rr.receiptId, tenantId]
+        )
+        const alreadyCovered = round2(cov[0].covered)
+        const remaining = round2(receiptSubtotal - alreadyCovered)
+        if (remaining <= 0.01) continue   // recepción ya facturada por completo
+        const cover = Math.min(expenseSubtotalMxn, remaining)
+        const fully = (alreadyCovered + cover) >= receiptSubtotal - 0.01
+        const pendingLineIds = allLines.filter(l => l.pending).map(l => l.id)
+        perReceipt.push({
+          receiptId: rr.receiptId,
+          lineIds: fully ? pendingLineIds : [],   // sólo se bloquean líneas al completar
+          coverage: round2(cover),
+        })
       } else {
+        // ── Multi-recepción sin líneas: cubre TODAS las pendientes de cada una ──
         const { rows } = await client.query(
           `SELECT srl.id, srl.subtotal
              FROM supplier_receipt_lines srl
@@ -1430,24 +1476,21 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLin
               AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled' OR ci.type = 'remission')`,
           [rr.receiptId]
         )
-        lines = rows
+        if (!rows.length) continue
+        const coverage = round2(rows.reduce((s, l) => s + parseFloat(l.subtotal || 0), 0))
+        perReceipt.push({ receiptId: rr.receiptId, lineIds: rows.map(l => l.id), coverage })
       }
-      if (!lines.length) continue   // esta recepción ya está facturada → se ignora
-      const coverage = parseFloat(lines.reduce((s, l) => s + parseFloat(l.subtotal || 0), 0).toFixed(2))
-      perReceipt.push({ receiptId: rr.receiptId, lineIds: lines.map(l => l.id), coverage })
     }
     if (!perReceipt.length) {
-      throw createError(409, 'Ninguna de las recepciones seleccionadas tiene líneas pendientes de facturar.')
+      throw createError(409, 'Ninguna de las recepciones seleccionadas tiene saldo pendiente de facturar.')
     }
     const affectedReceiptIds = perReceipt.map(p => p.receiptId)
-    const coverageSubtotal = parseFloat(perReceipt.reduce((s, p) => s + p.coverage, 0).toFixed(2))
+    const coverageSubtotal = round2(perReceipt.reduce((s, p) => s + p.coverage, 0))
 
     // 3. Reclasificar el gasto → factura de compra. supplier_receipt_id = la 1ª
     //    (campo legado "principal"); la liga real N:N vive en invoice_receipt_links.
-    const subtotalMxn = e.currency === 'USD'
-      ? parseFloat((parseFloat(e.subtotal || 0) * parseFloat(e.exchange_rate_value || 1)).toFixed(2))
-      : parseFloat(e.subtotal || 0)
-    const reconDiff = parseFloat((subtotalMxn - coverageSubtotal).toFixed(2))
+    const subtotalMxn = expenseSubtotalMxn
+    const reconDiff = round2(subtotalMxn - coverageSubtotal)
     const reconStatus = Math.abs(reconDiff) < 0.01 ? 'reconciled' : 'with_diff'
 
     await client.query(
@@ -1572,15 +1615,30 @@ async function unlinkInvoiceFromReceipt({ tenantId, expenseId, userId, ipAddress
       [expenseId]
     )
 
-    // 2. Restaurar las remisiones-CXP que ESTA factura había sustituido al vincularse.
+    // 2. Restaurar las remisiones-CXP que ESTA factura había sustituido al vincularse
+    //    — PERO sólo si la recepción de la remisión ya NO tiene otra factura real
+    //    activa cubriéndola. Con facturación parcial por monto (varias facturas al
+    //    mismo material), al desvincular una puede quedar otra vigente → revivir la
+    //    remisión duplicaría la CXP.
     const { rows: rems } = await client.query(
-      `SELECT id FROM supplier_invoices
-        WHERE tenant_id = $1 AND type = 'remission'
-          AND replaced_by_invoice_id = $2 AND status = 'cancelled'`,
+      `SELECT r.id, irl.supplier_receipt_id
+         FROM supplier_invoices r
+         JOIN invoice_receipt_links irl ON irl.supplier_invoice_id = r.id
+        WHERE r.tenant_id = $1 AND r.type = 'remission'
+          AND r.replaced_by_invoice_id = $2 AND r.status = 'cancelled'`,
       [tenantId, expenseId]
     )
     const restoredRemissionIds = []
     for (const rem of rems) {
+      const { rows: others } = await client.query(
+        `SELECT 1 FROM invoice_receipt_links irl
+           JOIN supplier_invoices si ON si.id = irl.supplier_invoice_id
+          WHERE irl.supplier_receipt_id = $1 AND si.tenant_id = $2
+            AND si.type = 'invoice' AND si.status <> 'cancelled' AND si.id <> $3
+          LIMIT 1`,
+        [rem.supplier_receipt_id, tenantId, expenseId]
+      )
+      if (others.length) continue   // otra factura sigue cubriendo → NO revivir la remisión
       await client.query(
         `UPDATE supplier_invoices SET status = 'pending', replaced_by_invoice_id = NULL, updated_at = NOW()
           WHERE id = $1 AND tenant_id = $2`, [rem.id, tenantId])

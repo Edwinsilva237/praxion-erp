@@ -149,6 +149,15 @@ async function getReceipt({ tenantId, receiptId }) {
             po.order_number  AS purchase_order_number,
             bp.name AS partner_name, bp.rfc,
             w.name  AS warehouse_name,
+            -- Cobertura por MONTO: subtotal total de la recepción vs lo ya cubierto por
+            -- facturas REALES activas (permite ver el saldo cuando 2+ facturas dividen
+            -- el mismo material). remaining = receipt_subtotal - invoiced_amount.
+            COALESCE((SELECT SUM(srl.subtotal) FROM supplier_receipt_lines srl
+                       WHERE srl.supplier_receipt_id = sr.id), 0)::numeric AS receipt_subtotal,
+            COALESCE((SELECT SUM(irl.amount_applied) FROM invoice_receipt_links irl
+                        JOIN supplier_invoices si ON si.id = irl.supplier_invoice_id
+                       WHERE irl.supplier_receipt_id = sr.id
+                         AND si.status <> 'cancelled' AND si.type = 'invoice'), 0)::numeric AS invoiced_amount,
             u.full_name  AS created_by_name,
             cb.full_name AS confirmed_by_name
      FROM supplier_receipts sr

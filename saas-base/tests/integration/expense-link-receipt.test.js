@@ -254,3 +254,113 @@ test('recepción de OTRO proveedor → 400', async () => {
   await expect(linkExpenseToReceipt({ tenantId, expenseId: gasto.id, receiptId: rid, userId }))
     .rejects.toMatchObject({ status: 400 })
 })
+
+// ── Cobertura por MONTO: 2+ facturas dividen el MISMO material de una recepción ──
+describe('facturación parcial por MONTO (mismo material)', () => {
+  const covered = (rid) => withBypass(() => query(
+    `SELECT COALESCE(SUM(irl.amount_applied),0)::numeric AS c
+       FROM invoice_receipt_links irl
+       JOIN supplier_invoices si ON si.id = irl.supplier_invoice_id
+      WHERE irl.supplier_receipt_id = $1 AND si.status <> 'cancelled' AND si.type = 'invoice'`,
+    [rid])).then(r => parseFloat(r.rows[0].c))
+  const invoicedAt = (rid) => withBypass(() => query(
+    `SELECT invoiced_at FROM supplier_receipts WHERE id = $1`, [rid])).then(r => r.rows[0].invoiced_at)
+
+  test('975 = 500 + 475: la 1ª deja la recepción parcial, la 2ª la completa', async () => {
+    const sid = await makeSupplier()
+    const rid = await makeReceipt({ partnerId: sid, qty: 975, unitPrice: 1 })   // subtotal 975
+    const a = await makeExpense({ supplierId: sid, subtotal: 500, tax: 80 })
+    const b = await makeExpense({ supplierId: sid, subtotal: 475, tax: 76 })
+
+    const ra = await linkExpenseToReceipt({ tenantId, expenseId: a.id, receiptId: rid, userId })
+    expect(ra.reconciliation_status).toBe('reconciled')     // 500 cubre 500 exacto
+    expect(await covered(rid)).toBeCloseTo(500, 2)
+    expect(await invoicedAt(rid)).toBeNull()                // sigue pendiente ($475)
+
+    const rb = await linkExpenseToReceipt({ tenantId, expenseId: b.id, receiptId: rid, userId })
+    expect(rb.reconciliation_status).toBe('reconciled')
+    expect(await covered(rid)).toBeCloseTo(975, 2)
+    expect(await invoicedAt(rid)).not.toBeNull()            // 500+475 = 975 → completa
+
+    // Ambas quedaron como factura de compra (is_expense=false) con 2 CXP reales.
+    const { rows: si } = await withBypass(() => query(
+      `SELECT is_expense FROM supplier_invoices WHERE id IN ($1,$2)`, [a.id, b.id]))
+    expect(si.every(r => r.is_expense === false)).toBe(true)
+    const { rows: aps } = await withBypass(() => query(
+      `SELECT COUNT(*)::int AS n FROM accounts_payable WHERE document_id IN ($1,$2) AND status <> 'cancelled'`, [a.id, b.id]))
+    expect(aps[0].n).toBe(2)
+  })
+
+  test('con remisión-CXP: la 1ª la sustituye, la 2ª ya no (sin doble CXP)', async () => {
+    const sid = await makeSupplier(30)
+    const rid = await makeReceipt({ partnerId: sid, qty: 975, unitPrice: 1 })
+    const rem = await generateReceiptRemission({ tenantId, receiptId: rid, userId })
+    const a = await makeExpense({ supplierId: sid, subtotal: 500, tax: 80 })
+    const b = await makeExpense({ supplierId: sid, subtotal: 475, tax: 76 })
+
+    const ra = await linkExpenseToReceipt({ tenantId, expenseId: a.id, receiptId: rid, userId })
+    expect(ra.replacedRemissionIds).toContain(rem.id)
+    const rb = await linkExpenseToReceipt({ tenantId, expenseId: b.id, receiptId: rid, userId })
+    expect(rb.replacedRemissionIds).toHaveLength(0)         // ya estaba cancelada
+
+    const { rows: remAp } = await withBypass(() => query(
+      `SELECT status FROM accounts_payable WHERE document_type = 'remission' AND document_id = $1`, [rem.id]))
+    expect(remAp[0].status).toBe('cancelled')
+    const { rows: live } = await withBypass(() => query(
+      `SELECT COUNT(*)::int AS n FROM accounts_payable WHERE document_id IN ($1,$2) AND status <> 'cancelled'`, [a.id, b.id]))
+    expect(live[0].n).toBe(2)
+  })
+
+  test('factura que EXCEDE el saldo cubre sólo el remanente y marca diferencia', async () => {
+    const sid = await makeSupplier()
+    const rid = await makeReceipt({ partnerId: sid, qty: 975, unitPrice: 1 })
+    const a = await makeExpense({ supplierId: sid, subtotal: 500, tax: 80 })
+    await linkExpenseToReceipt({ tenantId, expenseId: a.id, receiptId: rid, userId })   // cubre 500
+    const big = await makeExpense({ supplierId: sid, subtotal: 600, tax: 96 })          // remanente = 475
+    const rb = await linkExpenseToReceipt({ tenantId, expenseId: big.id, receiptId: rid, userId })
+    expect(rb.reconciliation_status).toBe('with_diff')      // 600 factura vs 475 cubierto
+    const { rows: link } = await withBypass(() => query(
+      `SELECT amount_applied FROM invoice_receipt_links WHERE supplier_invoice_id = $1 AND supplier_receipt_id = $2`, [big.id, rid]))
+    expect(parseFloat(link[0].amount_applied)).toBeCloseTo(475, 2)   // capado al remanente
+    expect(await invoicedAt(rid)).not.toBeNull()           // completa la recepción
+  })
+
+  test('recepción cubierta al 100% → otra factura da 409', async () => {
+    const sid = await makeSupplier()
+    const rid = await makeReceipt({ partnerId: sid, qty: 975, unitPrice: 1 })
+    const a = await makeExpense({ supplierId: sid, subtotal: 500, tax: 80 })
+    const b = await makeExpense({ supplierId: sid, subtotal: 475, tax: 76 })
+    await linkExpenseToReceipt({ tenantId, expenseId: a.id, receiptId: rid, userId })
+    await linkExpenseToReceipt({ tenantId, expenseId: b.id, receiptId: rid, userId })
+    const c = await makeExpense({ supplierId: sid, subtotal: 100, tax: 16 })
+    await expect(linkExpenseToReceipt({ tenantId, expenseId: c.id, receiptId: rid, userId }))
+      .rejects.toMatchObject({ status: 409 })
+  })
+
+  test('desvincular UNA de dos facturas parciales NO revive la remisión (sin doble CXP)', async () => {
+    const sid = await makeSupplier(30)
+    const rid = await makeReceipt({ partnerId: sid, qty: 975, unitPrice: 1 })
+    const rem = await generateReceiptRemission({ tenantId, receiptId: rid, userId })
+    const a = await makeExpense({ supplierId: sid, subtotal: 500, tax: 80 })
+    const b = await makeExpense({ supplierId: sid, subtotal: 475, tax: 76 })
+    await linkExpenseToReceipt({ tenantId, expenseId: a.id, receiptId: rid, userId })
+    await linkExpenseToReceipt({ tenantId, expenseId: b.id, receiptId: rid, userId })
+
+    // Desvincular A: B sigue cubriendo → la remisión NO revive.
+    const u = await unlinkInvoiceFromReceipt({ tenantId, expenseId: a.id, userId })
+    expect(u.restoredRemissionIds).toHaveLength(0)
+    const { rows: remAp } = await withBypass(() => query(
+      `SELECT status FROM accounts_payable WHERE document_type = 'remission' AND document_id = $1`, [rem.id]))
+    expect(remAp[0].status).toBe('cancelled')          // sigue cancelada (no revivió)
+    // CXP activas: A (vuelta a gasto, conserva su CXP) + B; NO la remisión → sin doble conteo.
+    const { rows: live } = await withBypass(() => query(
+      `SELECT COUNT(*)::int AS n FROM accounts_payable
+        WHERE document_id IN ($1,$2) AND status <> 'cancelled'`, [a.id, b.id]))
+    expect(live[0].n).toBe(2)
+    // A volvió a ser gasto; B sigue como factura de compra.
+    const { rows: si } = await withBypass(() => query(
+      `SELECT id, is_expense FROM supplier_invoices WHERE id IN ($1,$2)`, [a.id, b.id]))
+    expect(si.find(r => r.id === a.id).is_expense).toBe(true)
+    expect(si.find(r => r.id === b.id).is_expense).toBe(false)
+  })
+})
