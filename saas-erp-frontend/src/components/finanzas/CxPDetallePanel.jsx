@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { cxpApi } from '@/api/cxp'
 import { PagoProveedorModal } from '@/components/finanzas/PagoProveedorModal'
@@ -223,6 +224,14 @@ function DatosBancariosProveedor({ ap }) {
 
 // ── Pagos aplicados ────────────────────────────────────────────────────────
 function PagosAplicados({ payments }) {
+  const navigate = useNavigate()
+  const goToPayment = (p) => {
+    const d = String(p.payment_date || '').slice(0, 10)
+    const params = new URLSearchParams({ highlight: p.id })
+    if (d) { params.set('from', d); params.set('to', d) }
+    navigate(`/pagos-emitidos?${params.toString()}`)
+  }
+
   if (!payments?.length) {
     return (
       <p className="text-sm text-ink-muted italic text-center py-4">
@@ -246,8 +255,18 @@ function PagosAplicados({ payments }) {
         </thead>
         <tbody>
           {payments.map(p => (
-            <tr key={p.id}>
-              <td className="text-ink-secondary">{fmtDateOnly(p.payment_date)}</td>
+            <tr key={p.id}
+              onClick={() => goToPayment(p)}
+              className="cursor-pointer hover:bg-surface-elevated/40 transition-colors"
+              title="Ver este pago en Pagos emitidos">
+              <td className="text-brand-300">
+                <span className="inline-flex items-center gap-1">
+                  {fmtDateOnly(p.payment_date)}
+                  <svg className="w-3 h-3 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                </span>
+              </td>
               <td>{PAYMENT_METHOD_LABEL[p.payment_method] || p.payment_method}</td>
               <td className="text-ink-secondary text-[11px]">
                 {p.bank_name

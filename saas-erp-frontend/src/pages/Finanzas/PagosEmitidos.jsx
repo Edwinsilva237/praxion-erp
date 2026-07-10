@@ -1,5 +1,6 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTableSort } from '@/hooks/useTableSort'
 import { SortableHeader } from '@/components/ui/SortableHeader'
@@ -31,12 +32,17 @@ const methodLabel = (m) => METHOD_LABEL[m] || m || '—'
 const PAGE_SIZE = 25
 
 export default function PagosEmitidos() {
+  const [searchParams] = useSearchParams()
   const [partner, setPartner] = useState(null)
-  const [from, setFrom]       = useState('')
-  const [to, setTo]           = useState('')
+  const [from, setFrom]       = useState(searchParams.get('from') || '')
+  const [to, setTo]           = useState(searchParams.get('to') || '')
   const [method, setMethod]   = useState('')
   const [page, setPage]       = useState(1)
   const [reverseTarget, setReverseTarget] = useState(null) // pago a reversar
+
+  // Al llegar desde "Pagos aplicados" de una CxP: ?highlight=<id> resalta la fila.
+  const [highlightId, setHighlightId] = useState(searchParams.get('highlight') || null)
+  const highlightRef = useRef(null)
 
   const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')
   useEffect(() => { setPage(1) }, [partner, from, to, method, sortBy, sortDir])
@@ -67,6 +73,15 @@ export default function PagosEmitidos() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   const hasFilters = partner || from || to || method
+
+  // Scroll + destello a la fila resaltada cuando aparece en la lista cargada.
+  useEffect(() => {
+    if (!highlightId) return
+    if (!rows.some(r => r.id === highlightId)) return
+    highlightRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const t = setTimeout(() => setHighlightId(null), 3500)
+    return () => clearTimeout(t)
+  }, [highlightId, rows])
 
   const partnerName = (r) => r.partner_name || r.generic_supplier || '—'
 
@@ -148,7 +163,9 @@ export default function PagosEmitidos() {
             <div className="md:hidden flex flex-col gap-3 p-3">
               {rows.map(r => (
                 <div key={r.id}
-                  className="border border-line-subtle rounded-xl bg-surface-primary px-3 py-2.5">
+                  ref={r.id === highlightId ? highlightRef : null}
+                  className={`rounded-xl bg-surface-primary px-3 py-2.5 border transition-all ${
+                    r.id === highlightId ? 'border-brand-400 ring-2 ring-brand-400/50' : 'border-line-subtle'}`}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="font-medium text-ink-primary truncate">{partnerName(r)}</p>
@@ -200,7 +217,12 @@ export default function PagosEmitidos() {
                 </thead>
                 <tbody>
                   {rows.map(r => (
-                    <tr key={r.id} className="hover:bg-surface-elevated/40">
+                    <tr key={r.id}
+                      ref={r.id === highlightId ? highlightRef : null}
+                      className={`transition-colors ${
+                        r.id === highlightId
+                          ? 'bg-brand-500/10 ring-2 ring-inset ring-brand-400/60'
+                          : 'hover:bg-surface-elevated/40'}`}>
                       <td className="text-xs text-ink-secondary whitespace-nowrap">{fmtDateOnly(r.payment_date)}</td>
                       <td>
                         <p className="font-medium text-ink-primary">{partnerName(r)}</p>
