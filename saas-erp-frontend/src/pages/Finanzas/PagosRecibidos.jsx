@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { createPortal } from 'react-dom'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { financialsApi } from '@/api/financials'
 import { partnersApi } from '@/api/partners'
@@ -35,12 +36,14 @@ const methodLabel = (m) => METHOD_LABEL[m] || m || '—'
 const PAGE_SIZE = 25
 
 export default function PagosRecibidos() {
+  const [searchParams] = useSearchParams()
   const [partner, setPartner] = useState(null)
   const [from, setFrom]       = useState('')
   const [to, setTo]           = useState('')
   const [method, setMethod]   = useState('')
   const [page, setPage]       = useState(1)
-  const [detailId, setDetailId] = useState(null) // cobro abierto en el panel de detalle
+  // ?open=<id> (al llegar desde "Pagos aplicados" de una CxC) abre el detalle del cobro.
+  const [detailId, setDetailId] = useState(searchParams.get('open') || null)
   const [busyRow, setBusyRow]   = useState(null)  // id de la fila descargando
 
   const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')

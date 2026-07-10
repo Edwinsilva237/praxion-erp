@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createPortal } from 'react-dom'
 import { reportsApi } from '@/api/reports'
@@ -438,6 +439,18 @@ function StatementDocumentRow({ d, direction }) {
   })
   const payments = payData?.payments || []
 
+  const navigate = useNavigate()
+  const goToPayment = (p) => {
+    if (direction === 'cuentas-por-cobrar') {
+      navigate(`/pagos-recibidos?open=${p.id}`)
+    } else {
+      const dt = String(p.payment_date || '').slice(0, 10)
+      const params = new URLSearchParams({ highlight: p.id })
+      if (dt) { params.set('from', dt); params.set('to', dt) }
+      navigate(`/pagos-emitidos?${params.toString()}`)
+    }
+  }
+
   return (
     <>
       <tr className={clsx(meta.rowClass, 'cursor-pointer')} onClick={() => setOpen(o => !o)} title="Ver productos">
@@ -525,8 +538,18 @@ function StatementDocumentRow({ d, direction }) {
                         </thead>
                         <tbody>
                           {payments.map(p => (
-                            <tr key={p.id}>
-                              <td className="whitespace-nowrap text-ink-secondary">{fmtDate(p.payment_date)}</td>
+                            <tr key={p.id}
+                              onClick={() => goToPayment(p)}
+                              className="cursor-pointer hover:bg-surface-elevated/40 transition-colors"
+                              title="Ver este pago">
+                              <td className="whitespace-nowrap text-brand-300">
+                                <span className="inline-flex items-center gap-1">
+                                  {fmtDate(p.payment_date)}
+                                  <svg className="w-3 h-3 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                                  </svg>
+                                </span>
+                              </td>
                               <td className="text-ink-secondary">{p.payment_method || '—'}</td>
                               <td className="font-mono text-[10px] text-ink-secondary">{p.reference || '—'}</td>
                               <td className="text-ink-secondary">{p.bank_alias || p.bank_name || '—'}</td>
