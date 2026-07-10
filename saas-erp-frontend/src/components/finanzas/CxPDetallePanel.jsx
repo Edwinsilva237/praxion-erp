@@ -180,9 +180,9 @@ function DatosBancariosProveedor({ ap }) {
   if (!hasAny) return null
 
   return (
-    <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4 flex flex-col gap-2">
+    <div className="bg-status-success/10 border border-status-success/30 rounded-xl p-4 flex flex-col gap-2">
       <div className="flex items-center gap-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+        <p className="text-xs font-semibold uppercase tracking-wide text-status-success">
           Datos para transferir
         </p>
       </div>
@@ -710,13 +710,13 @@ export function CxPDetallePanel({ apId, onClose }) {
                   (s, a) => s + parseFloat(a.amount_available || 0), 0
                 )
                 return (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex flex-col gap-2">
+                  <div className="bg-status-success/10 border border-status-success/30 rounded-xl p-4 flex flex-col gap-2">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-sm font-semibold text-emerald-800">
+                        <p className="text-sm font-semibold text-status-success">
                           💰 Anticipos del proveedor · {fmtMXN(total)}
                         </p>
-                        <p className="text-xs text-emerald-700">
+                        <p className="text-xs text-ink-secondary">
                           {ap.availableAdvances.length} anticipo{ap.availableAdvances.length !== 1 ? 's' : ''} con saldo a favor
                         </p>
                       </div>

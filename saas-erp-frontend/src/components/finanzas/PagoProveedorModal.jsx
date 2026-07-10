@@ -324,13 +324,13 @@ export function PagoProveedorModal({ onClose, onSaved, initialPartnerId = null, 
         {/* Aviso de anticipos disponibles (solo informativo en V1; aplicarlos
             se hace desde el panel CXP) */}
         {partner && availableAdvances.length > 0 && (
-          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-start gap-3">
+          <div className="bg-status-success/10 border border-status-success/30 rounded-xl p-4 flex items-start gap-3">
             <span className="text-2xl shrink-0">💰</span>
             <div className="flex-1">
-              <p className="text-sm font-semibold text-emerald-800">
+              <p className="text-sm font-semibold text-status-success">
                 {availableAdvances.length} anticipo{availableAdvances.length !== 1 ? 's' : ''} disponible{availableAdvances.length !== 1 ? 's' : ''} · {fmtMXN(totalAvailableAdvances)}
               </p>
-              <p className="text-xs text-emerald-700 mt-0.5">
+              <p className="text-xs text-ink-secondary mt-0.5">
                 Para aplicar un anticipo existente a una factura, ábrela desde Cuentas por Pagar y usa "Aplicar anticipo" en el panel de detalle.
               </p>
             </div>

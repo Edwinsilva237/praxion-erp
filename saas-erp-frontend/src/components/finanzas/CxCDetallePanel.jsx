@@ -840,8 +840,8 @@ function EnviarReciboModal({ partnerId, payment, onClose, onSent }) {
         )}
 
         {msg && (
-          <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-            <p className="text-xs text-emerald-700">{msg}</p>
+          <div className="mt-3 bg-status-success/10 border border-status-success/30 rounded-lg px-3 py-2">
+            <p className="text-xs text-status-success">{msg}</p>
           </div>
         )}
         {error && <p className="field-error mt-3">{error}</p>}
