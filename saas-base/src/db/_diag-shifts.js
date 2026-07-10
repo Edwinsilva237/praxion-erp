@@ -34,39 +34,51 @@ const slug = process.env.DIAG_TENANT || 'gh-insumos-prod'
       `SELECT (NOW() AT TIME ZONE 'America/Mexico_City')::date::text AS d`)
     console.log(`Fecha local MX = ${today[0].d}\n`)
 
-    // ── production_shifts activos / pending AHORA, con captura y orden ──────────
-    console.log('── production_shifts ACTIVOS / pending_handover ──')
+    // ── TODOS los production_shifts de HOY (cualquier status) con detalle ───────
+    console.log('── production_shifts de HOY (todos los status) ──')
     const { rows: act } = await query(
       `SELECT ps.id, ps.shift_number, ps.shift_date, ps.status,
               ps.started_at, ps.closed_at, ps.handover_requested_at,
+              ps.cost_per_unit,
               u.full_name AS operator,
-              COALESCE(cap.pkgs,0)::int  AS paquetes,
-              COALESCE(cap.units,0)::int AS piezas,
-              cap.orders
+              COALESCE(cap.pkgs,0)::int   AS paquetes,
+              COALESCE(cap.units,0)::int  AS piezas,
+              COALESCE(cap.sq_units,0)::int AS piezas_2da,
+              cap.orders,
+              COALESCE(mv.n,0)::int AS movimientos_inv
          FROM production_shifts ps
          LEFT JOIN users u ON u.id = ps.operator_id
          LEFT JOIN (
            SELECT sp.shift_id,
                   COUNT(*) AS pkgs,
-                  SUM(sp.quantity_units) AS units,
+                  SUM(sp.quantity_units) FILTER (WHERE sp.is_second_quality=false) AS units,
+                  SUM(sp.quantity_units) FILTER (WHERE sp.is_second_quality=true)  AS sq_units,
                   string_agg(DISTINCT po.order_number, ', ') AS orders
              FROM shift_progress sp
              LEFT JOIN production_orders po ON po.id = sp.production_order_id
             GROUP BY sp.shift_id
          ) cap ON cap.shift_id = ps.id
-        WHERE ps.tenant_id = $1 AND ps.status IN ('active','pending_handover')
-        ORDER BY ps.started_at NULLS LAST`,
+         LEFT JOIN (
+           SELECT reference_id AS shift_id, COUNT(*) AS n
+             FROM inventory_movements
+            WHERE reference_type = 'production_shift'
+            GROUP BY reference_id
+         ) mv ON mv.shift_id = ps.id
+        WHERE ps.tenant_id = $1
+          AND ps.shift_date = (NOW() AT TIME ZONE 'America/Mexico_City')::date
+        ORDER BY ps.shift_number, ps.started_at NULLS LAST`,
       [tenantId]
     )
     for (const r of act) {
       console.log('─'.repeat(72))
       console.log(`  Turno ${r.shift_number}  ·  fecha ${String(r.shift_date).slice(0,10)}  ·  status=${r.status}`)
       console.log(`  operador: ${r.operator || '—'}`)
-      console.log(`  captura : ${r.paquetes} paquetes / ${r.piezas} piezas   orden(es): ${r.orders || '—'}`)
+      console.log(`  captura : ${r.paquetes} paquetes / ${r.piezas} piezas 1ª + ${r.piezas_2da} piezas 2ª   orden(es): ${r.orders || '—'}`)
+      console.log(`  costo/u = ${r.cost_per_unit == null ? '—' : '$'+Number(r.cost_per_unit).toFixed(4)}   movimientos_inv (production_shift) = ${r.movimientos_inv}`)
       console.log(`  started_at=${r.started_at || '—'}  closed_at=${r.closed_at || '—'}  handover_req=${r.handover_requested_at || '—'}`)
       console.log(`  shift_id=${r.id}`)
     }
-    if (!act.length) console.log('  (ninguno)')
+    if (!act.length) console.log('  (ninguno hoy)')
 
     // ── scheduled_shifts de HOY y su ligado ────────────────────────────────────
     console.log('\n── scheduled_shifts de HOY (zona MX) ──')
