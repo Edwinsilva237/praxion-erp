@@ -21,7 +21,7 @@
 
 const { query, withBypass, pool } = require('./index')
 
-const slug = process.env.DIAG_TENANT || 'gh-insumos'
+const slug = process.env.DIAG_TENANT || 'gh-insumos-prod'
 
 ;(async () => {
   await withBypass(async () => {
