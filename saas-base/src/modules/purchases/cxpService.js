@@ -172,7 +172,7 @@ async function getCXP({ tenantId, apId }) {
        LEFT JOIN users u         ON u.id = sp.created_by
        LEFT JOIN bank_accounts ba ON ba.id = sp.bank_account_id
        JOIN accounts_payable ap2 ON ap2.document_id = spa.supplier_invoice_id
-      WHERE ap2.id = $1
+      WHERE ap2.id = $1 AND sp.reversed_at IS NULL
       ORDER BY sp.payment_date ASC, sp.created_at ASC`,
     [apId]
   )
