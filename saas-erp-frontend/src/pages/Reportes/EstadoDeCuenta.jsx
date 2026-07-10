@@ -429,6 +429,15 @@ function StatementDocumentRow({ d, direction }) {
   })
   const lines = data?.lines || []
 
+  const hasPayments = Number(d.amount_paid || 0) > 0
+  const { data: payData, isLoading: payLoading } = useQuery({
+    queryKey: ['statement-doc-payments', direction, d.id],
+    queryFn:  () => reportsApi.getStatementDocumentPayments({ direction, docId: d.id }),
+    enabled:  open && hasPayments,
+    staleTime: 60000,
+  })
+  const payments = payData?.payments || []
+
   return (
     <>
       <tr className={clsx(meta.rowClass, 'cursor-pointer')} onClick={() => setOpen(o => !o)} title="Ver productos">
@@ -455,39 +464,90 @@ function StatementDocumentRow({ d, direction }) {
       {open && (
         <tr>
           <td colSpan={7} className="p-0 bg-surface-elevated/30">
-            {isLoading ? (
-              <div className="py-3 text-center text-xs text-ink-muted">Cargando productos…</div>
-            ) : lines.length === 0 ? (
-              <div className="py-3 text-center text-xs text-ink-muted">Sin detalle de productos para este documento.</div>
-            ) : (
-              <div className="px-4 py-2 overflow-x-auto">
-                <table className="table text-xs min-w-full">
-                  <thead>
-                    <tr>
-                      <th>Producto</th>
-                      <th className="text-right">Cant.</th>
-                      <th className="text-right">P. unit.</th>
-                      <th className="text-right">Importe</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {lines.map(l => (
-                      <tr key={l.id}>
-                        <td className="text-ink-primary">
-                          {l.item_name || '—'}
-                          {l.item_sku && <span className="text-ink-muted font-mono text-[10px]"> · {l.item_sku}</span>}
-                        </td>
-                        <td className="text-right font-mono tabular-nums text-ink-secondary whitespace-nowrap">
-                          {new Intl.NumberFormat('es-MX', { maximumFractionDigits: 4 }).format(l.quantity || 0)} {l.unit}
-                        </td>
-                        <td className="text-right font-mono tabular-nums text-ink-secondary">{fmtMXN(l.unit_price)}</td>
-                        <td className="text-right font-mono tabular-nums font-semibold text-ink-primary">{fmtMXN(l.subtotal)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div className="px-4 py-2 flex flex-col gap-3">
+              {/* Productos */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-ink-muted mb-1">Productos</p>
+                {isLoading ? (
+                  <div className="py-2 text-center text-xs text-ink-muted">Cargando productos…</div>
+                ) : lines.length === 0 ? (
+                  <div className="py-2 text-center text-xs text-ink-muted">Sin detalle de productos para este documento.</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="table text-xs min-w-full">
+                      <thead>
+                        <tr>
+                          <th>Producto</th>
+                          <th className="text-right">Cant.</th>
+                          <th className="text-right">P. unit.</th>
+                          <th className="text-right">Importe</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {lines.map(l => (
+                          <tr key={l.id}>
+                            <td className="text-ink-primary">
+                              {l.item_name || '—'}
+                              {l.item_sku && <span className="text-ink-muted font-mono text-[10px]"> · {l.item_sku}</span>}
+                            </td>
+                            <td className="text-right font-mono tabular-nums text-ink-secondary whitespace-nowrap">
+                              {new Intl.NumberFormat('es-MX', { maximumFractionDigits: 4 }).format(l.quantity || 0)} {l.unit}
+                            </td>
+                            <td className="text-right font-mono tabular-nums text-ink-secondary">{fmtMXN(l.unit_price)}</td>
+                            <td className="text-right font-mono tabular-nums font-semibold text-ink-primary">{fmtMXN(l.subtotal)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
-            )}
+
+              {/* Pagos aplicados a este documento */}
+              {hasPayments && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-ink-muted mb-1">Pagos aplicados</p>
+                  {payLoading ? (
+                    <div className="py-2 text-center text-xs text-ink-muted">Cargando pagos…</div>
+                  ) : payments.length === 0 ? (
+                    <div className="py-2 text-center text-xs text-ink-muted">Sin pagos registrados para este documento.</div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="table text-xs min-w-full">
+                        <thead>
+                          <tr>
+                            <th>Fecha</th>
+                            <th>Método</th>
+                            <th>Referencia</th>
+                            <th>Banco</th>
+                            <th className="text-right">Importe</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {payments.map(p => (
+                            <tr key={p.id}>
+                              <td className="whitespace-nowrap text-ink-secondary">{fmtDate(p.payment_date)}</td>
+                              <td className="text-ink-secondary">{p.payment_method || '—'}</td>
+                              <td className="font-mono text-[10px] text-ink-secondary">{p.reference || '—'}</td>
+                              <td className="text-ink-secondary">{p.bank_alias || p.bank_name || '—'}</td>
+                              <td className="text-right font-mono tabular-nums font-semibold text-status-success">{fmtMXN(p.amount)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="border-t border-line-subtle font-semibold">
+                            <td colSpan={4} className="text-right text-ink-secondary">Pagado</td>
+                            <td className="text-right font-mono tabular-nums text-status-success">
+                              {fmtMXN(payments.reduce((s, p) => s + Number(p.amount || 0), 0))}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </td>
         </tr>
       )}

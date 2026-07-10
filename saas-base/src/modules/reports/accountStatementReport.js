@@ -428,4 +428,49 @@ async function getDocumentLines({ tenantId, direction, docId }) {
   return { lines: [] }
 }
 
-module.exports = { getAccountStatement, getPartnerStatement, getDocumentLines, DUE_SOON_DAYS }
+/**
+ * Pagos aplicados a un documento del estado de cuenta (para ver desde el detalle
+ * qué cobro/pago cubrió ese documento). Excluye pagos reversados.
+ *   - CxC (in):  ar_payments ligados por ar_id al documento (accounts_receivable).
+ *   - CxP (out): supplier_payments vía supplier_payment_applications → accounts_payable.
+ */
+async function getDocumentPayments({ tenantId, direction, docId }) {
+  getConfig(direction) // valida direction ('in'|'out')
+
+  if (direction === 'in') {
+    const { rows } = await query(
+      `SELECT arp.id, arp.payment_date, arp.amount, arp.payment_method, arp.reference,
+              arp.notes, arp.created_at, ar.currency,
+              ba.bank_name, ba.alias AS bank_alias, ba.account_number AS bank_account_number,
+              u.full_name AS created_by_name, pc.cfdi_uuid AS complement_uuid
+         FROM ar_payments arp
+         JOIN accounts_receivable ar ON ar.id = arp.ar_id
+         LEFT JOIN bank_accounts ba  ON ba.id = arp.bank_account_id
+         LEFT JOIN users u           ON u.id  = arp.created_by
+         LEFT JOIN payment_complements pc ON pc.id = arp.payment_complement_id
+        WHERE arp.tenant_id = $1 AND arp.ar_id = $2 AND arp.reversed_at IS NULL
+        ORDER BY arp.payment_date ASC, arp.created_at ASC`,
+      [tenantId, docId]
+    )
+    return { payments: rows }
+  }
+
+  // direction === 'out' (CxP)
+  const { rows } = await query(
+    `SELECT sp.id, sp.payment_date, spa.amount_applied AS amount, sp.method AS payment_method,
+            sp.reference, sp.currency, sp.notes, sp.created_at,
+            ba.bank_name, ba.alias AS bank_alias, ba.account_number AS bank_account_number,
+            u.full_name AS created_by_name
+       FROM supplier_payment_applications spa
+       JOIN supplier_payments sp   ON sp.id = spa.supplier_payment_id
+       JOIN accounts_payable ap2   ON ap2.document_id = spa.supplier_invoice_id
+       LEFT JOIN bank_accounts ba  ON ba.id = sp.bank_account_id
+       LEFT JOIN users u           ON u.id  = sp.created_by
+      WHERE ap2.tenant_id = $1 AND ap2.id = $2 AND sp.reversed_at IS NULL
+      ORDER BY sp.payment_date ASC, sp.created_at ASC`,
+    [tenantId, docId]
+  )
+  return { payments: rows }
+}
+
+module.exports = { getAccountStatement, getPartnerStatement, getDocumentLines, getDocumentPayments, DUE_SOON_DAYS }

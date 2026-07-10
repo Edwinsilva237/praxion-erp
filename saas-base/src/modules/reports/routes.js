@@ -18,7 +18,7 @@ const { generateProductionPdf } = require('./productionReportPdf')
 const { getInventoryReport } = require('./inventoryReport')
 const { generateInventoryWorkbook } = require('./inventoryReportExcel')
 const { generateInventoryPdf } = require('./inventoryReportPdf')
-const { getAccountStatement, getPartnerStatement, getDocumentLines } = require('./accountStatementReport')
+const { getAccountStatement, getPartnerStatement, getDocumentLines, getDocumentPayments } = require('./accountStatementReport')
 const { generateAccountStatementWorkbook } = require('./accountStatementExcel')
 const { generateAccountStatementPdf } = require('./accountStatementPdf')
 const { enqueueEmail } = require('../../queues/emailQueue')
@@ -440,6 +440,24 @@ router.get('/account-statement/:direction/documents/:docId/lines',
       const direction = mapStatementDirection(req.params.direction)
       if (!direction) return res.status(400).json({ error: 'direction inválida.' })
       const data = await getDocumentLines({
+        tenantId: req.tenant.id, direction, docId: req.params.docId,
+      })
+      res.json(data)
+    } catch (err) { next(err) }
+  }
+)
+
+/**
+ * GET /api/reports/account-statement/:direction/documents/:docId/payments
+ * Pagos aplicados a un documento, para verlos desde el detalle del estado de cuenta.
+ */
+router.get('/account-statement/:direction/documents/:docId/payments',
+  reportsStatementPermission,
+  async (req, res, next) => {
+    try {
+      const direction = mapStatementDirection(req.params.direction)
+      if (!direction) return res.status(400).json({ error: 'direction inválida.' })
+      const data = await getDocumentPayments({
         tenantId: req.tenant.id, direction, docId: req.params.docId,
       })
       res.json(data)
