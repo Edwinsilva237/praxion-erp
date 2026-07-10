@@ -3831,7 +3831,7 @@ async function closeShiftWithOverhead({ tenantId, shiftId, userId, ipAddress, us
 // debe anidarse. Si la validación falla (turno con datos incompletos), el cierre
 // NO se revierte — el turno queda en pending_handover para validarse a mano.
 // ──────────────────────────────────────────────────────────────────────────
-async function forceCloseShift({ tenantId, shiftId, reason, userId, ipAddress, userAgent }) {
+async function forceCloseShift({ tenantId, shiftId, reason, finalize = false, userId, ipAddress, userAgent }) {
   const phase1 = await withTransaction(async (client) => {
     const { rows: shiftRows } = await client.query(
       `SELECT ps.*, u.full_name AS operator_name
@@ -3917,12 +3917,16 @@ async function forceCloseShift({ tenantId, shiftId, reason, userId, ipAddress, u
     return { shift, closedRow, activatedShift }
   })
 
-  // Si NADIE tomó el relevo, finalizar el turno para que salga del tablero y
-  // libere la línea. validateShift corre su propia transacción → fuera de la de
-  // arriba. Best-effort: si falla (datos incompletos), el turno queda cerrado
-  // (pending_handover) para validarse a mano; no revertimos el cierre.
+  // CANDADO 2 (2026-07-10): forzar el cierre YA NO valida en automático. Solo valida
+  // si el supervisor lo pide EXPLÍCITAMENTE (finalize=true) y no hubo relevo. Antes se
+  // auto-validaba en silencio cuando nadie tomaba el relevo, aplicando inventario y
+  // costeo sin revisión sobre turnos que podían estar mal (capturas en el slot
+  // equivocado). Default = solo cerrar → el turno queda 'pending_handover' para una
+  // validación DELIBERADA. finalize=true preserva el caso mig 200 (turno legítimo
+  // atorado que se quiere finalizar de una vez). validateShift corre su propia
+  // transacción → fuera de la de arriba.
   let finalized = false
-  if (!phase1.activatedShift) {
+  if (finalize && !phase1.activatedShift) {
     try {
       await validateShift({
         tenantId,
@@ -3941,6 +3945,7 @@ async function forceCloseShift({ tenantId, shiftId, reason, userId, ipAddress, u
     closed: phase1.closedRow,
     activated_shift_id: phase1.activatedShift?.id || null,
     finalized,
+    pending_validation: !phase1.activatedShift && !finalized,
     operator_name: phase1.shift.operator_name,
   }
 }

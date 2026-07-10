@@ -98,41 +98,54 @@ describe('mig 200 — force-close finaliza turnos atorados', () => {
     return shift
   }
 
-  test('force-close de un turno YA cerrado (pending_handover) lo finaliza y libera la línea', async () => {
+  // CANDADO 2 (2026-07-10): force-close YA NO valida en automático. Default = solo
+  // cerrar (pending_handover, sin aplicar inventario/costeo); finalize:true preserva
+  // el caso mig 200 (finalizar de una vez un turno legítimo atorado).
+  test('Candado 2: force-close SIN finalize solo cierra (pending_handover, no valida)', async () => {
     const shift = await seedCapturedShift({ shiftNumber: '1' })
-
-    // El operador "finaliza su turno" → pending_handover (queda atorado en el tablero).
     await client.post(`/api/production/shifts/${shift.id}/close`).expect(200)
     expect(await statusOf(shift.id)).toBe('pending_handover')
 
-    // Antes del force-close: el turno cerrado SIGUE en el tablero de activos.
-    const before = await client.get('/api/production/shifts/active').expect(200)
-    expect(before.body.some(s => s.id === shift.id)).toBe(true)
-
-    // Admin/supervisor fuerza el cierre → finaliza (valida).
     const res = await client.post(`/api/production/shifts/${shift.id}/force-close`, {
-      reason: 'Turno atorado: operador olvidó dejarlo validar',
+      reason: 'Turno enredado: capturas en el slot equivocado',
+    }).expect(200)
+
+    // NO se validó: queda pendiente de validación, sin costo aplicado.
+    expect(res.body.finalized).toBe(false)
+    expect(res.body.pending_validation).toBe(true)
+    expect(await statusOf(shift.id)).toBe('pending_handover')
+
+    const { rows: costRows } = await withBypass(() => query(
+      `SELECT cost_per_unit FROM production_shifts WHERE id = $1`, [shift.id]
+    ))
+    expect(Number(costRows[0].cost_per_unit || 0)).toBe(0) // no se aplicó costeo
+  })
+
+  test('Candado 2: force-close CON finalize=true sí valida (mig 200 preservado)', async () => {
+    const shift = await seedCapturedShift({ shiftNumber: '2' })
+    await client.post(`/api/production/shifts/${shift.id}/close`).expect(200)
+
+    const res = await client.post(`/api/production/shifts/${shift.id}/force-close`, {
+      reason: 'Turno legítimo atorado', finalize: true,
     }).expect(200)
 
     expect(res.body.finalized).toBe(true)
     expect(res.body.activated_shift_id).toBeNull()
-
-    // El turno quedó finalizado y FUERA del tablero de activos.
     expect(await statusOf(shift.id)).toBe('reviewed')
     const after = await client.get('/api/production/shifts/active').expect(200)
     expect(after.body.some(s => s.id === shift.id)).toBe(false)
   })
 
-  test('force-close de un turno ACTIVO sin relevo lo cierra y finaliza en un paso', async () => {
-    const shift = await seedCapturedShift({ shiftNumber: '2' })
+  test('force-close de un turno ACTIVO (sin finalize) lo cierra a pendiente y audita', async () => {
+    const shift = await seedCapturedShift({ shiftNumber: '3' })
     expect(await statusOf(shift.id)).toBe('active')
 
     const res = await client.post(`/api/production/shifts/${shift.id}/force-close`, {
       reason: 'Operador abandonó la línea',
     }).expect(200)
 
-    expect(res.body.finalized).toBe(true)
-    expect(await statusOf(shift.id)).toBe('reviewed')
+    expect(res.body.finalized).toBe(false)
+    expect(await statusOf(shift.id)).toBe('pending_handover')
 
     // El cierre forzado quedó registrado (quién y por qué) para auditoría.
     const { rows } = await withBypass(() => query(

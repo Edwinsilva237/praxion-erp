@@ -11,7 +11,7 @@ const svcSched            = require('./scheduledShiftService')
 const svcShiftCfg         = require('./shiftConfigService')
 const { redactOrder, redactOrderList } = require('./recipeRedactor')
 const costRecompute = require('./costRecomputeService')
-const { getUserPermissions } = require('../roles/permissionService')
+const { getUserPermissions, hasPermission } = require('../roles/permissionService')
 const { generateShiftSummaryPDF } = require('./shiftSummaryPdfService')
 
 const router = express.Router()
@@ -708,7 +708,12 @@ router.patch('/scheduled-shifts/:id', checkPermission('production','manage'), as
   } catch(err){next(err)}
 })
 router.post('/scheduled-shifts/:id/confirm', async (req,res,next) => {
-  try { res.json(await svcSched.confirmPresence({ tenantId:tid(req), id:req.params.id, userId:uid(req),ipAddress:ip(req),userAgent:ua(req) })) }
+  try {
+    // Supervisores/admin (production:manage) pueden saltar los candados de operador
+    // asignado y ventana de inicio (iniciar antes / en nombre de otro).
+    const canManage = await hasPermission(uid(req), 'production', 'manage')
+    res.json(await svcSched.confirmPresence({ tenantId:tid(req), id:req.params.id, userId:uid(req), canManage, ipAddress:ip(req),userAgent:ua(req) }))
+  }
   catch(err){next(err)}
 })
 
@@ -746,10 +751,11 @@ router.post('/shifts/:id/force-close',
   checkAnyPermission([['production','update'], ['production','force_close']]),
   async (req,res,next) => {
   try {
-    const { reason } = req.body
+    const { reason, finalize } = req.body
     const result = await svc.forceCloseShift({
       tenantId: tid(req), shiftId: req.params.id,
       reason: reason || null,
+      finalize: finalize === true,
       userId: uid(req), ipAddress: ip(req), userAgent: ua(req),
     })
     let message

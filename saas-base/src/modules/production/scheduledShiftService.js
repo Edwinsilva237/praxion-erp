@@ -475,18 +475,62 @@ async function updateScheduledShift({
 }
 
 // ─── Operador confirma presencia ──────────────────────────────────────────────
-async function confirmPresence({ tenantId, id, userId, ipAddress, userAgent }) {
+async function confirmPresence({ tenantId, id, userId, canManage = false, ipAddress, userAgent }) {
   return withTransaction(async (client) => {
     const { rows: ss } = await client.query(
-      `SELECT ss.*
+      `SELECT ss.*,
+              EXTRACT(EPOCH FROM (
+                ((ss.scheduled_date + ss.scheduled_start) AT TIME ZONE 'America/Mexico_City') - NOW()
+              )) / 60 AS mins_until_start,
+              tsc.early_start_window_minutes AS early_window
        FROM scheduled_shifts ss
        LEFT JOIN production_orders po ON po.id = ss.production_order_id
+       LEFT JOIN tenant_shift_config tsc
+              ON tsc.tenant_id = ss.tenant_id
+             AND tsc.shift_number = (ss.shift_number::text)::smallint
        WHERE ss.id = $1 AND ss.tenant_id = $2 AND ss.status = 'scheduled'`,
       [id, tenantId]
     )
     if (!ss[0]) throw createError(400, 'Turno no encontrado o ya no está programado.')
 
     const shift = ss[0]
+
+    // ── CANDADO 1a (2026-07-10): solo el operador asignado o un miembro del turno
+    //    puede iniciarlo. Supervisor/admin con production:manage (canManage) lo salta
+    //    para iniciar en nombre de otro en casos legítimos.
+    if (!canManage) {
+      const isAssigned = shift.operator_id === userId
+      let isMember = false
+      if (!isAssigned) {
+        const { rows: mem } = await client.query(
+          `SELECT 1 FROM scheduled_shift_members WHERE scheduled_shift_id = $1 AND user_id = $2 LIMIT 1`,
+          [id, userId]
+        )
+        isMember = mem.length > 0
+      }
+      if (!isAssigned && !isMember) {
+        const { rows: op } = await client.query(`SELECT full_name FROM users WHERE id = $1`, [shift.operator_id])
+        throw createError(403, `Este turno está asignado a ${op[0]?.full_name || 'otro operador'}. No puedes iniciarlo tú.`)
+      }
+    }
+
+    // ── CANDADO 1b (2026-07-10): ventana de inicio. No se puede iniciar un turno
+    //    más de `early_start_window_minutes` (default 30) ANTES de su hora. Evita
+    //    confirmar un turno horas antes y capturar en el slot equivocado.
+    if (!canManage) {
+      const windowMin = shift.early_window != null ? Number(shift.early_window) : 30
+      const minsUntil = Number(shift.mins_until_start)
+      if (Number.isFinite(minsUntil) && minsUntil > windowMin) {
+        const hh = Math.floor(minsUntil / 60)
+        const mm = Math.round(minsUntil % 60)
+        const falta = hh > 0 ? `${hh} h ${mm} min` : `${mm} min`
+        const hora = String(shift.scheduled_start).slice(0, 5)
+        throw createError(
+          400,
+          `El turno ${shift.shift_number} inicia a las ${hora}. Aún no puedes iniciarlo (faltan ${falta}). Solo se puede iniciar hasta ${windowMin} min antes de la hora.`
+        )
+      }
+    }
 
     // ── GUARD: un operador no puede tener dos turnos de captura ABIERTOS a la
     //    vez. Caso típico: dejó un "turno atrasado" (registrado con startMissedShift)

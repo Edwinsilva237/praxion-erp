@@ -26,6 +26,7 @@ export default function ForceCloseModal({ shiftId, operatorName, onClose, onSucc
   const [reasonCode, setReasonCode] = useState('')
   const [details, setDetails] = useState('')
   const [confirmed, setConfirmed] = useState(false)
+  const [finalize, setFinalize] = useState(false)
 
   const mutation = useMutation({
     mutationFn: (body) => productionApi.forceCloseShift(shiftId, body),
@@ -48,7 +49,7 @@ export default function ForceCloseModal({ shiftId, operatorName, onClose, onSucc
 
   function handleSubmit() {
     if (!canSubmit) return
-    mutation.mutate({ reason: finalReason })
+    mutation.mutate({ reason: finalReason, finalize })
   }
 
   return createPortal(
@@ -75,9 +76,9 @@ export default function ForceCloseModal({ shiftId, operatorName, onClose, onSucc
         <div className="bg-status-danger/10 border border-status-danger/40 rounded-xl p-3 text-sm text-status-danger space-y-1">
           <p className="font-semibold">Esta acción no se puede deshacer.</p>
           <ul className="text-xs list-disc pl-4 space-y-0.5">
-            <li>El turno se cerrará inmediatamente.</li>
+            <li>El turno se cerrará inmediatamente y la línea quedará libre.</li>
             <li>Si hay un relevo esperando, se activará automáticamente.</li>
-            <li>Si no hay relevo, el turno se finalizará (se registran inventario y costos) y la línea quedará libre para el siguiente.</li>
+            <li>Por defecto el turno queda <span className="font-semibold">pendiente de validar</span> — el inventario y los costos NO se aplican hasta que un supervisor lo valide (así puedes revisar antes si el turno quedó mal).</li>
             <li>Quedará registrado quién y por qué se forzó el cierre.</li>
           </ul>
         </div>
@@ -125,6 +126,21 @@ export default function ForceCloseModal({ shiftId, operatorName, onClose, onSucc
             </p>
           )}
         </div>
+
+        {/* Finalizar (validar) ahora — opcional */}
+        <label className="flex items-start gap-2 text-sm text-ink-secondary cursor-pointer">
+          <input
+            type="checkbox"
+            checked={finalize}
+            onChange={(e) => setFinalize(e.target.checked)}
+            disabled={mutation.isPending}
+            className="mt-0.5"
+          />
+          <span>
+            También <span className="font-medium">finalizar y validar</span> el turno ahora (aplica inventario y costos).
+            <span className="text-ink-muted"> Déjalo sin marcar si el turno quedó mal y quieres revisarlo antes de validar.</span>
+          </span>
+        </label>
 
         {/* Confirmación checkbox */}
         <label className="flex items-start gap-2 text-sm text-ink-secondary cursor-pointer">

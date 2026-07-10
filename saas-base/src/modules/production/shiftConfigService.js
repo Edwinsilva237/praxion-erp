@@ -3,14 +3,15 @@
 const { query, withTransaction } = require('../../db')
 
 const DEFAULT_CONFIG = [
-  { shift_number: 1, name: 'Turno Matutino',   start_time: '06:00', duration_hours: 8, confirmation_tolerance_minutes: 15 },
-  { shift_number: 2, name: 'Turno Vespertino', start_time: '14:00', duration_hours: 8, confirmation_tolerance_minutes: 15 },
-  { shift_number: 3, name: 'Turno Nocturno',   start_time: '22:00', duration_hours: 8, confirmation_tolerance_minutes: 15 },
+  { shift_number: 1, name: 'Turno Matutino',   start_time: '06:00', duration_hours: 8, confirmation_tolerance_minutes: 15, early_start_window_minutes: 30 },
+  { shift_number: 2, name: 'Turno Vespertino', start_time: '14:00', duration_hours: 8, confirmation_tolerance_minutes: 15, early_start_window_minutes: 30 },
+  { shift_number: 3, name: 'Turno Nocturno',   start_time: '22:00', duration_hours: 8, confirmation_tolerance_minutes: 15, early_start_window_minutes: 30 },
 ]
 
 async function getShiftConfig({ tenantId }) {
   const { rows } = await query(
-    `SELECT shift_number, name, start_time, duration_hours, confirmation_tolerance_minutes
+    `SELECT shift_number, name, start_time, duration_hours, confirmation_tolerance_minutes,
+            early_start_window_minutes
      FROM tenant_shift_config
      WHERE tenant_id = $1
      ORDER BY shift_number`,
@@ -63,6 +64,14 @@ async function updateShiftConfig({ tenantId, shifts }) {
       err.status = 400
       throw err
     }
+    if (s.earlyStartWindowMinutes != null) {
+      const w = Number(s.earlyStartWindowMinutes)
+      if (!Number.isInteger(w) || w < 0 || w > 720) {
+        const err = new Error(`earlyStartWindowMinutes inválido para turno ${n} (0-720).`)
+        err.status = 400
+        throw err
+      }
+    }
   }
 
   // Validar overlaps: cada turno ocupa [start, start+duration). Los rangos no
@@ -110,17 +119,20 @@ async function updateShiftConfig({ tenantId, shifts }) {
     for (const s of shifts) {
       await client.query(
         `INSERT INTO tenant_shift_config
-           (tenant_id, shift_number, name, start_time, duration_hours, confirmation_tolerance_minutes, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, NOW())
+           (tenant_id, shift_number, name, start_time, duration_hours, confirmation_tolerance_minutes,
+            early_start_window_minutes, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
          ON CONFLICT (tenant_id, shift_number)
          DO UPDATE SET
            name                            = EXCLUDED.name,
            start_time                      = EXCLUDED.start_time,
            duration_hours                  = EXCLUDED.duration_hours,
            confirmation_tolerance_minutes  = EXCLUDED.confirmation_tolerance_minutes,
+           early_start_window_minutes      = EXCLUDED.early_start_window_minutes,
            updated_at                      = NOW()`,
         [tenantId, s.shiftNumber, s.name || '', s.startTime,
-         s.durationHours || 8, s.confirmationToleranceMinutes || 15]
+         s.durationHours || 8, s.confirmationToleranceMinutes || 15,
+         s.earlyStartWindowMinutes != null ? Number(s.earlyStartWindowMinutes) : 30]
       )
     }
     // Borrar los que ya no vienen en el array (se removieron en la UI)
