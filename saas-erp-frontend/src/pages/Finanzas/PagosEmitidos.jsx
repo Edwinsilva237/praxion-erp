@@ -39,6 +39,8 @@ export default function PagosEmitidos() {
   const [method, setMethod]   = useState('')
   const [page, setPage]       = useState(1)
   const [reverseTarget, setReverseTarget] = useState(null) // pago a reversar
+  // ?open=<id> (desde "Pagos aplicados") abre el detalle del pago; clic en fila igual.
+  const [detailId, setDetailId] = useState(searchParams.get('open') || null)
 
   // Al llegar desde "Pagos aplicados" de una CxP: ?highlight=<id> resalta la fila.
   const [highlightId, setHighlightId] = useState(searchParams.get('highlight') || null)
@@ -164,7 +166,8 @@ export default function PagosEmitidos() {
               {rows.map(r => (
                 <div key={r.id}
                   ref={r.id === highlightId ? highlightRef : null}
-                  className={`rounded-xl bg-surface-primary px-3 py-2.5 border transition-all ${
+                  onClick={() => setDetailId(r.id)}
+                  className={`rounded-xl bg-surface-primary px-3 py-2.5 border transition-all cursor-pointer ${
                     r.id === highlightId ? 'border-brand-400 ring-2 ring-brand-400/50' : 'border-line-subtle'}`}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -190,7 +193,7 @@ export default function PagosEmitidos() {
                   {r.payment_method !== 'advance_application' && (
                     <Can do="purchases:reverse_payment">
                       <div className="mt-2">
-                        <button onClick={() => setReverseTarget(r)}
+                        <button onClick={(e) => { e.stopPropagation(); setReverseTarget(r) }}
                           className="btn-ghost btn-sm text-status-danger">
                           Reversar
                         </button>
@@ -219,7 +222,8 @@ export default function PagosEmitidos() {
                   {rows.map(r => (
                     <tr key={r.id}
                       ref={r.id === highlightId ? highlightRef : null}
-                      className={`transition-colors ${
+                      onClick={() => setDetailId(r.id)}
+                      className={`cursor-pointer transition-colors ${
                         r.id === highlightId
                           ? 'bg-brand-500/10 ring-2 ring-inset ring-brand-400/60'
                           : 'hover:bg-surface-elevated/40'}`}>
@@ -236,7 +240,7 @@ export default function PagosEmitidos() {
                       <td className="text-right font-mono tabular-nums font-semibold text-ink-primary">
                         {fmtMXN(r.amount_mxn)}
                       </td>
-                      <td className="text-right">
+                      <td className="text-right" onClick={(e) => e.stopPropagation()}>
                         {r.payment_method !== 'advance_application' && (
                           <Can do="purchases:reverse_payment">
                             <button onClick={() => setReverseTarget(r)}
@@ -283,6 +287,104 @@ export default function PagosEmitidos() {
           onClose={() => setReverseTarget(null)}
         />
       )}
+
+      {detailId && (
+        <SupplierPaymentDetailModal
+          paymentId={detailId}
+          onClose={() => setDetailId(null)}
+          onReverse={(p) => { setDetailId(null); setReverseTarget(p) }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Modal: detalle de un pago emitido ────────────────────────────────────────
+function SupplierPaymentDetailModal({ paymentId, onClose, onReverse }) {
+  const { data: p, isLoading, error } = useQuery({
+    queryKey: ['supplier-payment', paymentId],
+    queryFn:  () => cxpApi.getPayment(paymentId),
+  })
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="card w-full max-w-lg max-h-[90vh] overflow-y-auto p-5" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="eyebrow">PAGO EMITIDO</p>
+            <h2 className="text-lg font-semibold text-ink-primary mt-0.5">
+              {isLoading ? 'Cargando…' : fmtMXN(p?.amount_mxn)}
+            </h2>
+            {p && <p className="text-xs text-ink-muted mt-0.5">{p.partner_name || p.generic_supplier || '—'}</p>}
+          </div>
+          <button onClick={onClose} className="text-ink-muted hover:text-ink-secondary text-xl leading-none">×</button>
+        </div>
+
+        {error ? (
+          <p className="field-error mt-4">{error.response?.data?.error || 'No se pudo cargar el pago.'}</p>
+        ) : isLoading ? (
+          <div className="flex justify-center py-10"><Spinner /></div>
+        ) : (
+          <div className="mt-4 flex flex-col gap-4">
+            {p.reversed_at && (
+              <div className="bg-status-danger/10 border border-status-danger/40 rounded-xl p-3 text-sm text-status-danger">
+                Pago reversado. {p.reversal_reason && <span className="text-xs">Motivo: {p.reversal_reason}</span>}
+              </div>
+            )}
+            <dl className="grid grid-cols-2 gap-3 text-sm">
+              <Field label="Fecha"      value={fmtDateOnly(p.payment_date)} />
+              <Field label="Método"     value={methodLabel(p.payment_method)} />
+              <Field label="Referencia" value={p.reference || '—'} mono />
+              <Field label="Banco"      value={p.bank_alias || p.bank_name || '—'} />
+              <Field label="Importe"    value={`${fmtMXN(p.amount)} ${p.currency || 'MXN'}`} />
+              <Field label="Registró"   value={p.created_by_name || '—'} />
+            </dl>
+
+            <div>
+              <p className="text-xs font-bold text-brand-300 uppercase tracking-wider mb-1.5">Documentos pagados</p>
+              {(!p.applications || p.applications.length === 0) ? (
+                <p className="text-sm text-ink-muted italic">Sin documentos ligados.</p>
+              ) : (
+                <div className="border border-line-subtle rounded-xl overflow-x-auto">
+                  <table className="table text-xs min-w-full">
+                    <thead><tr><th>Documento</th><th className="text-right">Aplicado</th></tr></thead>
+                    <tbody>
+                      {p.applications.map((a, i) => (
+                        <tr key={i}>
+                          <td className="font-mono text-brand-300">{a.document_number || '—'}</td>
+                          <td className="text-right font-mono tabular-nums font-semibold">{fmtMXN(a.amount_applied)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {p.notes && <p className="text-xs text-ink-muted">Notas: {p.notes}</p>}
+
+            {!p.reversed_at && p.payment_method !== 'advance_application' && (
+              <Can do="purchases:reverse_payment">
+                <div className="flex justify-end pt-1">
+                  <button onClick={() => onReverse?.(p)} className="btn-ghost btn-sm text-status-danger">
+                    Reversar pago
+                  </button>
+                </div>
+              </Can>
+            )}
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function Field({ label, value, mono }) {
+  return (
+    <div>
+      <dt className="text-[11px] text-ink-muted uppercase tracking-wide">{label}</dt>
+      <dd className={`text-ink-primary ${mono ? 'font-mono text-xs' : ''}`}>{value}</dd>
     </div>
   )
 }

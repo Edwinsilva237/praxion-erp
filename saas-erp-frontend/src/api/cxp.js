@@ -10,6 +10,9 @@ export const cxpApi = {
   // Historial de pagos EMITIDOS (a proveedor). Params: partnerId, from, to, method, page, limit.
   listPayments: (params) => api.get(`${B}/payments`, { params }).then(r => r.data),
 
+  // Detalle de UN pago emitido (con los documentos a los que se aplicó).
+  getPayment: (id) => api.get(`${B}/payments/${id}`).then(r => r.data),
+
   // ── Estado de cuenta del proveedor ────────────────────────────────────
   supplierStatement: (partnerId, params) =>
     api.get(`${B}/suppliers/${partnerId}/statement`, { params }).then(r => r.data),

@@ -263,4 +263,41 @@ async function listPayments({ tenantId, partnerId, from, to, method, sortBy, sor
   }
 }
 
-module.exports = { listCXP, getCXP, listPayments }
+/**
+ * Detalle de UN pago emitido (supplier_payments) para abrir su panel desde
+ * "Pagos aplicados" de una CxP o desde el estado de cuenta. Incluye los
+ * documentos a los que se aplicó.
+ */
+async function getPayment({ tenantId, paymentId }) {
+  const { rows } = await query(
+    `SELECT sp.id, sp.payment_date, sp.method AS payment_method, sp.reference,
+            sp.amount, sp.amount_mxn, sp.currency, sp.notes, sp.created_at,
+            sp.generic_supplier, sp.reversed_at, sp.reversal_reason,
+            bp.id AS partner_id, bp.name AS partner_name, bp.tax_name AS partner_tax_name, bp.rfc AS partner_rfc,
+            ba.bank_name, ba.alias AS bank_alias, ba.account_number AS bank_account_number,
+            u.full_name AS created_by_name
+       FROM supplier_payments sp
+       LEFT JOIN business_partners bp ON bp.id = sp.partner_id
+       LEFT JOIN bank_accounts ba     ON ba.id = sp.bank_account_id
+       LEFT JOIN users u              ON u.id  = sp.created_by
+      WHERE sp.id = $1 AND sp.tenant_id = $2`,
+    [paymentId, tenantId]
+  )
+  if (!rows[0]) { const e = new Error('Pago no encontrado.'); e.status = 404; throw e }
+
+  const { rows: apps } = await query(
+    `SELECT spa.amount_applied,
+            si.invoice_number AS document_number,
+            ap.document_type, ap.amount_total, ap.amount_pending, ap.status AS ap_status
+       FROM supplier_payment_applications spa
+       JOIN supplier_invoices si ON si.id = spa.supplier_invoice_id
+       LEFT JOIN accounts_payable ap ON ap.document_id = spa.supplier_invoice_id AND ap.tenant_id = $2
+      WHERE spa.supplier_payment_id = $1
+      ORDER BY si.invoice_number`,
+    [paymentId, tenantId]
+  )
+
+  return { ...rows[0], applications: apps }
+}
+
+module.exports = { listCXP, getCXP, listPayments, getPayment }

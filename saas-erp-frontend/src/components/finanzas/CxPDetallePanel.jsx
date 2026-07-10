@@ -227,7 +227,7 @@ function PagosAplicados({ payments }) {
   const navigate = useNavigate()
   const goToPayment = (p) => {
     const d = String(p.payment_date || '').slice(0, 10)
-    const params = new URLSearchParams({ highlight: p.id })
+    const params = new URLSearchParams({ open: p.id })
     if (d) { params.set('from', d); params.set('to', d) }
     navigate(`/pagos-emitidos?${params.toString()}`)
   }

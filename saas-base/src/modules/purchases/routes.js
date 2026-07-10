@@ -1271,6 +1271,19 @@ router.get('/payments', checkPermission('purchases', 'read'), async (req, res, n
 })
 
 /**
+ * GET /api/purchases/payments/:id — Detalle de UN pago emitido.
+ */
+router.get('/payments/:id', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const result = await cxpService.getPayment({ tenantId: req.tenant.id, paymentId: req.params.id })
+    res.json(result)
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+
+/**
  * GET /api/purchases/cxp/:id
  */
 router.get('/cxp/:id', checkPermission('purchases', 'read'), async (req, res, next) => {

@@ -445,7 +445,7 @@ function StatementDocumentRow({ d, direction }) {
       navigate(`/pagos-recibidos?open=${p.id}`)
     } else {
       const dt = String(p.payment_date || '').slice(0, 10)
-      const params = new URLSearchParams({ highlight: p.id })
+      const params = new URLSearchParams({ open: p.id })
       if (dt) { params.set('from', dt); params.set('to', dt) }
       navigate(`/pagos-emitidos?${params.toString()}`)
     }
