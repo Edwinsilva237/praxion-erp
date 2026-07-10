@@ -117,6 +117,7 @@ function ShiftConfigModal({ currentConfig, tenantConfig, onClose }) {
       startTime: String(s.start_time || '').slice(0, 5),
       durationHours: s.duration_hours || 8,
       confirmationToleranceMinutes: s.confirmation_tolerance_minutes || 15,
+      earlyStartWindowMinutes: s.early_start_window_minutes ?? 30,
     }))
   )
   const [maxHoursDay,  setMaxHoursDay]  = useState(tenantConfig?.max_hours_per_day  ?? 9)
@@ -137,6 +138,7 @@ function ShiftConfigModal({ currentConfig, tenantConfig, onClose }) {
         startTime: '06:00',
         durationHours: 8,
         confirmationToleranceMinutes: p[0]?.confirmationToleranceMinutes || 15,
+        earlyStartWindowMinutes: p[0]?.earlyStartWindowMinutes ?? 30,
       }]
     })
   }
@@ -238,6 +240,18 @@ function ShiftConfigModal({ currentConfig, tenantConfig, onClose }) {
             onChange={e => setShifts(p => p.map(s => ({ ...s, confirmationToleranceMinutes: parseInt(e.target.value) || 0 })))}
           />
           <p className="text-xs text-ink-muted mt-1">Tiempo máximo para confirmar presencia antes de generar alerta.</p>
+        </div>
+
+        <div className="bg-surface-elevated/60 border border-line-subtle rounded-xl p-4">
+          <label className="label">Ventana de inicio anticipado (minutos)</label>
+          <input type="number" min="0" max="720" className="input w-24"
+            value={shifts[0]?.earlyStartWindowMinutes ?? 30}
+            onChange={e => setShifts(p => p.map(s => ({ ...s, earlyStartWindowMinutes: parseInt(e.target.value) || 0 })))}
+          />
+          <p className="text-xs text-ink-muted mt-1">
+            Cuántos minutos antes de su hora se permite iniciar un turno. Antes de esa ventana el sistema
+            lo bloquea (un supervisor puede iniciarlo de todas formas). Default: 30.
+          </p>
         </div>
         {error && <p className="field-error">{error}</p>}
         <div className="flex gap-2">
