@@ -96,6 +96,8 @@ export const purchasesApi = {
   expenseReceiptSuggestion: (id) => api.get(`${B}/expenses/${id}/receipt-suggestion`).then(r => r.data),
   // Conceptos (líneas) del CFDI del gasto, para previsualizar (parsea el XML guardado).
   expenseConceptos: (id) => api.get(`${B}/expenses/${id}/conceptos`).then(r => r.data),
+  // Re-lee el XML guardado y recupera emisor (nombre + RFC) / totales de un gasto genérico.
+  rereadExpenseXml: (id) => api.post(`${B}/expenses/${id}/reread-xml`).then(r => r.data),
   createSupplierFromExpense: (id, body) =>
     api.post(`${B}/expenses/${id}/create-supplier`, body).then(r => r.data),
   // Respaldo del CFDI (XML/PDF) del gasto: listar / subir / descargar.

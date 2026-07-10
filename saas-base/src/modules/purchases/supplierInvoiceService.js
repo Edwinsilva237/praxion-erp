@@ -1778,20 +1778,13 @@ function createError(status, message) {
 }
 
 /**
- * Devuelve los CONCEPTOS (líneas) del CFDI de un gasto/factura para
- * previsualizarlos, parseando el XML guardado. Fuente del XML, en orden:
+ * Obtiene el XML del CFDI guardado de un gasto/factura. Fuente, en orden:
  *   1. `supplier_invoices.xml_content` (lo guarda el alta por "Cargar XML").
  *   2. el adjunto categoría 'cfdi' tipo XML (lo guarda el buzón de correo, mig 213).
- * Si no hay XML (gasto manual o sólo PDF) → lines vacío + hasXml=false.
+ * Devuelve el string XML o null (gasto manual o sólo PDF).
  */
-async function getExpenseConceptos({ tenantId, id }) {
-  const { rows } = await query(
-    `SELECT xml_content FROM supplier_invoices WHERE id = $1 AND tenant_id = $2`,
-    [id, tenantId]
-  )
-  if (!rows.length) throw createError(404, 'Documento no encontrado.')
-
-  let xml = rows[0].xml_content || null
+async function loadStoredCfdiXml({ tenantId, id, xmlContent }) {
+  let xml = xmlContent || null
   if (!xml) {
     const atts = await attachmentService.listAttachments({
       tenantId, entityType: 'supplier_invoice', entityId: id, category: 'cfdi',
@@ -1804,10 +1797,26 @@ async function getExpenseConceptos({ tenantId, id }) {
         try {
           const buf = await storage.fetchBuffer(info.storage_path)
           if (buf) xml = buf.toString('utf8')
-        } catch { /* sin XML descargable → se devuelve vacío */ }
+        } catch { /* sin XML descargable → null */ }
       }
     }
   }
+  return xml
+}
+
+/**
+ * Devuelve los CONCEPTOS (líneas) del CFDI de un gasto/factura para
+ * previsualizarlos, parseando el XML guardado (ver loadStoredCfdiXml).
+ * Si no hay XML (gasto manual o sólo PDF) → lines vacío + hasXml=false.
+ */
+async function getExpenseConceptos({ tenantId, id }) {
+  const { rows } = await query(
+    `SELECT xml_content FROM supplier_invoices WHERE id = $1 AND tenant_id = $2`,
+    [id, tenantId]
+  )
+  if (!rows.length) throw createError(404, 'Documento no encontrado.')
+
+  const xml = await loadStoredCfdiXml({ tenantId, id, xmlContent: rows[0].xml_content })
   if (!xml) return { lines: [], hasXml: false }
 
   try {
@@ -1819,10 +1828,110 @@ async function getExpenseConceptos({ tenantId, id }) {
   }
 }
 
+/**
+ * Vuelve a leer el CFDI (XML guardado) de un gasto y recupera los datos del EMISOR
+ * (razón social + RFC) que la ingesta por PDF pudo perder — el caso "Proveedor
+ * (correo)" cuando el correo trajo XML+PDF separados y el PDF se procesó primero.
+ * Si el gasto sigue GENÉRICO (sin proveedor, sin CXP) también refresca los totales
+ * desde el XML (arregla desgloses mal leídos, ej. subtotal/IVA en $0).
+ *
+ * NO auto-vincula a un proveedor del catálogo: si el RFC ya existe, el detalle del
+ * gasto genérico ofrece "Crear proveedor con estos datos" (dedup por RFC). Sólo toca
+ * los totales cuando NO hay CXP → nunca desincroniza una cuenta por pagar. Idempotente:
+ * releer el mismo XML no cambia nada si el gasto ya estaba correcto.
+ *
+ * @returns {{ updated:boolean, changed:object, name?:string, rfc?:string }}
+ */
+async function reReadExpenseFromXml({ tenantId, id, userId, ipAddress, userAgent }) {
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT si.*, ap.id AS ap_id, ap.amount_paid AS ap_amount_paid
+         FROM supplier_invoices si
+         LEFT JOIN accounts_payable ap ON ap.document_id = si.id AND ap.tenant_id = si.tenant_id
+        WHERE si.id = $1 AND si.tenant_id = $2 AND si.is_expense = true
+        FOR UPDATE OF si`,
+      [id, tenantId]
+    )
+    if (!rows.length) throw createError(404, 'Gasto no encontrado.')
+    const exp = rows[0]
+    if (exp.status === 'cancelled') throw createError(409, 'No se puede releer un gasto cancelado.')
+
+    const xml = await loadStoredCfdiXml({ tenantId, id, xmlContent: exp.xml_content })
+    if (!xml) throw createError(400, 'Este gasto no tiene un XML guardado para releer.')
+
+    let parsed
+    try {
+      parsed = await documentParserService.parseSupplierDocument(
+        Buffer.from(xml), 'application/xml', 'cfdi.xml')
+    } catch {
+      throw createError(422, 'No se pudo leer el XML guardado.')
+    }
+
+    const emisorName = (parsed?.emisor?.name || '').trim()
+    const emisorRfc  = (parsed?.emisor?.rfc || '').toUpperCase().replace(/\s+/g, '').trim()
+
+    const set = []; const p = []; let i = 1
+    const changed = {}
+
+    // Identidad del emisor: sólo si el gasto sigue genérico (sin proveedor asignado).
+    if (!exp.partner_id) {
+      if (emisorName && emisorName !== (exp.generic_supplier || '')) {
+        set.push(`generic_supplier = $${i++}`); p.push(emisorName); changed.name = emisorName
+      }
+      if (emisorRfc && emisorRfc !== (exp.rfc_emisor || '')) {
+        set.push(`rfc_emisor = $${i++}`); p.push(emisorRfc); changed.rfc = emisorRfc
+      }
+    }
+
+    // Totales: sólo si NO hay CXP (genérico, sin pagos) → no desincroniza nada.
+    const amountPaid = parseFloat(exp.ap_amount_paid || 0)
+    const pSub = Number(parsed?.subtotal || 0)
+    const pTax = Number(parsed?.tax || 0)
+    const pTot = Number(parsed?.total || (pSub + pTax))
+    if (!exp.ap_id && amountPaid === 0 && pTot > 0) {
+      const changedTotals =
+        Math.abs(pTot - parseFloat(exp.total || 0)) > 0.005 ||
+        Math.abs(pSub - parseFloat(exp.subtotal || 0)) > 0.005
+      if (changedTotals) {
+        const rate = exp.currency === 'USD' ? parseFloat(exp.exchange_rate_value || 1) : 1
+        const totMxn = parseFloat((pTot * rate).toFixed(2))
+        set.push(`subtotal = $${i++}`);  p.push(pSub)
+        set.push(`tax = $${i++}`);       p.push(pTax)
+        set.push(`total = $${i++}`);     p.push(pTot)
+        set.push(`total_mxn = $${i++}`); p.push(totMxn)
+        set.push(`balance = $${i++}`);   p.push(totMxn)
+        changed.totals = { subtotal: pSub, tax: pTax, total: pTot }
+      }
+    }
+
+    if (!set.length) {
+      return { updated: false, changed: {}, name: exp.generic_supplier, rfc: exp.rfc_emisor }
+    }
+
+    set.push(`updated_at = NOW()`)
+    p.push(id, tenantId)
+    const { rows: upd } = await client.query(
+      `UPDATE supplier_invoices SET ${set.join(', ')} WHERE id = $${i++} AND tenant_id = $${i} RETURNING *`,
+      p
+    )
+
+    await audit({
+      tenantId, userId, action: 'supplier_expense.reread_xml',
+      resource: 'supplier_invoices', resourceId: id,
+      payload: changed, ipAddress, userAgent,
+    })
+
+    return {
+      updated: true, changed,
+      name: upd[0].generic_supplier, rfc: upd[0].rfc_emisor,
+    }
+  })
+}
+
 module.exports = {
   registerInvoice, generateReceiptRemission, listInvoices, getInvoice, listExpenses,
   listExpensesSummary, getExpense, updateExpense, cancelExpense, linkExpenseToReceipt,
-  assignExpenseSupplier, payExpense, getExpenseConceptos,
+  assignExpenseSupplier, payExpense, getExpenseConceptos, reReadExpenseFromXml,
   suggestReceiptForExpense, requestExpenseInvoice, registerPayment, reverseSupplierPayment, getSupplierStatement,
   unlinkInvoiceFromReceipt,
 }

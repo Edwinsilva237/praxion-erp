@@ -14,7 +14,7 @@ const { createTenant, cleanupTestTenants } = require('../helpers/factory')
 const { pool, query, withBypass } = require('../../src/db')
 const {
   registerInvoice, getExpense, updateExpense, cancelExpense, registerPayment,
-  listExpensesSummary, getExpenseConceptos,
+  listExpensesSummary, getExpenseConceptos, reReadExpenseFromXml,
 } = require('../../src/modules/purchases/supplierInvoiceService')
 const { parseSupplierDocument } = require('../../src/modules/purchases/documentParserService')
 
@@ -287,5 +287,79 @@ describe('Gastos — detalle, edición y cancelación', () => {
     expect(a.total_mxn).toBeCloseTo(1500)
     expect(b.total_mxn).toBeCloseTo(300)
     expect(sum.by_category[0].category_id).toBe(categoryId)  // orden desc por total
+  })
+
+  // ── reReadExpenseFromXml: recuperar el emisor del XML guardado ("Proveedor (correo)") ──
+  const emisorCfdi = ({ uuid, rfc = 'DIM071012I11', subtotal = 8000, total = 9280 }) =>
+    `<?xml version="1.0" encoding="UTF-8"?>` +
+    `<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0" ` +
+    `Serie="M" Folio="711" Fecha="2026-06-30T10:00:00" SubTotal="${subtotal}" Total="${total}" Moneda="MXN">` +
+    `<cfdi:Emisor Rfc="${rfc}" Nombre="DISTRIBUIDORA MORALES SA DE CV" RegimenFiscal="601"/>` +
+    `<cfdi:Receptor Rfc="XAXX010101000" Nombre="MI EMPRESA"/>` +
+    `<cfdi:Complemento><tfd:TimbreFiscalDigital ` +
+    `xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" UUID="${uuid}"/></cfdi:Complemento>` +
+    `</cfdi:Comprobante>`
+
+  // Gasto GENÉRICO (sin proveedor, como el que crea el buzón cuando el PDF no trae
+  // nombre) con un XML de respaldo guardado en xml_content.
+  async function makeGenericWithXml({ xml, generic = 'Proveedor (correo)', subtotal = 1, total = 1 }) {
+    const exp = await registerInvoice({
+      tenantId, genericSupplier: generic,
+      documentNumber: `GEN-${crypto.randomUUID().slice(0, 8)}`,
+      subtotal, tax: 0, total,
+      isExpense: true, expenseCategoryId: null, userId,
+    })
+    await withBypass(() => query(
+      `UPDATE supplier_invoices SET xml_content = $1 WHERE id = $2`, [xml, exp.id]))
+    return exp
+  }
+
+  test('gasto "Proveedor (correo)" → releer el XML recupera nombre, RFC y totales', async () => {
+    const uuid = crypto.randomUUID()
+    const exp = await makeGenericWithXml({ xml: emisorCfdi({ uuid }) })  // arranca con total=1 (mal leído)
+    const res = await reReadExpenseFromXml({ tenantId, id: exp.id, userId })
+    expect(res.updated).toBe(true)
+    expect(res.name).toBe('DISTRIBUIDORA MORALES SA DE CV')
+    expect(res.rfc).toBe('DIM071012I11')
+
+    const { rows } = await withBypass(() => query(
+      `SELECT generic_supplier, rfc_emisor, subtotal, total FROM supplier_invoices WHERE id = $1`, [exp.id]))
+    expect(rows[0].generic_supplier).toBe('DISTRIBUIDORA MORALES SA DE CV')
+    expect(rows[0].rfc_emisor).toBe('DIM071012I11')
+    expect(parseFloat(rows[0].subtotal)).toBeCloseTo(8000, 2)   // totales refrescados
+    expect(parseFloat(rows[0].total)).toBeCloseTo(9280, 2)
+  })
+
+  test('releer con datos ya correctos → updated:false (idempotente)', async () => {
+    const uuid = crypto.randomUUID()
+    const exp = await makeGenericWithXml({ xml: emisorCfdi({ uuid }) })
+    await reReadExpenseFromXml({ tenantId, id: exp.id, userId })
+    const again = await reReadExpenseFromXml({ tenantId, id: exp.id, userId })
+    expect(again.updated).toBe(false)
+  })
+
+  test('sin XML guardado → 400', async () => {
+    const exp = await registerInvoice({
+      tenantId, genericSupplier: 'Proveedor (correo)',
+      documentNumber: `NOXML-${crypto.randomUUID().slice(0, 8)}`,
+      subtotal: 100, tax: 16, total: 116,
+      isExpense: true, expenseCategoryId: null, userId,
+    })
+    await expect(reReadExpenseFromXml({ tenantId, id: exp.id, userId }))
+      .rejects.toMatchObject({ status: 400 })
+  })
+
+  test('gasto con proveedor asignado y CXP → releer NO toca identidad ni totales', async () => {
+    const exp = await makeExpense({ subtotal: 500, tax: 80 })  // con supplierId → tiene CXP
+    await withBypass(() => query(
+      `UPDATE supplier_invoices SET xml_content = $1 WHERE id = $2`,
+      [emisorCfdi({ uuid: crypto.randomUUID(), subtotal: 9999, total: 11599 }), exp.id]))
+    const res = await reReadExpenseFromXml({ tenantId, id: exp.id, userId })
+    expect(res.updated).toBe(false)
+    const { rows } = await withBypass(() => query(
+      `SELECT partner_id, generic_supplier, total FROM supplier_invoices WHERE id = $1`, [exp.id]))
+    expect(rows[0].partner_id).toBe(supplierId)
+    expect(rows[0].generic_supplier).toBeNull()
+    expect(parseFloat(rows[0].total)).toBeCloseTo(580, 2)   // totales intactos (tiene CXP)
   })
 })

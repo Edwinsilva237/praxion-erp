@@ -218,6 +218,25 @@ describe('adjuntos comprimidos (.zip)', () => {
     expect(inboundEmailService.expandAttachments([att])).toEqual([att])
   })
 
+  test('expandAttachments: XML y PDF SEPARADOS (no zip), PDF primero → prefiere el XML, PDF como respaldo', () => {
+    const xml = { filename: 'factura.xml', mimetype: 'application/xml', contentBase64: b64('<xml/>') }
+    const pdf = { filename: 'factura.pdf', mimetype: 'application/pdf', contentBase64: b64('%PDF-1.4') }
+    // El orden PDF-primero era justo el que dejaba "Proveedor (correo)".
+    const out = inboundEmailService.expandAttachments([pdf, xml])
+    expect(out).toHaveLength(1)
+    expect(out[0].filename).toBe('factura.xml')
+    expect(out[0].mimetype).toBe('application/xml')
+    expect(out[0].siblings).toHaveLength(1)
+    expect(out[0].siblings[0].filename).toBe('factura.pdf')
+  })
+
+  test('expandAttachments: solo PDF suelto → se procesa el PDF (sin XML disponible)', () => {
+    const pdf = { filename: 'factura.pdf', mimetype: 'application/pdf', contentBase64: b64('%PDF-1.4') }
+    const out = inboundEmailService.expandAttachments([pdf])
+    expect(out).toHaveLength(1)
+    expect(out[0].filename).toBe('factura.pdf')
+  })
+
   test('ruta: un .zip con un CFDI XML → crea el gasto', async () => {
     const zb64 = zipB64({ 'factura.xml': cfdiXml({ uuid: 'aaaaaaaa-0000-0000-0000-000000000010', folio: 'ZIP1' }) })
     const res = await request(app)
@@ -297,6 +316,34 @@ describe('respaldo del CFDI guardado', () => {
 
     const atts = await cfdiAttachments(res.body.results[0].expenseId)
     expect(atts).toHaveLength(2)
+    const kinds = atts.map(a => a.mime_type.includes('xml') ? 'xml' : 'pdf').sort()
+    expect(kinds).toEqual(['pdf', 'xml'])
+  })
+
+  test('ruta: XML+PDF SEPARADOS con PDF primero → procesa el XML (empareja proveedor), no "Proveedor (correo)"', async () => {
+    const uuid = 'bb000004-0000-0000-0000-000000000004'
+    const res = await request(app)
+      .post('/api/inbound/expense')
+      .set('X-Ingest-Secret', 'test-ingest-secret-123')
+      .send({ token: curToken, from: 'contador@correo.mx', attachments: [
+        // PDF primero (el orden que antes creaba el gasto sin nombre de emisor).
+        { filename: 'factura.pdf', mimetype: 'application/pdf', contentBase64: b64('%PDF-1.4 impreso') },
+        { filename: 'factura.xml', mimetype: 'application/xml',
+          contentBase64: b64(cfdiXml({ uuid, folio: 'SEP1' })) },
+      ] })
+    expect(res.status).toBe(200)
+    // Un solo resultado (el PDF viajó como respaldo del XML, no como documento aparte).
+    expect(res.body.results).toHaveLength(1)
+    expect(res.body.results[0].status).toBe('created')
+    expect(res.body.results[0].supplierMatched).toBe(true)
+
+    const { rows } = await withBypass(() => query(
+      `SELECT partner_id, generic_supplier FROM supplier_invoices WHERE uuid_sat = $1`, [uuid]))
+    expect(rows[0].partner_id).toBe(supplierId)     // emparejó por el RFC del XML
+    expect(rows[0].generic_supplier).toBeNull()     // NO quedó como "Proveedor (correo)"
+
+    // Ambos respaldos (XML + PDF) quedaron pegados al gasto.
+    const atts = await cfdiAttachments(res.body.results[0].expenseId)
     const kinds = atts.map(a => a.mime_type.includes('xml') ? 'xml' : 'pdf').sort()
     expect(kinds).toEqual(['pdf', 'xml'])
   })

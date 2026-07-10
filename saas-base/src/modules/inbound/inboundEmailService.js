@@ -148,9 +148,34 @@ async function storeCfdiBackup({ tenantId, invoiceId, filename, mimetype, conten
   }
 }
 
-/** Expande una lista de adjuntos (descomprime los .zip). */
+function attIsXml(a) {
+  return /xml/i.test(a?.mimetype || '') || /\.xml$/i.test(a?.filename || '')
+}
+function attIsPdf(a) {
+  return /pdf/i.test(a?.mimetype || '') || /\.pdf$/i.test(a?.filename || '')
+}
+
+/**
+ * Expande una lista de adjuntos (descomprime los .zip) y PREFIERE el XML cuando el
+ * correo trae el XML y su PDF impreso como adjuntos SEPARADOS (no zippeados): procesa
+ * SÓLO el XML (la representación buena del CFDI) y conserva el/los PDF como respaldo
+ * (`siblings`) — la MISMA regla que ya aplica la ruta del .zip (ver expandAttachment).
+ *
+ * Sin esto, si el PDF venía ANTES que el XML en el correo, el parser de texto (frágil)
+ * creaba el gasto sin nombre de emisor ("Proveedor (correo)") y el XML posterior se
+ * descartaba como duplicado por UUID. Sólo aplica al caso inequívoco 1 XML + N PDF;
+ * con varios XML no se puede correlacionar qué PDF va con cuál → se procesan todos
+ * como antes (cada XML crea/dedup su gasto y su PDF hermano deduplica por UUID).
+ */
 function expandAttachments(list) {
-  return (list || []).flatMap(expandAttachment)
+  const flat = (list || []).flatMap(expandAttachment)
+  const xmls = flat.filter(attIsXml)
+  const pdfs = flat.filter(a => !attIsXml(a) && attIsPdf(a))
+  if (xmls.length === 1 && pdfs.length) {
+    const primary = xmls[0]
+    return [{ ...primary, siblings: [...(primary.siblings || []), ...pdfs] }]
+  }
+  return flat
 }
 
 const INBOUND_DOMAIN = process.env.INBOUND_EMAIL_DOMAIN || 'inbox.praxionops.com'

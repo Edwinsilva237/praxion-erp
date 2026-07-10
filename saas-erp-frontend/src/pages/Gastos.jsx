@@ -685,6 +685,24 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
     onError: (e) => setError(e.response?.data?.error || e.message),
   })
 
+  // Re-leer el XML guardado: recupera nombre/RFC del emisor (y totales si sigue
+  // genérico) que la ingesta por PDF pudo perder ("Proveedor (correo)").
+  const hasXml = !!conceptosData?.hasXml
+  const rereadXml = useMutation({
+    mutationFn: () => purchasesApi.rereadExpenseXml(id),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['expense', id] })
+      qc.invalidateQueries({ queryKey: ['expenses'] })
+      qc.invalidateQueries({ queryKey: ['expenses-summary'] })
+      qc.invalidateQueries({ queryKey: ['expense-conceptos', id] })
+      setError(res?.updated === false
+        ? 'El XML ya coincide con los datos actuales (sin cambios).'
+        : null)
+      onSaved()
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message),
+  })
+
   const sub = parseFloat(form?.subtotal) || 0
   const iva = parseFloat(form?.tax) || 0
   const total = +(sub + iva).toFixed(2)
@@ -743,16 +761,30 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
                   recepciones y pedir su factura (no aparece en el catálogo hasta marcarlo como recurrente).
                 </p>
                 {!supOpen ? (
-                  <Can do="business_partners:create">
-                    <button type="button" className="btn-primary text-xs self-start"
-                      onClick={() => {
-                        setError(null)
-                        setSupForm({ name: exp.generic_supplier || '', rfc: exp.rfc_emisor || '', type: 'supplier', recurrente: false })
-                        setSupOpen(true)
-                      }}>
-                      Crear proveedor con estos datos
-                    </button>
-                  </Can>
+                  <div className="flex flex-wrap gap-2">
+                    {hasXml && (
+                      <Can do="expenses:create">
+                        <button type="button" className="btn-secondary text-xs"
+                          disabled={rereadXml.isPending}
+                          onClick={() => { setError(null); rereadXml.mutate() }}
+                          title="Re-lee el XML guardado y recupera el nombre y RFC del emisor">
+                          {rereadXml.isPending ? <Spinner size="sm" /> : 'Volver a leer del XML'}
+                        </button>
+                      </Can>
+                    )}
+                    <Can do="business_partners:create">
+                      <button type="button" className="btn-primary text-xs"
+                        onClick={() => {
+                          setError(null)
+                          const cleanName = (exp.generic_supplier && exp.generic_supplier !== 'Proveedor (correo)')
+                            ? exp.generic_supplier : ''
+                          setSupForm({ name: cleanName, rfc: exp.rfc_emisor || '', type: 'supplier', recurrente: false })
+                          setSupOpen(true)
+                        }}>
+                        Crear proveedor con estos datos
+                      </button>
+                    </Can>
+                  </div>
                 ) : (
                   <div className="flex flex-col gap-2">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

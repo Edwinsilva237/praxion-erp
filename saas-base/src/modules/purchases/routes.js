@@ -970,6 +970,22 @@ router.get('/expenses/:id/conceptos', checkPermission('expenses', 'read'), async
 })
 
 /**
+ * POST /api/purchases/expenses/:id/reread-xml
+ * Re-lee el XML guardado del gasto y recupera el emisor (razón social + RFC) que la
+ * ingesta por PDF pudo perder ("Proveedor (correo)"); si sigue genérico, refresca
+ * los totales. Edita el gasto → gateado por expenses:create (como PATCH /expenses/:id).
+ */
+router.post('/expenses/:id/reread-xml', checkPermission('expenses', 'create'), async (req, res, next) => {
+  try {
+    const result = await supplierInvoiceService.reReadExpenseFromXml({
+      tenantId: req.tenant.id, id: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
  * POST /api/purchases/expenses/:id/unlink-receipt
  * Desvincula una factura de compra de su(s) recepción(es) y la revierte a gasto
  * (inverso de link-receipt). Útil cuando se vinculó a la recepción equivocada.
