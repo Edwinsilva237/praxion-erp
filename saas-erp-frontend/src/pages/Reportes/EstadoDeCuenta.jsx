@@ -560,7 +560,7 @@ function PartnerStatementModal({ direction, partnerId, labels, onClose }) {
           ) : !data ? (
             <p className="text-ink-muted">No se pudo cargar el detalle.</p>
           ) : (
-            <PartnerStatementContent data={data} />
+            <PartnerStatementContent data={data} direction={direction} />
           )}
         </div>
       </div>
@@ -578,7 +578,7 @@ function PartnerStatementModal({ direction, partnerId, labels, onClose }) {
   )
 }
 
-function PartnerStatementContent({ data }) {
+function PartnerStatementContent({ data, direction }) {
   const s = data.summary
   return (
     <div className="flex flex-col gap-5">
