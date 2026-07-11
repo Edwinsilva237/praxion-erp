@@ -780,6 +780,10 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
   const [evidenceOpen, setEvidenceOpen] = useState(false)
   const [error, setError]         = useState(null)
   const [excessWarning, setExcess] = useState(null)
+  // "Recibir otra OC del mismo embarque": folio de la última recepción guardada
+  // (banner de progreso) + intención de NO cerrar el modal tras guardar.
+  const [savedBanner, setSavedBanner] = useState(null)
+  const continueAfterRef = useRef(false)
 
   const { data: warehouses = [] } = useQuery({
     queryKey: ['inv-warehouses'],
@@ -901,9 +905,10 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
       }
       return receipt
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['purchase-receipts'] })
       qc.invalidateQueries({ queryKey: ['purchase-orders'] })
+      qc.invalidateQueries({ queryKey: ['purchase-orders-open'] })  // refresca el selector de OC
       if (isEdit) {
         qc.invalidateQueries({ queryKey: ['receipt-detail', editReceipt.id] })
         // Editar reemplaza los lotes del borrador → refrescar inventario.
@@ -912,19 +917,34 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
         qc.invalidateQueries({ queryKey: ['inv-levels-summary'] })
       }
       onCreated()
+      // "Recibir otra OC del mismo embarque": no cerrar. Limpiamos solo la OC y
+      // sus líneas; se conservan almacén, fecha, tipo/folio de documento, notas y
+      // evidencia (la evidencia se re-sube a cada recepción, una copia por OC).
+      if (!isEdit && continueAfterRef.current) {
+        continueAfterRef.current = false
+        setSavedBanner(data?.receipt_number || 'Recepción')
+        setOcId(''); setOcData(null); setLines([])
+        setExcess(null); setError(null)
+        return
+      }
       onClose()
     },
     onError: (e) => setError(e.response?.data?.error || e.message || 'Error al guardar'),
   })
 
-  function handleSubmit(e) {
-    e.preventDefault(); setError(null)
+  // continueAfter=true → tras guardar, mantener el modal abierto para recibir otra
+  // OC del mismo embarque (conserva almacén/fecha/folio/evidencia).
+  function doSubmit(continueAfter) {
+    setError(null)
     if (!ocId && !isEdit) { setError('Selecciona una OC.'); return }
     if (!warehouseId) { setError('Selecciona el almacén.'); return }
+    continueAfterRef.current = continueAfter
     const excess = getExcess()
     if (excess.length > 0) { setExcess(excess); return }
     mutation.mutate()
   }
+
+  function handleSubmit(e) { e.preventDefault(); doSubmit(false) }
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
@@ -986,6 +1006,22 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
         )}
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+          {/* Banner "mismo embarque": el modal siguió abierto tras guardar una OC */}
+          {savedBanner && !isEdit && (
+            <div className="bg-status-success/10 border border-status-success/40 rounded-xl px-4 py-3 flex items-start gap-3">
+              <svg className="w-5 h-5 text-status-success shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+              </svg>
+              <div className="flex-1 text-sm">
+                <p className="font-semibold text-status-success">{savedBanner} guardada</p>
+                <p className="text-ink-secondary mt-0.5">
+                  Selecciona la siguiente OC de este embarque. Se conservan almacén, fecha,
+                  folio del proveedor{evidence ? ' y evidencia' : ''}.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* OC obligatoria */}
           <div className="bg-surface-elevated/60 border border-line-subtle rounded-xl p-4 flex flex-col gap-3">
             <p className="text-xs font-bold text-brand-300 uppercase tracking-wider">
@@ -1213,13 +1249,30 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
             </div>
           )}
 
-          <div className="flex gap-2 pt-1">
-            <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancelar</button>
-            <button type="submit"
-              disabled={mutation.isPending || (!ocId && !isEdit) || lines.length === 0 || !!excessWarning}
-              className="btn-primary flex-1">
-              {mutation.isPending ? <Spinner size="sm" /> : (isEdit ? 'Guardar cambios' : 'Guardar recepción')}
-            </button>
+          <div className="flex flex-col gap-2 pt-1">
+            {/* Un embarque puede traer material de varias OC (una completa y otra
+                parcial, o varias completas). Guarda esta OC y sigue con la próxima
+                sin recapturar almacén/fecha/folio/evidencia. */}
+            {!isEdit && (
+              <button type="button" onClick={() => doSubmit(true)}
+                disabled={mutation.isPending || !ocId || lines.length === 0 || !!excessWarning}
+                className="btn-secondary justify-center">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/>
+                </svg>
+                Guardar y recibir otra OC del mismo embarque
+              </button>
+            )}
+            <div className="flex gap-2">
+              <button type="button" onClick={onClose} className="btn-secondary flex-1">
+                {savedBanner && !isEdit ? 'Terminar' : 'Cancelar'}
+              </button>
+              <button type="submit"
+                disabled={mutation.isPending || (!ocId && !isEdit) || lines.length === 0 || !!excessWarning}
+                className="btn-primary flex-1">
+                {mutation.isPending ? <Spinner size="sm" /> : (isEdit ? 'Guardar cambios' : 'Guardar recepción')}
+              </button>
+            </div>
           </div>
         </form>
       </div>
