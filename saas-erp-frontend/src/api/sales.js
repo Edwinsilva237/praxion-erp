@@ -16,6 +16,10 @@ export const salesApi = {
     api.get(`${B}/suggested-price`, { params: { partnerId, productId, orderCurrency } }).then(r => r.data),
   pendingQuantities: (orderId) =>
     api.get(`${B}/orders/${orderId}/pending-quantities`).then(r => r.data),
+  // Existencias del producto por almacén (+ niveles configurados) para el
+  // indicador de stock al capturar cantidades en un pedido.
+  productStockByWarehouse: (itemId, itemType = 'product') =>
+    api.get(`${B}/stock/${itemType}/${itemId}`).then(r => r.data),
 
   // Paquetes en el pedido (draft): agregar explota el paquete en líneas
   // prorrateadas (grupo atómico); quitar elimina el grupo completo.

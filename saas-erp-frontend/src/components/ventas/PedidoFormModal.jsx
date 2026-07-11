@@ -9,6 +9,7 @@ import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
 import { BundlePickerModal } from '@/components/ventas/BundlePickerModal'
 import { BundleGroupCard } from '@/components/ventas/BundleGroupCard'
+import { StockDisponible } from '@/components/ventas/StockDisponible'
 import { fmtMXN, fmtNum, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
@@ -657,6 +658,14 @@ function PedidoForm({ onClose, onCreated }) {
                   {(parseFloat(line.quantity || 0) * line.pack_factor).toLocaleString('es-MX')} {line.base_unit}
                 </span>
               </div>
+            )}
+
+            {line.product?.id && (
+              <StockDisponible
+                productId={line.product.id}
+                qtyBase={parseFloat(line.quantity || 0) * (line.pack_factor || 1)}
+                baseUnit={line.base_unit || line.unit}
+              />
             )}
 
             <div className="flex items-center justify-between bg-surface-elevated/40 rounded-lg px-3 py-1.5">

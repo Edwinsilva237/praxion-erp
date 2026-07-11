@@ -5,6 +5,7 @@ import { salesApi } from '@/api/sales'
 import { productsApi } from '@/api/products'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
+import { StockDisponible } from '@/components/ventas/StockDisponible'
 import { ProductImageThumb } from '@/components/productos/ProductImageThumb'
 import { fmtMXN, fmtDate } from '@/utils/fmt'
 import clsx from 'clsx'
@@ -290,6 +291,14 @@ export function PedidoLineaModal({ order, line, onClose, onSaved }) {
               {(parseFloat(quantity || 0) * packFactor).toLocaleString('es-MX')} {baseUnit}
             </span>
           </div>
+        )}
+
+        {product?.id && (
+          <StockDisponible
+            productId={product.id}
+            qtyBase={parseFloat(quantity || 0) * (packFactor || 1)}
+            baseUnit={baseUnit || unit}
+          />
         )}
 
         <div className="bg-surface-elevated/40 rounded-lg px-3 py-2 flex justify-between items-center">

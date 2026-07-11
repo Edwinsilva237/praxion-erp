@@ -1155,6 +1155,53 @@ async function recalcOrderStatus({ tenantId, orderId }) {
   return withTransaction(client => recalcOrderStatusFromDeliveries(client, { tenantId, orderId }))
 }
 
+/**
+ * Existencias de un producto desglosadas POR ALMACÉN + niveles configurados, para
+ * el indicador de stock al capturar cantidades en un pedido. El pedido NO fija
+ * almacén (se decide en la remisión), por eso devolvemos todos los almacenes con
+ * existencia (o con nivel configurado) y el total disponible. Vive en el módulo de
+ * ventas (permiso sales:read) para que el vendedor lo vea sin requerir inventory:read.
+ */
+async function getItemStockByWarehouse({ tenantId, itemType = 'product', itemId }) {
+  if (!['product', 'raw_material'].includes(itemType)) itemType = 'product'
+  if (!itemId) return { warehouses: [], total_available: 0, unit: null }
+
+  const { rows } = await query(
+    `SELECT
+       w.id   AS warehouse_id,
+       w.name AS warehouse_name,
+       w.type AS warehouse_type,
+       COALESCE(s.quantity, 0)::numeric AS quantity,
+       s.unit                           AS unit,
+       il.min_stock::numeric      AS min_stock,
+       il.reorder_point::numeric  AS reorder_point,
+       il.max_stock::numeric      AS max_stock,
+       CASE
+         WHEN il.id IS NULL THEN NULL
+         WHEN COALESCE(s.quantity,0) < il.min_stock                               THEN 'below_min'
+         WHEN COALESCE(s.quantity,0) < il.reorder_point                           THEN 'at_reorder'
+         WHEN il.max_stock IS NOT NULL AND COALESCE(s.quantity,0) > il.max_stock  THEN 'overstock'
+         ELSE 'normal'
+       END AS status_calc
+     FROM warehouses w
+     LEFT JOIN inventory_stock s
+       ON s.warehouse_id = w.id AND s.tenant_id = w.tenant_id
+      AND s.item_type = $2::inventory_item_type AND s.item_id = $3
+      AND s.status = 'available'
+     LEFT JOIN inventory_levels il
+       ON il.warehouse_id = w.id AND il.tenant_id = w.tenant_id
+      AND il.item_type = $2::inventory_item_type AND il.item_id = $3
+     WHERE w.tenant_id = $1
+       AND (COALESCE(s.quantity,0) <> 0 OR il.id IS NOT NULL)
+     ORDER BY (COALESCE(s.quantity,0) > 0) DESC, w.type, w.name`,
+    [tenantId, itemType, itemId]
+  )
+
+  const total = rows.reduce((sum, r) => sum + parseFloat(r.quantity || 0), 0)
+  const unit  = rows.find(r => r.unit)?.unit || null
+  return { warehouses: rows, total_available: total, unit }
+}
+
 module.exports = {
   listOrders, getOrder, createOrder, updateOrder,
   confirmOrder, cancelOrder, deleteOrder, getSuggestedPrice,
@@ -1162,5 +1209,6 @@ module.exports = {
   addOrderLine, updateOrderLine, deleteOrderLine,
   addBundleToOrder, removeBundleGroup,
   getOrderDeliveryBreakdown, recalcOrderStatusFromDeliveries, recalcOrderStatus,
+  getItemStockByWarehouse,
   nextOrderNumber,
 }

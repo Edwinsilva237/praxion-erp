@@ -104,6 +104,22 @@ router.get('/suggested-price', checkPermission('sales', 'read'), async (req, res
 })
 
 /**
+ * GET /api/sales/stock/:itemType/:itemId
+ * Existencias del producto por almacén + niveles configurados, para el indicador
+ * de stock disponible al capturar cantidades en un pedido.
+ */
+router.get('/stock/:itemType/:itemId', checkPermission('sales', 'read'), async (req, res, next) => {
+  try {
+    const data = await orderService.getItemStockByWarehouse({
+      tenantId: req.tenant.id,
+      itemType: req.params.itemType,
+      itemId:   req.params.itemId,
+    })
+    res.json(data)
+  } catch (err) { next(err) }
+})
+
+/**
  * POST /api/sales/orders
  * Body: { partnerId, deliveryAddressId?, currency?, poNumber?, lines[], notes? }
  * lines: [{ productId, quantity, unitPrice, unit?, discountPct?, notes? }]
