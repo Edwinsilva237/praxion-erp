@@ -349,17 +349,36 @@ describe('Gastos — detalle, edición y cancelación', () => {
       .rejects.toMatchObject({ status: 400 })
   })
 
-  test('gasto con proveedor asignado y CXP → releer NO toca identidad ni totales', async () => {
+  test('gasto con proveedor asignado y CXP → releer corrige serie/folio pero NO toca identidad ni totales', async () => {
     const exp = await makeExpense({ subtotal: 500, tax: 80 })  // con supplierId → tiene CXP
     await withBypass(() => query(
       `UPDATE supplier_invoices SET xml_content = $1 WHERE id = $2`,
       [emisorCfdi({ uuid: crypto.randomUUID(), subtotal: 9999, total: 11599 }), exp.id]))
     const res = await reReadExpenseFromXml({ tenantId, id: exp.id, userId })
-    expect(res.updated).toBe(false)
+
+    // Serie/folio SÍ se corrigen aunque el proveedor esté identificado (lo pedido).
+    expect(res.updated).toBe(true)
+    expect(res.changed.serie).toBe('M')
+    expect(res.changed.folio).toBe('711')
+    expect(res.changed.folioNumber).toBe('M-711')
+    // Totales NO se tocan (hay CXP) pero se reporta el desfase como aviso.
+    expect(res.changed.totals).toBeUndefined()
+    expect(res.changed.totalsBlocked).toMatchObject({ xmlTotal: 11599, current: 580 })
+
     const { rows } = await withBypass(() => query(
-      `SELECT partner_id, generic_supplier, total FROM supplier_invoices WHERE id = $1`, [exp.id]))
+      `SELECT partner_id, generic_supplier, total, serie, folio, invoice_number
+         FROM supplier_invoices WHERE id = $1`, [exp.id]))
     expect(rows[0].partner_id).toBe(supplierId)
     expect(rows[0].generic_supplier).toBeNull()
     expect(parseFloat(rows[0].total)).toBeCloseTo(580, 2)   // totales intactos (tiene CXP)
+    expect(rows[0].serie).toBe('M')
+    expect(rows[0].folio).toBe('711')
+    expect(rows[0].invoice_number).toBe('M-711')
+
+    // El folio de la CXP queda en sync con el nuevo invoice_number.
+    const { rows: ap } = await withBypass(() => query(
+      `SELECT document_number FROM accounts_payable WHERE document_id = $1 AND tenant_id = $2`,
+      [exp.id, tenantId]))
+    expect(ap[0].document_number).toBe('M-711')
   })
 })

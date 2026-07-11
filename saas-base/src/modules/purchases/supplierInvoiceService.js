@@ -1941,16 +1941,37 @@ async function reReadExpenseFromXml({ tenantId, id, userId, ipAddress, userAgent
       }
     }
 
-    // Totales: sólo si NO hay CXP (genérico, sin pagos) → no desincroniza nada.
+    // Serie, folio y número de factura visible: identificadores del documento, SIN
+    // impacto contable → se corrigen SIEMPRE (aunque el proveedor ya esté
+    // identificado o haya CXP/pago). El "folio" que ve el usuario es invoice_number,
+    // que la ingesta arma como "SERIE-FOLIO"; lo re-derivamos igual desde el CFDI.
+    const pSerie = (parsed?.serie || '').toString().trim()
+    const pFolio = (parsed?.folio || '').toString().trim()
+    if (pSerie && pSerie !== (exp.serie || '')) {
+      set.push(`serie = $${i++}`); p.push(pSerie.slice(0, 10)); changed.serie = pSerie
+    }
+    if (pFolio && pFolio !== (exp.folio || '')) {
+      set.push(`folio = $${i++}`); p.push(pFolio.slice(0, 20)); changed.folio = pFolio
+    }
+    const xmlDocNumber = [pSerie, pFolio].filter(Boolean).join('-')
+    let newInvoiceNumber = null
+    if (xmlDocNumber && xmlDocNumber !== (exp.invoice_number || '')) {
+      newInvoiceNumber = xmlDocNumber
+      set.push(`invoice_number = $${i++}`); p.push(xmlDocNumber); changed.folioNumber = xmlDocNumber
+    }
+
+    // Totales: re-sincronizan sólo si NO hay CXP ni pagos → no desincroniza nada.
+    // Si difieren pero el gasto ya tiene CXP/pago, no se tocan (rompería la
+    // contabilidad) pero se REPORTA el desfase para que el usuario decida.
     const amountPaid = parseFloat(exp.ap_amount_paid || 0)
     const pSub = Number(parsed?.subtotal || 0)
     const pTax = Number(parsed?.tax || 0)
     const pTot = Number(parsed?.total || (pSub + pTax))
-    if (!exp.ap_id && amountPaid === 0 && pTot > 0) {
-      const changedTotals =
-        Math.abs(pTot - parseFloat(exp.total || 0)) > 0.005 ||
-        Math.abs(pSub - parseFloat(exp.subtotal || 0)) > 0.005
-      if (changedTotals) {
+    const totalsDiffer = pTot > 0 && (
+      Math.abs(pTot - parseFloat(exp.total || 0)) > 0.005 ||
+      Math.abs(pSub - parseFloat(exp.subtotal || 0)) > 0.005)
+    if (totalsDiffer) {
+      if (!exp.ap_id && amountPaid === 0) {
         const rate = exp.currency === 'USD' ? parseFloat(exp.exchange_rate_value || 1) : 1
         const totMxn = parseFloat((pTot * rate).toFixed(2))
         set.push(`subtotal = $${i++}`);  p.push(pSub)
@@ -1959,19 +1980,44 @@ async function reReadExpenseFromXml({ tenantId, id, userId, ipAddress, userAgent
         set.push(`total_mxn = $${i++}`); p.push(totMxn)
         set.push(`balance = $${i++}`);   p.push(totMxn)
         changed.totals = { subtotal: pSub, tax: pTax, total: pTot }
+      } else {
+        // No se aplica: hay CXP o pagos. Solo aviso (no altera `set`).
+        changed.totalsBlocked = { xmlTotal: pTot, current: parseFloat(exp.total || 0) }
       }
     }
 
     if (!set.length) {
-      return { updated: false, changed: {}, name: exp.generic_supplier, rfc: exp.rfc_emisor }
+      // Puede traer `totalsBlocked` como aviso aunque no se actualice nada.
+      return { updated: false, changed, name: exp.generic_supplier, rfc: exp.rfc_emisor }
     }
 
     set.push(`updated_at = NOW()`)
     p.push(id, tenantId)
-    const { rows: upd } = await client.query(
-      `UPDATE supplier_invoices SET ${set.join(', ')} WHERE id = $${i++} AND tenant_id = $${i} RETURNING *`,
-      p
-    )
+    let upd
+    try {
+      const r = await client.query(
+        `UPDATE supplier_invoices SET ${set.join(', ')} WHERE id = $${i++} AND tenant_id = $${i} RETURNING *`,
+        p
+      )
+      upd = r.rows
+    } catch (e) {
+      // Unique (tenant_id, partner_id, invoice_number) excl. canceladas (mig 215):
+      // el folio corregido choca con otra factura activa del mismo proveedor.
+      if (e.code === '23505' && newInvoiceNumber) {
+        throw createError(409,
+          `Ya existe otra factura activa de este proveedor con folio ${newInvoiceNumber}. ` +
+          `Revisa si es un duplicado antes de re-leer el XML.`)
+      }
+      throw e
+    }
+
+    // Mantener el folio de la CXP en sync con el nuevo invoice_number (mismo
+    // criterio que updateExpense). El monto no cambia aquí.
+    if (newInvoiceNumber && exp.ap_id) {
+      await client.query(
+        `UPDATE accounts_payable SET document_number = $1 WHERE id = $2 AND tenant_id = $3`,
+        [newInvoiceNumber, exp.ap_id, tenantId])
+    }
 
     await audit({
       tenantId, userId, action: 'supplier_expense.reread_xml',

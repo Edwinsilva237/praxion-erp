@@ -695,9 +695,23 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
       qc.invalidateQueries({ queryKey: ['expenses'] })
       qc.invalidateQueries({ queryKey: ['expenses-summary'] })
       qc.invalidateQueries({ queryKey: ['expense-conceptos', id] })
-      setError(res?.updated === false
-        ? 'El XML ya coincide con los datos actuales (sin cambios).'
-        : null)
+      qc.invalidateQueries({ queryKey: ['cxp'] })
+      // Mensaje según lo que el XML corrigió (serie, folio, emisor, totales).
+      const c = res?.changed || {}
+      const campos = []
+      if (c.name || c.rfc)          campos.push('emisor')
+      if (c.serie)                  campos.push('serie')
+      if (c.folio || c.folioNumber) campos.push('folio')
+      if (c.totals)                 campos.push('totales')
+      let msg = campos.length ? `Actualizado desde el XML: ${campos.join(', ')}.` : null
+      if (res?.updated === false && !campos.length && !c.totalsBlocked)
+        msg = 'El XML ya coincide con los datos actuales (sin cambios).'
+      if (c.totalsBlocked) {
+        msg = `${msg ? msg + ' ' : ''}⚠️ El total del XML (${fmtMXN(c.totalsBlocked.xmlTotal)}) ` +
+          `difiere del registrado (${fmtMXN(c.totalsBlocked.current)}), pero no se cambió porque el ` +
+          `gasto ya tiene CXP o pago. Corrígelo manualmente o reversa el pago primero.`
+      }
+      setError(msg)
       onSaved()
     },
     onError: (e) => setError(e.response?.data?.error || e.message),
@@ -987,6 +1001,27 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
                   </table>
                 </div>
               </div>
+            )}
+
+            {/* Volver a leer del XML aunque el proveedor YA esté identificado: corrige
+                serie, folio y totales que el parseo inicial (sobre todo por PDF/IA)
+                pudo tomar mal. Las cantidades de los conceptos se releen solas del XML.
+                (Para gastos genéricos el botón vive en el recuadro "proveedor sin
+                identificar", así que aquí solo se muestra para los ya identificados.) */}
+            {hasXml && !isCancelled && !isGeneric && (
+              <Can do="expenses:create">
+                <div className="flex items-center justify-between gap-3 bg-surface-elevated/40 border border-line-subtle rounded-lg px-3 py-2">
+                  <p className="text-[11px] text-ink-muted leading-snug">
+                    ¿La serie, el folio o algún dato se capturó mal? Vuelve a leerlos del CFDI.
+                  </p>
+                  <button type="button" className="btn-secondary btn-sm shrink-0 whitespace-nowrap"
+                    disabled={rereadXml.isPending}
+                    onClick={() => { setError(null); rereadXml.mutate() }}
+                    title="Re-lee el XML guardado y corrige serie, folio y totales">
+                    {rereadXml.isPending ? <Spinner size="sm" /> : 'Volver a leer del XML'}
+                  </button>
+                </div>
+              </Can>
             )}
 
             {/* Vincular a una recepción → factura de compra (mercancía). NO se liga
