@@ -197,6 +197,14 @@ export const HELP = {
       { label: 'Apágalo si',  value: 'Prefieres que el sistema nunca muestre negativos (p.ej. solo vendes lo que ya está capturado en inventario).' },
     ],
   },
+  block_sale_without_stock: {
+    title: 'Bloquear remisión sin existencia',
+    body: 'Al registrar la ENTREGA de una remisión, si el almacén no tiene existencia suficiente para cubrir la salida, la operación se rechaza con un error "Stock insuficiente" en lugar de dejar el saldo en 0 o negativo. El indicador de stock del pedido es solo un aviso; esta bandera es la que realmente impide entregar de más. Es la contraparte estricta de "Permitir inventario en negativo": si bloqueas la sobreventa, nunca se llega a un saldo negativo.',
+    examples: [
+      { label: 'Actívalo si', value: 'No quieres entregar más de lo que hay físicamente (retail/alimentos, control estricto de existencias).' },
+      { label: 'Apágalo si',  value: 'Produces o surtes sobre la marcha y prefieres entregar aunque el stock aún no esté capturado.' },
+    ],
+  },
 
   // ── Atributos de materias primas específicos de plástico ─────────────
   uses_resin_types: {
@@ -314,4 +322,5 @@ export const FIELD_LABELS = {
   require_revert_dual_approval:    'Requerir doble aprobación',
   expenses_enabled:                'Módulo de Gastos',
   allow_negative_stock:            'Permitir inventario en negativo',
+  block_sale_without_stock:        'Bloquear remisión sin existencia',
 }

@@ -200,6 +200,7 @@ export default function Flags() {
       require_revert_dual_approval:    values.require_revert_dual_approval,
       // Inventario
       allow_negative_stock:           values.allow_negative_stock,
+      block_sale_without_stock:       values.block_sale_without_stock,
       // Módulos opcionales
       expenses_enabled:               values.expenses_enabled,
     }
@@ -394,6 +395,7 @@ export default function Flags() {
             <HelpTip text="Cómo se comporta el stock cuando una venta/remisión sale sin existencia capturada. Permitir negativo deja el saldo en rojo como bandera de que falta validar producción o capturar una entrada." />
           </h2>
           <FlagRow field="allow_negative_stock" values={values} onChange={handleChange} disabled={disabled} />
+          <FlagRow field="block_sale_without_stock" values={values} onChange={handleChange} disabled={disabled} />
         </div>
 
         {/* ── Módulos opcionales ───────────────────────────────────────── */}

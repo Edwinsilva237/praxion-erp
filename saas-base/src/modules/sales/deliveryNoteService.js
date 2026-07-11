@@ -737,11 +737,15 @@ async function recordDelivery({
     // salida puede dejar el saldo en NEGATIVO si falta existencia capturada (el
     // negativo es bandera de "falta validar producción / capturar entrada"). Si
     // está apagada se mantiene el comportamiento histórico: clampa a 0.
+    // block_sale_without_stock (mig 223): si está activa, la entrega se BLOQUEA con
+    // un 400 "Stock insuficiente" cuando el almacén no cubre la salida (validateStock).
     const { rows: cfgRows } = await client.query(
-      `SELECT allow_negative_stock FROM tenant_process_config WHERE tenant_id = $1`,
+      `SELECT allow_negative_stock, block_sale_without_stock
+         FROM tenant_process_config WHERE tenant_id = $1`,
       [tenantId]
     )
-    const allowNegative = cfgRows[0]?.allow_negative_stock === true
+    const allowNegative          = cfgRows[0]?.allow_negative_stock === true
+    const blockSaleWithoutStock  = cfgRows[0]?.block_sale_without_stock === true
 
     // Descontar inventario por cada línea — usa quantity_base (unidad atómica
     // del producto, ver migración 074) y warehouse_id de la línea (default por
@@ -784,7 +788,7 @@ async function recordDelivery({
         referenceId:    noteId,
         notes:         `Salida por remisión ${note.document_number}`,
         createdBy:      userId,
-        validateStock: false,
+        validateStock: blockSaleWithoutStock,
         allowNegative,
       })
 

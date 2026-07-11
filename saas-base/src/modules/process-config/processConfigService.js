@@ -63,6 +63,8 @@ const ALLOWED_UPDATES = [
   'expenses_enabled',
   // Inventario: permitir saldo negativo en salidas por venta (mig 193)
   'allow_negative_stock',
+  // Inventario: bloquear la remisión si no hay existencia suficiente (mig 223)
+  'block_sale_without_stock',
 ]
 
 // Conjuntos de valores enum válidos. Duplican los CHECK constraints en SQL,
@@ -137,6 +139,7 @@ async function updateConfig({ tenantId, userId, updates, ipAddress, userAgent })
     'supervisor_validates','pt_goes_to_wip_first','mp_goes_to_wip_first',
     'allow_second_quality_in_order','treat_abnormal_scrap_as_loss',
     'allow_adhoc_shifts','simplified_overhead','allow_negative_stock',
+    'block_sale_without_stock',
   ]
   for (const k of BOOLEAN_FIELDS) {
     if (cleaned[k] !== undefined && typeof cleaned[k] !== 'boolean') {
