@@ -13,6 +13,13 @@ export const partnersApi = {
   update: (id, body) =>
     api.patch(`/business-partners/${id}`, body).then((r) => r.data),
 
+  // Días de crédito → documentos abiertos: conteo de impacto y aplicación.
+  creditImpact: (id) =>
+    api.get(`/business-partners/${id}/credit-impact`).then((r) => r.data),
+
+  applyCreditTerms: (id, sides) =>
+    api.post(`/business-partners/${id}/apply-credit-terms`, { sides }).then((r) => r.data),
+
   // CSF — pre-llenado desde PDF
   parseCSF: (file) => {
     const form = new FormData()

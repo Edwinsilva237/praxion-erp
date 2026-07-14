@@ -13,6 +13,7 @@ import Can from '@/components/auth/Can'
 import clsx from 'clsx'
 import SatCatalogSelect from '@/components/fiscal/SatCatalogSelect'
 import PartnerDetailModal from '@/components/socios/PartnerDetailModal'
+import useAuthStore from '@/store/useAuthStore'
 
 // ─── Catálogos SAT ────────────────────────────────────────────────────────────
 const REGIMENES = [
@@ -336,9 +337,18 @@ const NEW_PARTNER_DEFAULTS = {
 function PartnerModal({ partner: partnerStub, onClose, onSaved }) {
   const isEdit = !!partnerStub
   const qc = useQueryClient()
+  const can = useAuthStore(s => s.can)
   const fileInputRef = useRef()
   const [csfLoading, setCsfLoading] = useState(false)
   const [csfWarning, setCsfWarning] = useState(null)
+  // Diálogo "aplicar días de crédito a documentos abiertos" (tras cambiar el crédito).
+  const [pendingCredit, setPendingCredit] = useState(null)
+  // Crédito ANTES de editar, para detectar si cambió al guardar.
+  const origCredit = useRef({
+    creditType:         partnerStub?.credit_type || 'cash',
+    creditDays:         Number(partnerStub?.credit_days || 0),
+    supplierCreditDays: partnerStub?.supplier_credit_days == null ? 0 : Number(partnerStub.supplier_credit_days),
+  })
 
   // Domicilios de entrega (estado local, se guardan por separado)
   const [addresses, setAddresses] = useState([])
@@ -458,7 +468,7 @@ function PartnerModal({ partner: partnerStub, onClose, onSaved }) {
   const mutation = useMutation({
     mutationFn: (data) =>
       isEdit ? partnersApi.update(partnerStub.id, data) : partnersApi.create(data),
-    onSuccess: async (saved) => {
+    onSuccess: async (saved, variables) => {
       // Persistir cambios en domicilios de entrega:
       //   _new       → POST /addresses
       //   _modified  → PATCH /addresses/:id
@@ -476,8 +486,39 @@ function PartnerModal({ partner: partnerStub, onClose, onSaved }) {
       }
       qc.invalidateQueries({ queryKey: ['partners'] })
       qc.invalidateQueries({ queryKey: ['partner-addresses', saved.id] })
+
+      // ¿Cambió el crédito? Al editar, ofrecer aplicar el nuevo vencimiento a
+      // los documentos ABIERTOS del socio (solo si el usuario puede tocar finanzas).
+      if (isEdit && can('financials', 'update')) {
+        const o = origCredit.current
+        const custChanged = (variables.creditType || 'cash') !== o.creditType
+          || Number(variables.creditDays || 0) !== o.creditDays
+        const supChanged = Number(variables.supplierCreditDays || 0) !== Number(o.supplierCreditDays || 0)
+        const sides = []
+        if (custChanged) sides.push('customer')
+        if (supChanged) sides.push('supplier')
+        if (sides.length) {
+          try {
+            const impact = await partnersApi.creditImpact(saved.id)
+            const applySides = sides.filter(s => (impact[s]?.open_count || 0) > 0)
+            if (applySides.length) {
+              setPendingCredit({ partnerId: saved.id, name: saved.name, sides: applySides, impact })
+              return   // no cerramos aún: el diálogo decide
+            }
+          } catch {}
+        }
+      }
       onSaved()
     },
+  })
+
+  const applyCredit = useMutation({
+    mutationFn: () => partnersApi.applyCreditTerms(pendingCredit.partnerId, pendingCredit.sides),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['partners'] })
+      onSaved()
+    },
+    onError: (e) => { alert(e.response?.data?.error || 'No se pudieron actualizar los vencimientos.'); onSaved() },
   })
 
   const onSubmit = (data) => mutation.mutate(data)
@@ -1147,7 +1188,43 @@ function PartnerModal({ partner: partnerStub, onClose, onSaved }) {
     </div>
   )
 
-  return createPortal(modalContent, document.body)
+  return (
+    <>
+      {createPortal(modalContent, document.body)}
+      {pendingCredit && createPortal(
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4">
+          <div className="card w-full max-w-md p-6 flex flex-col gap-4">
+            <h2 className="text-base font-semibold text-ink-primary">Aplicar días de crédito</h2>
+            <p className="text-sm text-ink-secondary">
+              Cambiaste los días de crédito de <strong>{pendingCredit.name}</strong>.
+              ¿Aplicar el nuevo vencimiento a sus documentos <strong>abiertos</strong>?
+            </p>
+            <ul className="text-sm text-ink-secondary list-disc pl-5">
+              {pendingCredit.sides.includes('customer') && pendingCredit.impact.customer.open_count > 0 && (
+                <li>{pendingCredit.impact.customer.open_count} por cobrar (CxC)</li>
+              )}
+              {pendingCredit.sides.includes('supplier') && pendingCredit.impact.supplier.open_count > 0 && (
+                <li>{pendingCredit.impact.supplier.open_count} por pagar (CxP)</li>
+              )}
+            </ul>
+            <p className="text-xs text-ink-muted">
+              No afecta documentos pagados ni cancelados. Si dices "solo futuros", el nuevo plazo
+              aplicará únicamente a documentos nuevos.
+            </p>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => onSaved()} className="btn-secondary flex-1"
+                disabled={applyCredit.isPending}>Solo futuros</button>
+              <button type="button" onClick={() => applyCredit.mutate()} className="btn-primary flex-1"
+                disabled={applyCredit.isPending}>
+                {applyCredit.isPending ? <Spinner size="sm" /> : 'Sí, aplicar'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
+  )
 }
 
 // ─── Modal de captura rápida ──────────────────────────────────────────────────

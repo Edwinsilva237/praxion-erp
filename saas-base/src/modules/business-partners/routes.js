@@ -7,6 +7,7 @@ const { authGuard }        = require('../../middleware/authGuard')
 const { requireActiveTenant } = require('../../middleware/requireActiveTenant')
 const { checkPermission }  = require('../../middleware/checkPermission')
 const partnerService       = require('./partnerService')
+const creditTermsService   = require('../financials/creditTermsService')
 const { extractCSF, validateCSFVigency, inferPersonType } = require('./csfService')
 const attachmentService    = require('../attachments/attachmentService')
 const storage              = require('../../utils/storage')
@@ -322,5 +323,29 @@ router.get('/:id/attachments/:attachmentId/download',
     } catch (err) { next(err) }
   }
 )
+
+// ─── Aplicar días de crédito a documentos abiertos ───────────────────────────
+
+/** Conteo de documentos abiertos (AR/AP) que se recalcularían para este socio. */
+router.get('/:id/credit-impact', checkPermission('financials', 'update'), async (req, res, next) => {
+  try {
+    const data = await creditTermsService.previewCreditImpact({
+      tenantId: req.tenant.id, partnerId: req.params.id,
+    })
+    res.json(data)
+  } catch (err) { next(err) }
+})
+
+/** Recalcula el vencimiento de los documentos abiertos con el crédito actual del socio. */
+router.post('/:id/apply-credit-terms', checkPermission('financials', 'update'), async (req, res, next) => {
+  try {
+    const data = await creditTermsService.applyCreditTerms({
+      tenantId: req.tenant.id, userId: req.auth.userId, partnerId: req.params.id,
+      sides: Array.isArray(req.body.sides) ? req.body.sides : [],
+      ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(data)
+  } catch (err) { next(err) }
+})
 
 module.exports = router

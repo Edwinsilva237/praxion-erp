@@ -42,6 +42,7 @@ export function StockDisponible({ productId, qtyBase = 0, baseUnit = '' }) {
   const req          = parseFloat(qtyBase || 0)
   const insufficient = req > 0 && req > total + 0.0001
   const faltan       = insufficient ? req - total : 0
+  const remaining    = total - req   // cuánto queda después de surtir esta línea
 
   if (warehouses.length === 0) {
     return (
@@ -77,6 +78,17 @@ export function StockDisponible({ productId, qtyBase = 0, baseUnit = '' }) {
           {fmtNum(total, 2)} {unit}
         </span>
       </div>
+
+      {/* Quedará después de surtir esta línea (solo cuando hay cantidad y alcanza). */}
+      {req > 0 && !insufficient && (
+        <div className="flex items-center justify-between gap-2 text-[11px]">
+          <span className="text-ink-muted">Quedará tras la venta</span>
+          <span className={clsx('font-mono font-semibold tabular-nums',
+            remaining <= 0.0001 ? 'text-status-warning' : 'text-ink-secondary')}>
+            {fmtNum(remaining, 2)} {unit}
+          </span>
+        </div>
+      )}
 
       {/* Desglose por almacén */}
       {showBreakdown && (
