@@ -35,6 +35,8 @@ export const RESOURCE_LABELS = {
 
   reports:           'Reportes',
 
+  hr:                'Recursos Humanos (empleados y vacaciones)',
+
   users:             'Usuarios del sistema',
   roles:             'Roles y permisos',
   settings:          'Configuración del tenant',
@@ -88,6 +90,12 @@ export const PROCESS_GROUPS = [
     label: '🧬 Configuración del proceso',
     description: 'Flags globales y catálogos del Process Template (unidades, mermas, alérgenos, etc.).',
     resources: ['process_config', 'tenant_catalogs'],
+  },
+  {
+    key:   'hr',
+    label: '👥 Recursos Humanos',
+    description: 'Empleados, periodos vacacionales y saldos. Información sensible (salarios).',
+    resources: ['hr'],
   },
   {
     key:   'system',

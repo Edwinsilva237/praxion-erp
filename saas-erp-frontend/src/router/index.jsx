@@ -45,6 +45,8 @@ const ReportesVentas          = lazy(() => import('@/pages/Reportes/ReportesVent
 const ReportesInventario      = lazy(() => import('@/pages/Reportes/ReportesInventario'))
 const ReportesProduccion      = lazy(() => import('@/pages/Reportes/ReportesProduccion'))
 const EstadoDeCuenta          = lazy(() => import('@/pages/Reportes/EstadoDeCuenta'))
+const RhEmpleados             = lazy(() => import('@/pages/RH/Empleados'))
+const RhVacaciones            = lazy(() => import('@/pages/RH/Vacaciones'))
 const ConfigNotificaciones    = lazy(() => import('@/pages/Configuracion/Notificaciones'))
 const ConfigCuentasBancarias  = lazy(() => import('@/pages/Configuracion/CuentasBancarias'))
 const ConfigTarjetasCredito   = lazy(() => import('@/pages/Configuracion/TarjetasCredito'))
@@ -227,6 +229,9 @@ const router = createBrowserRouter([
       { path: '/inventario',          element: <Inventario /> },
       { path: '/inventario/conteos',     element: <ConteosLista /> },
       { path: '/inventario/conteos/:id', element: <ConteoDetalle /> },
+      { path: '/rh/empleados',        element: <RhEmpleados /> },
+      { path: '/rh/vacaciones',       element: <RhVacaciones /> },
+      { path: '/rh/vacaciones/:id',   element: <RhVacaciones /> },
       { path: '/configuracion/notificaciones',    element: <ConfigNotificaciones /> },
       { path: '/configuracion/cuentas-bancarias', element: <ConfigCuentasBancarias /> },
       { path: '/configuracion/tarjetas-credito',  element: <ConfigTarjetasCredito /> },

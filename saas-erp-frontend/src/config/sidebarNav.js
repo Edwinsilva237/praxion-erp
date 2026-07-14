@@ -106,6 +106,13 @@ export const NAV_SECTIONS = [
     ],
   },
   {
+    label: 'Recursos Humanos',
+    items: [
+      { label: 'Empleados',   to: '/rh/empleados',   iconKey: 'partners',  permission: 'hr:read' },
+      { label: 'Vacaciones',  to: '/rh/vacaciones',  iconKey: 'calendar',  permission: 'hr:read' },
+    ],
+  },
+  {
     label: 'Configuración',
     items: [
       { label: 'Identidad de marca',      to: '/configuracion/identidad-marca',       iconKey: 'gear',     permission: 'settings:update' },
