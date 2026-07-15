@@ -76,6 +76,18 @@ export const salesApi = {
   deletePhoto: (id) =>
     api.delete(`${B}/delivery-notes/${id}/photo`).then(r => r.data),
 
+  // ── Devoluciones de venta ──────────────────────────────────────────────
+  // Líneas devolvibles de una remisión entregada + si tiene factura.
+  getReturnable:   (noteId) =>
+    api.get(`${B}/delivery-notes/${noteId}/returnable`).then(r => r.data),
+  listReturns:     (p) => api.get(`${B}/returns`, { params: p }).then(r => r.data),
+  getReturn:       (id) => api.get(`${B}/returns/${id}`).then(r => r.data),
+  createReturn:    (body) => api.post(`${B}/returns`, body).then(r => r.data),
+  confirmReturn:   (id) => api.post(`${B}/returns/${id}/confirm`, {}).then(r => r.data),
+  emitReturnCreditNote: (id, body) =>
+    api.post(`${B}/returns/${id}/credit-note`, body || {}).then(r => r.data),
+  cancelReturn:    (id) => api.post(`${B}/returns/${id}/cancel`, {}).then(r => r.data),
+
   // OC del cliente adjunta al pedido (documento que el cliente exige para recibir).
   listOrderPo: (orderId) =>
     api.get(`${B}/orders/${orderId}/attachments`).then(r => r.data),

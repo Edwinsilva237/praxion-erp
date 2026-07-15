@@ -12,6 +12,7 @@ const requireModule       = require('../../middleware/requireModule')
 const { query }           = require('../../db')
 const orderService        = require('./orderService')
 const deliveryNoteService = require('./deliveryNoteService')
+const salesReturnService  = require('./salesReturnService')
 const { generateRemisionPDF } = require('./remisionPdfService')
 const storage             = require('../../utils/storage')
 const attachmentService   = require('../attachments/attachmentService')
@@ -771,5 +772,87 @@ router.delete('/orders/:id/lines/:lineId', checkPermission('sales', 'update'), a
       lineId: req.params.lineId, userId: req.auth.userId,
     })
     res.json({ message: 'Línea eliminada.' })
+  } catch (err) { next(err) }
+})
+
+// ─── Devoluciones de VENTA ───────────────────────────────────────────────────
+
+/** GET /api/sales/returns — lista de devoluciones de venta. */
+router.get('/returns', checkPermission('sales', 'read'), async (req, res, next) => {
+  try {
+    const { status, partnerId, from, to } = req.query
+    res.json(await salesReturnService.listReturns({
+      tenantId: req.tenant.id, status, partnerId, from, to,
+    }))
+  } catch (err) { next(err) }
+})
+
+/** GET /api/sales/returns/:id — detalle. */
+router.get('/returns/:id', checkPermission('sales', 'read'), async (req, res, next) => {
+  try {
+    const ret = await salesReturnService.getReturn({ tenantId: req.tenant.id, returnId: req.params.id })
+    if (!ret) return res.status(404).json({ error: 'Devolución no encontrada.' })
+    res.json(ret)
+  } catch (err) { next(err) }
+})
+
+/**
+ * GET /api/sales/delivery-notes/:id/returnable
+ * Líneas devolvibles de una remisión (para el modal de nueva devolución):
+ * cuánto queda por devolver por línea + si la remisión tiene factura.
+ */
+router.get('/delivery-notes/:id/returnable', checkPermission('sales', 'return'), async (req, res, next) => {
+  try {
+    const { query: q } = require('../../db')
+    const lines = await (async () => {
+      // getReturnableLines/detectInvoiceForNote usan un client; con el pool global
+      // basta pasar un wrapper mínimo con .query.
+      const client = { query: (...a) => q(...a) }
+      const rows = await salesReturnService.getReturnableLines(client, req.tenant.id, req.params.id)
+      const invoice = await salesReturnService.detectInvoiceForNote(client, req.tenant.id, req.params.id)
+      return { lines: rows, invoice }
+    })()
+    res.json(lines)
+  } catch (err) { next(err) }
+})
+
+/** POST /api/sales/returns — crea la devolución (borrador). */
+router.post('/returns', checkPermission('sales', 'return'), async (req, res, next) => {
+  try {
+    const ret = await salesReturnService.createReturn({
+      tenantId: req.tenant.id, ...req.body,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.status(201).json(ret)
+  } catch (err) { next(err) }
+})
+
+/** POST /api/sales/returns/:id/confirm — reingresa inventario (+ CXC sin factura). */
+router.post('/returns/:id/confirm', checkPermission('sales', 'return'), async (req, res, next) => {
+  try {
+    res.json(await salesReturnService.confirmReturn({
+      tenantId: req.tenant.id, returnId: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    }))
+  } catch (err) { next(err) }
+})
+
+/** POST /api/sales/returns/:id/credit-note — emite la nota de crédito (con factura). */
+router.post('/returns/:id/credit-note', checkPermission('sales', 'return'), async (req, res, next) => {
+  try {
+    res.json(await salesReturnService.emitCreditNote({
+      tenantId: req.tenant.id, returnId: req.params.id, paymentForm: req.body?.paymentForm,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    }))
+  } catch (err) { next(err) }
+})
+
+/** POST /api/sales/returns/:id/cancel — cancela (revierte si estaba confirmada). */
+router.post('/returns/:id/cancel', checkPermission('sales', 'return'), async (req, res, next) => {
+  try {
+    res.json(await salesReturnService.cancelReturn({
+      tenantId: req.tenant.id, returnId: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    }))
   } catch (err) { next(err) }
 })

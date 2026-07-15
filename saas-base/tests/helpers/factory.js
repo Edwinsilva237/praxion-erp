@@ -157,6 +157,18 @@ async function cleanupTestTenants() {
       )
     `, [slugPattern])
 
+    // Devoluciones de venta (mig 229): sus líneas referencian delivery_note_lines
+    // y products (RESTRICT) y el encabezado referencia delivery_notes (NOT NULL).
+    // Pre-borrar antes de que el cleanup toque esas tablas.
+    await query(`
+      DELETE FROM sales_return_lines srl USING sales_returns sr, tenants t
+       WHERE srl.return_id = sr.id AND sr.tenant_id = t.id AND t.slug LIKE $1
+    `, [slugPattern])
+    await query(`
+      DELETE FROM sales_returns sr USING tenants t
+       WHERE sr.tenant_id = t.id AND t.slug LIKE $1
+    `, [slugPattern])
+
     // Líneas de documentos cuya FK product_id es RESTRICT (no CASCADE). Si el
     // CASCADE del tenant borra `products` antes que estas líneas, viola la FK.
     // Pre-borrarlas (vía su documento padre del tenant) evita el problema.

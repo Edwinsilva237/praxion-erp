@@ -33,6 +33,7 @@ const ComprasDevoluciones     = lazy(() => import('@/pages/Compras/Devoluciones'
 const ComprasFacturas         = lazy(() => import('@/pages/Compras/ComprasFacturas'))
 const VentasPedidos           = lazy(() => import('@/pages/Ventas/VentasPedidos'))
 const VentasRemisiones        = lazy(() => import('@/pages/Ventas/VentasRemisiones'))
+const DevolucionesVenta       = lazy(() => import('@/pages/Ventas/DevolucionesVenta'))
 const VentasCotizaciones      = lazy(() => import('@/pages/Ventas/VentasCotizaciones'))
 const CuentasPorCobrar        = lazy(() => import('@/pages/Finanzas/CuentasPorCobrar'))
 const CuentasPorPagar         = lazy(() => import('@/pages/Finanzas/CuentasPorPagar'))
@@ -209,6 +210,7 @@ const router = createBrowserRouter([
       { path: '/cotizaciones',        element: <VentasCotizaciones /> },
       { path: '/remisiones',          element: <VentasRemisiones /> },
       { path: '/remisiones/:id',      element: <VentasRemisiones /> },  // deep-link a una remisión
+      { path: '/devoluciones-venta',  element: <DevolucionesVenta /> },
       { path: '/compras/ordenes',     element: <ComprasOrdenes /> },
       { path: '/compras/recepciones', element: <ComprasRecepciones /> },
       { path: '/compras/devoluciones', element: <ComprasDevoluciones /> },

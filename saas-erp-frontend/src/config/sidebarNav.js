@@ -27,6 +27,7 @@ export const NAV_SECTIONS = [
       { label: 'Cotizaciones',        to: '/cotizaciones',    iconKey: 'quote',    permission: 'sales:read',              module: 'quotations' },
       { label: 'Pedidos',             to: '/ventas',          iconKey: 'orders',   permission: 'sales:read',              module: 'sales' },
       { label: 'Remisiones',          to: '/remisiones',      iconKey: 'delivery', permission: 'sales:read',              module: 'sales' },
+      { label: 'Devoluciones de venta', to: '/devoluciones-venta', iconKey: 'delivery', permission: 'sales:return',      module: 'sales' },
       { label: 'Facturación',         to: '/facturacion',     iconKey: 'invoice',  permission: 'invoicing:read',          module: 'invoicing' },
       { label: 'Cuentas por cobrar',  to: '/cxc',             iconKey: 'card',     permission: 'financials:read',         module: 'sales' },
       { label: 'Pagos recibidos',     to: '/pagos-recibidos', iconKey: 'card',     permission: 'financials:read',         module: 'sales' },
