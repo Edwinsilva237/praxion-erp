@@ -406,12 +406,26 @@ router.post('/delivery-notes/:id/deliver',
       const { receiverName } = req.body
       if (!receiverName) return res.status(400).json({ error: 'receiverName es requerido.' })
 
+      // Entrega parcial por rechazo (opcional): llega como JSON string en el
+      // multipart. Formato: [{ lineId, quantityDelivered, rejectionReason? }].
+      let deliveredLines
+      if (req.body.deliveredLines) {
+        try {
+          deliveredLines = typeof req.body.deliveredLines === 'string'
+            ? JSON.parse(req.body.deliveredLines)
+            : req.body.deliveredLines
+        } catch {
+          return res.status(400).json({ error: 'deliveredLines mal formado.' })
+        }
+      }
+
       const note = await deliveryNoteService.recordDelivery({
         tenantId:      req.tenant.id,
         noteId:        req.params.id,
         receiverName,
         photoBuffer:   req.file?.buffer || null,
         photoFilename: req.file?.originalname || null,
+        deliveredLines,
         userId:        req.auth.userId,
         ipAddress:     req.ip,
         userAgent:     req.get('user-agent'),

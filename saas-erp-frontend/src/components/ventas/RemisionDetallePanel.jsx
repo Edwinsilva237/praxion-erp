@@ -92,6 +92,12 @@ function LineasTable({ note }) {
                         </span>
                       )}
                       {l.notes && <p className="text-[10px] text-ink-muted mt-0.5 italic">{l.notes}</p>}
+                      {isPartial && (
+                        <p className="text-[10px] text-status-warning mt-0.5">
+                          ⚠ Rechazado: {fmtNum(qtyOrd - qtyDel, 3)} {l.unit || ''}
+                          {l.rejection_reason ? ` — ${l.rejection_reason}` : ''}
+                        </p>
+                      )}
                       {l.invoice_id ? (
                         <p className="text-[10px] text-teal-300 mt-0.5">
                           ✓ Facturada en <span className="font-mono">{l.invoice_number}</span>

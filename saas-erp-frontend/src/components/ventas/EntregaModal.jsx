@@ -38,6 +38,25 @@ export function EntregaModal({ note, onClose, onDelivered }) {
   const [restored, setRestored]     = useState(false)
   const [error, setError]           = useState(null)
 
+  // Entrega parcial por rechazo (opt-in). Si el usuario NO lo activa, la entrega
+  // se registra 100% como siempre. Al activarlo captura, por línea, cuánto se
+  // recibió realmente y el motivo del faltante.
+  const lines = note.lines || []
+  const [hasRejection, setHasRejection] = useState(false)
+  const [received, setReceived] = useState({}) // { [lineId]: string }
+  const [reasons, setReasons]   = useState({}) // { [lineId]: string }
+
+  // Al activar el rechazo, precargamos "recibido = remisionado" para cada línea.
+  function toggleRejection() {
+    const next = !hasRejection
+    setHasRejection(next)
+    if (next && Object.keys(received).length === 0) {
+      const init = {}
+      for (const l of lines) init[l.id] = String(Number(l.quantity_ordered ?? l.quantity_delivered ?? 0))
+      setReceived(init)
+    }
+  }
+
   // Restaurar borrador al abrir: si la app se recargó tras abrir la cámara
   // (Android la mata por memoria), recuperamos foto + nombre y no se pierde nada.
   useEffect(() => {
@@ -127,6 +146,26 @@ export function EntregaModal({ note, onClose, onDelivered }) {
       const formData = new FormData()
       formData.append('receiverName', receiverName.trim())
       if (photoFile) formData.append('photo', photoFile)
+
+      // Entrega parcial: solo mandamos las líneas donde se recibió MENOS de lo
+      // remisionado. Si no hay ninguna, la entrega va como completa.
+      if (hasRejection) {
+        const adjusted = []
+        for (const l of lines) {
+          const ordered = Number(l.quantity_ordered ?? l.quantity_delivered ?? 0)
+          const recv = Number(received[l.id])
+          if (!Number.isFinite(recv) || recv < 0) {
+            throw new Error(`Cantidad recibida inválida en ${l.product_name || l.sku || 'una línea'}.`)
+          }
+          if (recv > ordered + 0.0001) {
+            throw new Error(`No puedes recibir más de lo remisionado en ${l.product_name || l.sku || 'una línea'}.`)
+          }
+          if (ordered - recv > 0.0001) {
+            adjusted.push({ lineId: l.id, quantityDelivered: recv, rejectionReason: (reasons[l.id] || '').trim() })
+          }
+        }
+        if (adjusted.length) formData.append('deliveredLines', JSON.stringify(adjusted))
+      }
 
       return salesApi.recordDelivery(note.id, formData)
     },
@@ -260,12 +299,71 @@ export function EntregaModal({ note, onClose, onDelivered }) {
             placeholder="Ej: Juan Pérez (almacén)" />
         </div>
 
+        {/* Rechazo / entrega parcial (opcional) */}
+        {lines.length > 0 && (
+          <div className="rounded-lg border border-line-subtle">
+            <label className="flex items-center gap-2 px-3 py-2 cursor-pointer">
+              <input type="checkbox" className="w-4 h-4 accent-brand-600" checked={hasRejection} onChange={toggleRejection} />
+              <span className="text-sm text-ink-secondary">El cliente rechazó o no recibió algún producto</span>
+            </label>
+
+            {hasRejection && (
+              <div className="border-t border-line-subtle p-3 flex flex-col gap-3">
+                <p className="text-[11px] text-ink-muted">
+                  Captura cuánto se recibió realmente. Lo no recibido queda pendiente en el pedido para una remisión nueva.
+                </p>
+                {lines.map(l => {
+                  const ordered = Number(l.quantity_ordered ?? l.quantity_delivered ?? 0)
+                  const recv = received[l.id]
+                  const recvNum = Number(recv)
+                  const rejected = Number.isFinite(recvNum) ? Math.max(0, ordered - recvNum) : 0
+                  const partial = rejected > 0.0001
+                  return (
+                    <div key={l.id} className="flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm text-ink-primary truncate">{l.product_name || l.sku}</p>
+                          <p className="text-[11px] text-ink-muted">Remisionado: {ordered} {l.unit || ''}</p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="text-[11px] text-ink-muted">Recibido</span>
+                          <input
+                            type="number" min="0" max={ordered} step="any"
+                            className="input w-24 text-right text-sm"
+                            value={recv ?? ''}
+                            onChange={e => setReceived(m => ({ ...m, [l.id]: e.target.value }))}
+                          />
+                        </div>
+                      </div>
+                      {partial && (
+                        <div className="flex items-center gap-2 pl-1">
+                          <span className="text-[11px] font-medium text-status-warning shrink-0">
+                            Rechazado: {+rejected.toFixed(4)}
+                          </span>
+                          <input
+                            type="text"
+                            className="input flex-1 text-sm"
+                            placeholder="Motivo (calidad, error…)"
+                            value={reasons[l.id] || ''}
+                            onChange={e => setReasons(m => ({ ...m, [l.id]: e.target.value }))}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="flex items-start gap-2 bg-surface-elevated/40 rounded-lg px-3 py-2">
           <svg className="w-4 h-4 text-ink-muted shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 24 24">
             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
           </svg>
           <p className="text-xs text-ink-secondary">
-            Al registrar la entrega se genera automáticamente el pago pendiente del cliente y la remisión queda como <strong>Entregada</strong>.
+            Al registrar la entrega se genera automáticamente el pago pendiente del cliente y la remisión queda como <strong>Entregada</strong>
+            {hasRejection ? ' (solo por lo recibido; el resto vuelve al pedido).' : '.'}
           </p>
         </div>
 

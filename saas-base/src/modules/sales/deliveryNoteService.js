@@ -687,10 +687,20 @@ async function recalcOrdersForNote(client, { tenantId, noteId, headerOrderId = n
 async function recordDelivery({
   tenantId, noteId, receiverName, photoBuffer, photoFilename,
   userId, ipAddress, userAgent,
+  // deliveredLines (opcional): entrega parcial POR RECHAZO. Array de
+  //   { lineId, quantityDelivered, rejectionReason? }.
+  //   - Si NO se pasa (o va vacío): entrega 100% como siempre (retrocompatible).
+  //   - Si se pasa: por cada línea listada se ajusta lo REALMENTE recibido; la
+  //     diferencia (quantity_ordered - quantityDelivered) queda pendiente en el
+  //     pedido para una remisión nueva. Solo se descuenta inventario y se genera
+  //     CXC por lo entregado.
+  deliveredLines,
   // isComplete: legacy param. Si llega false desde un cliente viejo se ignora —
   // a partir de la simplificación de UX, registrar entrega = entrega completa.
 }) {
   if (!receiverName) throw createError(400, 'El nombre del receptor es requerido.')
+
+  const hasPartial = Array.isArray(deliveredLines) && deliveredLines.length > 0
 
   // Guardar foto en object storage (R2) o disco local en dev.
   let photoPath = null
@@ -718,11 +728,99 @@ async function recordDelivery({
          synced_at          = $4
        WHERE id = $6 AND tenant_id = $7
          AND status IN ('issued','sent_by_email','partially_delivered')
-       RETURNING id, document_number, status, total_mxn, partner_id, credit_due_date, sales_order_id`,
+       RETURNING id, document_number, status, total_mxn, partner_id, credit_due_date,
+                 sales_order_id, currency, exchange_rate_value`,
       [newStatus, receiverName, photoPath, now, userId, noteId, tenantId]
     )
     if (rows.length === 0) throw createError(404, 'Remisión no encontrada o ya entregada.')
     const note = rows[0]
+
+    // ── Entrega parcial por RECHAZO (opt-in) ────────────────────────────────
+    // Si el usuario indicó que se recibió menos de lo remisionado, ajustamos las
+    // líneas ANTES de descontar inventario y generar la CXC, para que ambos
+    // reflejen solo lo entregado. La diferencia reabre el saldo del pedido.
+    let rejections = []
+    if (hasPartial) {
+      // Candado fiscal: si la remisión (o su pedido) ya tiene factura ACTIVA que
+      // cubra estas líneas, bajar lo entregado descuadra el CFDI → va por nota de
+      // crédito / devolución, no por ajuste silencioso.
+      const { rows: invRefs } = await client.query(
+        `SELECT
+           EXISTS(SELECT 1 FROM invoices
+                   WHERE tenant_id=$1 AND delivery_note_id=$2 AND status<>'cancelled')          AS inv_directa,
+           EXISTS(SELECT 1 FROM invoice_lines il
+                    JOIN delivery_note_lines dnl ON dnl.id = il.delivery_note_line_id
+                    JOIN invoices iv ON iv.id = il.invoice_id
+                   WHERE dnl.delivery_note_id=$2 AND iv.tenant_id=$1 AND iv.status<>'cancelled') AS inv_consol,
+           EXISTS(SELECT 1 FROM invoice_lines il
+                    JOIN delivery_note_lines dnl ON dnl.sales_order_line_id = il.sales_order_line_id
+                    JOIN invoices iv ON iv.id = il.invoice_id
+                   WHERE dnl.delivery_note_id=$2 AND iv.tenant_id=$1 AND iv.status<>'cancelled'
+                     AND iv.delivery_note_id IS NULL
+                     AND NOT EXISTS (SELECT 1 FROM invoice_remissions ir WHERE ir.invoice_id = iv.id)) AS inv_anticipada`,
+        [tenantId, noteId]
+      )
+      const ir = invRefs[0]
+      if (ir.inv_directa || ir.inv_consol || ir.inv_anticipada) {
+        throw createError(409,
+          'Esta remisión ya está facturada. Registra el rechazo con una nota de crédito o devolución, no como entrega parcial.')
+      }
+
+      // Líneas actuales de la remisión (para validar y recomputar).
+      const { rows: curLines } = await client.query(
+        `SELECT id, quantity_ordered, quantity_delivered, COALESCE(pack_factor, 1) AS pack_factor
+           FROM delivery_note_lines WHERE delivery_note_id = $1`,
+        [noteId]
+      )
+      const curById = Object.fromEntries(curLines.map(l => [l.id, l]))
+
+      for (const adj of deliveredLines) {
+        const cur = curById[adj.lineId]
+        if (!cur) throw createError(400, 'Una de las líneas no pertenece a esta remisión.')
+        const ordered = parseFloat(cur.quantity_ordered)
+        const recv = Number(adj.quantityDelivered)
+        if (!Number.isFinite(recv) || recv < 0) {
+          throw createError(400, 'La cantidad recibida es inválida.')
+        }
+        if (recv - ordered > 0.0001) {
+          throw createError(409,
+            `No puedes recibir más de lo remisionado en la línea (remisionado ${ordered}, capturado ${recv}).`)
+        }
+        // Sin rechazo real (recibió todo): no tocar la línea.
+        if (ordered - recv <= 0.0001) continue
+
+        const packFactor = parseFloat(cur.pack_factor) || 1
+        const reason = (adj.rejectionReason || '').trim() || null
+        await client.query(
+          `UPDATE delivery_note_lines
+              SET quantity_delivered = $1::numeric,
+                  quantity_base      = $1::numeric * $2::numeric,
+                  rejection_reason   = $3
+            WHERE id = $4`,
+          [recv, packFactor, reason, cur.id]
+        )
+        rejections.push({ lineId: cur.id, ordered, delivered: recv, rejected: +(ordered - recv).toFixed(4), reason })
+      }
+
+      // Recomputar totales de la remisión (sin IVA, igual que al crearla:
+      // subtotal de líneas × factor de moneda). subtotal de la línea es GENERATED
+      // desde quantity_delivered, así que ya refleja el ajuste.
+      if (rejections.length) {
+        const { rows: sumRows } = await client.query(
+          `SELECT COALESCE(SUM(subtotal), 0) AS subtotal_doc
+             FROM delivery_note_lines WHERE delivery_note_id = $1`,
+          [noteId]
+        )
+        const subtotalDoc = parseFloat(sumRows[0].subtotal_doc)
+        const factor = note.currency === 'USD' ? parseFloat(note.exchange_rate_value || 1) : 1
+        const newTotal = +(subtotalDoc * factor).toFixed(2)
+        await client.query(
+          `UPDATE delivery_notes SET subtotal_mxn = $1, tax_mxn = 0, total_mxn = $1 WHERE id = $2`,
+          [newTotal, noteId]
+        )
+        note.total_mxn = newTotal   // para que generateCXC use el monto ajustado
+      }
+    }
 
     // Log de estatus
     await client.query(
@@ -730,7 +828,8 @@ async function recordDelivery({
          (tenant_id, entity_type, entity_id, from_status, to_status, changed_by, metadata)
        VALUES ($1, 'delivery_note', $2, 'issued', $3, $4, $5)`,
       [tenantId, noteId, newStatus, userId,
-       JSON.stringify({ receiverName, hasPhoto: !!photoPath })]
+       JSON.stringify({ receiverName, hasPhoto: !!photoPath,
+                        rejections: rejections.length ? rejections : undefined })]
     )
 
     // Bandera por tenant (mig 193): cuando allow_negative_stock está activa, la
@@ -824,7 +923,8 @@ async function recordDelivery({
     await audit({
       tenantId, userId, action: 'delivery_note.delivered',
       resource: 'delivery_notes', resourceId: noteId,
-      payload: { receiverName, hasPhoto: !!photoPath },
+      payload: { receiverName, hasPhoto: !!photoPath,
+                 partial: rejections.length > 0, rejections },
       ipAddress, userAgent,
     })
 
