@@ -13,7 +13,7 @@ const ROUTE_LABELS = {
   '/compras/facturas':    'Facturas de proveedor',
   '/facturacion':         'Facturación',
   '/cxc':                 'Pagos recibidos',
-  '/cxp':                 'Pagos emitidos',
+  '/cxp':                 'Cuentas por pagar',
   '/inventario':          'Inventario',
   '/produccion':          'Producción',
   '/reportes/ventas':                 'Reporte de ventas',

@@ -111,7 +111,7 @@ export default function CuentasPorPagar() {
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-xl font-semibold text-ink-primary">Pagos emitidos</h1>
+          <h1 className="text-xl font-semibold text-ink-primary">Cuentas por pagar</h1>
           <p className="text-xs text-ink-muted mt-0.5">Facturas y remisiones de proveedor pendientes de pago</p>
         </div>
         <div className="flex gap-2">
@@ -149,7 +149,7 @@ export default function CuentasPorPagar() {
             <p className="text-lg font-semibold text-ink-primary mt-0.5">{summary.count}</p>
           </div>
           <div className="card p-3">
-            <p className="text-[10px] text-ink-muted uppercase tracking-wide">Total recibido</p>
+            <p className="text-[10px] text-ink-muted uppercase tracking-wide">Total facturado</p>
             <p className="text-lg font-mono font-semibold text-ink-primary mt-0.5">{fmtMXN(summary.total)}</p>
           </div>
           <div className="card p-3 bg-status-success/10/40">
@@ -227,7 +227,7 @@ export default function CuentasPorPagar() {
         ) : error ? (
           <div className="p-8 text-center">
             <p className="text-sm text-status-danger">
-              {error.response?.data?.error || error.message || 'Error al cargar pagos emitidos'}
+              {error.response?.data?.error || error.message || 'Error al cargar cuentas por pagar'}
             </p>
           </div>
         ) : docs.length === 0 ? (
