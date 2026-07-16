@@ -10,8 +10,9 @@ import { PagoModal } from '@/components/finanzas/PagoModal'
 import { PagoProveedorModal } from '@/components/finanzas/PagoProveedorModal'
 import clsx from 'clsx'
 
-const fmtMXN  = (n) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(n || 0)
-const fmtMXNf = (n) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n || 0)
+// Montos de dinero: SIEMPRE con 2 decimales (los saldos de CxC/CxP deben cuadrar al centavo).
+const fmtMXN  = (n) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n || 0)
+const fmtMXNf = fmtMXN
 const fmtNum  = (n) => new Intl.NumberFormat('es-MX').format(n || 0)
 // Fechas de calendario sin desfase de zona horaria (ver utils/fmt fmtDateOnly).
 const fmtDate = (d) => {

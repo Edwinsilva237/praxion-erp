@@ -10,6 +10,7 @@ const { checkPermission, checkAnyPermission } = require('../../middleware/checkP
 const { hasPermission }   = require('../roles/permissionService')
 const requireModule       = require('../../middleware/requireModule')
 const { query }           = require('../../db')
+const config              = require('../../config')
 const orderService        = require('./orderService')
 const deliveryNoteService = require('./deliveryNoteService')
 const salesReturnService  = require('./salesReturnService')
@@ -19,15 +20,43 @@ const attachmentService   = require('../attachments/attachmentService')
 
 const router = express.Router()
 
-// Multer para fotos de entrega — acepta imágenes además de PDF
+// Multer para fotos de entrega — acepta imágenes (incluye HEIC/HEIF del iPhone)
+// además de PDF. El límite sigue al config global (UPLOAD_MAX_SIZE_MB, 20MB por
+// defecto) para que una foto de celular no reviente el tope de 10MB de antes.
+const PHOTO_MIME_ALLOWED = [
+  'image/jpeg', 'image/png', 'image/webp',
+  'image/heic', 'image/heif',   // fotos nativas del iPhone
+  'application/pdf',
+]
 const uploadPhoto = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB para fotos
+  limits: { fileSize: config.uploads.maxSizeMb * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf']
-    allowed.includes(file.mimetype) ? cb(null, true) : cb(new Error('Solo imágenes o PDF.'))
+    if (PHOTO_MIME_ALLOWED.includes(file.mimetype)) return cb(null, true)
+    const err = new Error(`Tipo de archivo no permitido (${file.mimetype || 'desconocido'}). Sube una imagen (JPG, PNG, WebP, HEIC) o un PDF.`)
+    err.status = 400
+    cb(err)
   },
 })
+
+// Envuelve `uploadPhoto.single(field)` para que los errores de Multer (tamaño
+// excedido, tipo no permitido) salgan como un 400 legible en vez del 500
+// "Internal server error" opaco que produce next(err) sin `.status`.
+function handleUpload(field) {
+  const mw = uploadPhoto.single(field)
+  return (req, res, next) => mw(req, res, (err) => {
+    if (!err) return next()
+    if (err instanceof multer.MulterError) {
+      err.status = 400
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        err.message = `El archivo excede el tamaño máximo de ${config.uploads.maxSizeMb}MB.`
+      }
+    } else if (!err.status) {
+      err.status = 400
+    }
+    next(err)
+  })
+}
 
 router.use(tenantResolver)
 router.use(authGuard)
@@ -215,7 +244,7 @@ router.get('/orders/:id/attachments',
 /** POST /api/sales/orders/:id/attachments → adjunta un documento de OC (aditivo). */
 router.post('/orders/:id/attachments',
   checkAnyPermission([['sales', 'create'], ['sales', 'update']]),
-  uploadPhoto.single('file'),
+  handleUpload('file'),
   async (req, res, next) => {
     try {
       if (!req.file) return res.status(400).json({ error: 'Se requiere un archivo.' })
@@ -401,7 +430,7 @@ router.post('/delivery-notes/:id/deliver',
   // Registrar entrega + evidencia: el repartidor puede tener solo `sales:deliver`
   // (sin edición general). Los roles con `sales:update` siguen funcionando.
   checkAnyPermission([['sales', 'update'], ['sales', 'deliver']]),
-  uploadPhoto.single('photo'),
+  handleUpload('photo'),
   async (req, res, next) => {
     try {
       const { receiverName } = req.body
@@ -472,7 +501,7 @@ router.get('/delivery-notes/:id/attachments',
 /** POST /api/sales/delivery-notes/:id/attachments → agrega evidencia (aditivo). */
 router.post('/delivery-notes/:id/attachments',
   checkAnyPermission([['sales', 'deliver'], ['sales', 'update']]),
-  uploadPhoto.single('file'),
+  handleUpload('file'),
   async (req, res, next) => {
     try {
       if (!req.file) return res.status(400).json({ error: 'Se requiere un archivo.' })

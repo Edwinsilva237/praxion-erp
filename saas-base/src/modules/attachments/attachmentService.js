@@ -15,16 +15,19 @@ const storage = require('../../utils/storage')
  *   technical_sheet → ficha técnica (PDF únicamente)
  *   evidence        → fotos de entrega/recepción (JPG/PNG/WebP)
  */
+// HEIC/HEIF = formato nativo de foto del iPhone; se acepta como evidencia
+// (se descarga para verla, no se renderiza inline).
+const PHONE_PHOTO = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
 const MIME_BY_CATEGORY = {
   image:           ['image/jpeg', 'image/png', 'image/webp'],
   technical_sheet: ['application/pdf'],
-  evidence:        ['image/jpeg', 'image/png', 'image/webp'],
+  evidence:        PHONE_PHOTO,
   // Evidencia aditiva de remisión (foto del acuse, firma en pantalla PNG, o la
   // factura impresa firmada / un escaneo en PDF) → imágenes + PDF.
-  delivery_evidence: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+  delivery_evidence: [...PHONE_PHOTO, 'application/pdf'],
   // Documento de la orden de compra del cliente adjuntado al pedido (sales_order):
   // el PDF o la foto de la OC que manda el cliente, para imprimirla al entregar.
-  customer_po: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+  customer_po: [...PHONE_PHOTO, 'application/pdf'],
   // Respaldo del CFDI recibido (por correo o subido) pegado a su gasto/factura
   // de proveedor: el XML timbrado y/o su representación impresa en PDF. Único
   // caso que acepta XML (los demás son imágenes/PDF).
