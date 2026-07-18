@@ -5,6 +5,7 @@ import { fiscalProfilesApi } from '@/api/fiscalProfiles'
 import { processConfigApi } from '@/api/processConfig'
 import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
+import FiscalDocsDistribution from './FiscalDocsDistribution'
 import { fmtDate } from '@/utils/fmt'
 import clsx from 'clsx'
 
@@ -509,6 +510,11 @@ export default function DatosFiscales() {
           </p>
         )}
       </div>
+
+      {/* Distribución de docs fiscales (CSF + 32-D) a clientes */}
+      <Can do="fiscal:distribute">
+        <FiscalDocsDistribution />
+      </Can>
 
       {showCert && (
         <CertModal profile={profile} onClose={() => setShowCert(false)} />

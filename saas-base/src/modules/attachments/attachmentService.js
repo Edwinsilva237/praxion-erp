@@ -32,6 +32,11 @@ const MIME_BY_CATEGORY = {
   // de proveedor: el XML timbrado y/o su representación impresa en PDF. Único
   // caso que acepta XML (los demás son imágenes/PDF).
   cfdi: ['application/xml', 'text/xml', 'application/pdf'],
+  // Documentos fiscales PROPIOS del tenant, guardados a nivel tenant para
+  // distribuirlos a clientes: la Constancia de Situación Fiscal (CSF) y la
+  // Opinión de Cumplimiento (art. 32-D). Se descargan del SAT en PDF.
+  fiscal_csf: ['application/pdf'],
+  fiscal_32d: ['application/pdf'],
 }
 
 /**
