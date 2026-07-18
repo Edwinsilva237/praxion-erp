@@ -308,7 +308,7 @@ async function getOperatorHoursForDate({ tenantId, operatorId, date }) {
 }
 
 // ─── Listar turnos programados ────────────────────────────────────────────────
-async function listScheduledShifts({ tenantId, operatorId, dateFrom, dateTo, status }) {
+async function listScheduledShifts({ tenantId, operatorId, dateFrom, dateTo, status, todayWindow }) {
   const params = [tenantId]
   const filters = []
 
@@ -325,8 +325,33 @@ async function listScheduledShifts({ tenantId, operatorId, dateFrom, dateTo, sta
     )`)
   }
   if (status)     { params.push(status);     filters.push(`ss.status = $${params.length}`) }
-  if (dateFrom)   { params.push(dateFrom);   filters.push(`ss.scheduled_date >= $${params.length}`) }
-  if (dateTo)     { params.push(dateTo);     filters.push(`ss.scheduled_date <= $${params.length}`) }
+
+  if (todayWindow) {
+    // Ventana "confirmable AHORA" (pantalla de captura del operador): los turnos
+    // de HOY (a cualquier hora) MÁS los turnos NOCTURNOS de AYER que todavía no
+    // terminan (cruzan la medianoche). Sin la 2ª rama, después de las 12am el
+    // operador del turno noche (p.ej. Turno 3, 23:00→07:00) perdía su turno —
+    // su scheduled_date es la de AYER — y veía "Sin turnos asignados hoy".
+    // La hora de fin se calcula con la duración configurada del turno; sólo los
+    // turnos cuya corrida aún no acaba sobreviven (los turnos de día de ayer ya
+    // terminaron hace horas y quedan fuera).
+    params.push(todayWindow)
+    const p = params.length
+    filters.push(`(
+      ss.scheduled_date = $${p}::date
+      OR (
+        ss.scheduled_date = $${p}::date - 1
+        AND ss.status = 'scheduled'
+        AND (
+          (ss.scheduled_date + ss.scheduled_start) AT TIME ZONE 'America/Mexico_City'
+          + (COALESCE(tsc.duration_hours, 12) * INTERVAL '1 hour')
+        ) > NOW()
+      )
+    )`)
+  } else {
+    if (dateFrom) { params.push(dateFrom); filters.push(`ss.scheduled_date >= $${params.length}`) }
+    if (dateTo)   { params.push(dateTo);   filters.push(`ss.scheduled_date <= $${params.length}`) }
+  }
 
   const where = filters.length ? `AND ${filters.join(' AND ')}` : ''
 
@@ -352,6 +377,9 @@ async function listScheduledShifts({ tenantId, operatorId, dateFrom, dateTo, sta
      LEFT JOIN production_shifts ps ON ps.id = ss.shift_id
      LEFT JOIN users rop            ON rop.id = ps.operator_id
      LEFT JOIN users rsv            ON rsv.id = ps.supervisor_id
+     LEFT JOIN tenant_shift_config tsc
+            ON tsc.tenant_id = ss.tenant_id
+           AND tsc.shift_number = (ss.shift_number::text)::smallint
      WHERE ss.tenant_id = $1 ${where}
      ORDER BY ss.scheduled_date, ss.scheduled_start`,
     params
@@ -400,8 +428,7 @@ async function getTodayShiftsForOperator({ tenantId, operatorId }) {
   return listScheduledShifts({
     tenantId,
     operatorId,
-    dateFrom: today,
-    dateTo: today,
+    todayWindow: today,
   })
 }
 
