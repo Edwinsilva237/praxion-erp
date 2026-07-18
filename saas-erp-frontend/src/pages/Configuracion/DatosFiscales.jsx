@@ -447,10 +447,11 @@ export default function DatosFiscales() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className={clsx('rounded-lg border p-3',
             profile.facturapi_organization_id
-              ? 'border-emerald-200 bg-emerald-50'
+              ? 'border-status-success/40 bg-status-success/10'
               : 'border-status-warning/40 bg-status-warning/10')}>
-            <p className="text-[10px] uppercase tracking-wide opacity-70 mb-1">Cuenta de timbrado</p>
-            <p className="text-sm font-semibold">
+            <p className="text-[10px] uppercase tracking-wide text-ink-muted mb-1">Cuenta de timbrado</p>
+            <p className={clsx('text-sm font-semibold',
+              profile.facturapi_organization_id ? 'text-status-success' : 'text-status-warning')}>
               {profile.facturapi_organization_id
                 ? '✓ Configurada'
                 : '⚠ Pendiente'}
@@ -464,10 +465,12 @@ export default function DatosFiscales() {
           <div className={clsx('rounded-lg border p-3',
             profile.facturapi_certificate_status === 'uploaded' ||
             profile.facturapi_certificate_status === 'verified'
-              ? 'border-emerald-200 bg-emerald-50'
+              ? 'border-status-success/40 bg-status-success/10'
               : 'border-status-warning/40 bg-status-warning/10')}>
-            <p className="text-[10px] uppercase tracking-wide opacity-70 mb-1">CSD (sello digital)</p>
-            <p className="text-sm font-semibold">
+            <p className="text-[10px] uppercase tracking-wide text-ink-muted mb-1">CSD (sello digital)</p>
+            <p className={clsx('text-sm font-semibold',
+              profile.facturapi_certificate_status === 'uploaded' || profile.facturapi_certificate_status === 'verified'
+                ? 'text-status-success' : 'text-status-warning')}>
               🔐 {profile.facturapi_certificate_status === 'uploaded' || profile.facturapi_certificate_status === 'verified'
                 ? 'Cargado'
                 : 'No cargado'}
