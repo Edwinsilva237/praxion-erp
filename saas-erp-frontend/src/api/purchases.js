@@ -11,6 +11,8 @@ export const purchasesApi = {
   authorizeOrder: (id) => api.post(`${B}/orders/${id}/confirm`).then(r => r.data),
   sendOrder:      (id) => api.patch(`${B}/orders/${id}`, { status: 'sent' }).then(r => r.data),
   cancelOrder:    (id, body) => api.post(`${B}/orders/${id}/cancel`, body).then(r => r.data),
+  // Da por completa una OC parcialmente recibida (cantidad estimada / granel).
+  closeOrderReception: (id, body) => api.post(`${B}/orders/${id}/close-reception`, body).then(r => r.data),
 
   // ── Precios por proveedor (precarga de OC) ──────────────────────────────
   suggestedSupplierPrice: (supplierId, itemType, itemId, currency = 'MXN') =>

@@ -346,6 +346,47 @@ async function cancelOrder({ tenantId, orderId, reason, userId, ipAddress, userA
 }
 
 /**
+ * Cierra MANUALMENTE la recepción de una OC parcialmente recibida: la da por
+ * COMPLETA aunque lo recibido no coincida con lo pedido. Pensado para OC de
+ * cantidad estimada (materia prima a granel, ej. plástico) donde el embarque
+ * real casi nunca cuadra al kilo y la OC quedaría "abierta" para siempre a la
+ * espera de una diferencia que nunca va a llegar.
+ *
+ * NO mueve inventario ni toca las recepciones ya confirmadas — solo declara que
+ * ya no llegará más mercancía contra esta OC (status → 'closed'). Reservado a
+ * OC en 'partially_received' (si llegó todo, ya está en 'received'; si no llegó
+ * nada, lo correcto es cancelarla).
+ */
+async function closeOrderReception({ tenantId, orderId, reason, userId, ipAddress, userAgent }) {
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `UPDATE purchase_orders SET status = 'closed'
+       WHERE id = $1 AND tenant_id = $2 AND status = 'partially_received'
+       RETURNING id, order_number, status`,
+      [orderId, tenantId]
+    )
+    if (rows.length === 0) {
+      throw createError(404, 'OC no encontrada o no está parcialmente recibida.')
+    }
+
+    await client.query(
+      `INSERT INTO document_status_log
+         (tenant_id, entity_type, entity_id, from_status, to_status, changed_by, notes)
+       VALUES ($1, 'purchase_order', $2, 'partially_received', 'closed', $3, $4)`,
+      [tenantId, orderId, userId, reason || null]
+    )
+
+    await audit({
+      tenantId, userId, action: 'purchase_order.reception_closed',
+      resource: 'purchase_orders', resourceId: orderId,
+      payload: { reason }, ipAddress, userAgent,
+    })
+
+    return rows[0]
+  })
+}
+
+/**
  * Edita datos generales de una OC en draft.
  */
 async function updateOrder({
@@ -523,6 +564,6 @@ function createError(status, message) {
 
 module.exports = {
   listOrders, getOrder,
-  createOrder, updateOrder, confirmOrder, cancelOrder,
+  createOrder, updateOrder, confirmOrder, cancelOrder, closeOrderReception,
   addOrderLine, updateOrderLine, deleteOrderLine,
 }

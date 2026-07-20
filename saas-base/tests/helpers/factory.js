@@ -188,6 +188,15 @@ async function cleanupTestTenants() {
       DELETE FROM quotation_lines ql USING quotations q, tenants t
        WHERE ql.quotation_id = q.id AND q.tenant_id = t.id AND t.slug LIKE $1
     `, [slugPattern])
+    // supplier_receipt_lines.purchase_order_line_id es RESTRICT a
+    // purchase_order_lines (y .warehouse_id RESTRICT a warehouses). Si una
+    // recepción se ligó a la línea de la OC, hay que borrar las líneas de
+    // recepción ANTES de pre-borrar purchase_order_lines / warehouses.
+    await query(`
+      DELETE FROM supplier_receipt_lines srl USING supplier_receipts sr, tenants t
+       WHERE srl.supplier_receipt_id = sr.id AND sr.tenant_id = t.id AND t.slug LIKE $1
+    `, [slugPattern])
+
     // purchase_order_lines.warehouse_id es RESTRICT a warehouses → pre-borrar
     // antes del CASCADE del tenant (que intenta borrar warehouses).
     await query(`

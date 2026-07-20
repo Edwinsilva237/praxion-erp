@@ -310,7 +310,7 @@ function TabRecepciones({ oc, onGoToRecepcion }) {
         </div>
       )}
 
-      {!['received', 'invoiced', 'cancelled'].includes(oc.status) && (
+      {!['received', 'invoiced', 'closed', 'cancelled'].includes(oc.status) && (
         <button onClick={onGoToRecepcion} className="btn-secondary btn-sm self-start mt-1">
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/>
@@ -369,6 +369,15 @@ function AccionesOC({ oc, onAction, loadingAction }) {
     />
   )
 
+  // Da por completa una OC estimada (granel) cuya recepción real no cuadra con lo pedido.
+  const CerrarBtn = () => (
+    <Btn label="Dar por completa" action="close" variant="secondary"
+      icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>}
+    />
+  )
+
   if (status === 'draft') return (
     <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 border-t border-line-subtle pt-4 mt-2">
       <Btn label="Confirmar y enviar" action="confirm" variant="primary"
@@ -388,11 +397,11 @@ function AccionesOC({ oc, onAction, loadingAction }) {
 
   if (status === 'partially_received') return (
     <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 border-t border-line-subtle pt-4 mt-2">
-      <RecepcionBtn /><PdfBtn />
+      <RecepcionBtn /><CerrarBtn /><PdfBtn />
     </div>
   )
 
-  if (['received', 'invoiced'].includes(status)) return (
+  if (['received', 'invoiced', 'closed'].includes(status)) return (
     <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 border-t border-line-subtle pt-4 mt-2">
       <PdfBtn />
     </div>
@@ -428,6 +437,15 @@ export function OCDetallePanel({ ocId, onClose, onGoToRecepcion }) {
           setLoading(null); return
         }
         await purchasesApi.cancelOrder(ocId, {})
+      } else if (action === 'close') {
+        const reason = window.prompt(
+          'Vas a DAR POR COMPLETA esta OC: se cerrará aunque lo recibido no cuadre ' +
+          'con lo pedido y ya no aceptará más recepciones.\n\n' +
+          'Úsalo cuando la cantidad era estimada (p. ej. materia prima a granel) y ' +
+          'el embarque ya llegó.\n\nMotivo (opcional):'
+        )
+        if (reason === null) { setLoading(null); return } // canceló el diálogo
+        await purchasesApi.closeOrderReception(ocId, reason ? { reason } : {})
       } else if (action === 'pdf') {
         const blob = await purchasesApi.downloadOrderPdf(ocId)
         downloadBlob(blob, `${oc?.order_number || 'OC'}.pdf`)

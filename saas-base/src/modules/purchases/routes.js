@@ -337,6 +337,26 @@ router.post('/orders/:id/cancel', checkPermission('purchases', 'update'), async 
 })
 
 /**
+ * POST /api/purchases/orders/:id/close-reception
+ * Da por COMPLETA una OC parcialmente recibida (cantidad estimada / granel):
+ * pasa a 'closed' aunque lo recibido no cuadre con lo pedido. No mueve
+ * inventario. Body: { reason? }. Misma puerta que cancelar (purchases:update).
+ */
+router.post('/orders/:id/close-reception', checkPermission('purchases', 'update'), async (req, res, next) => {
+  try {
+    const order = await purchaseOrderService.closeOrderReception({
+      tenantId: req.tenant.id, orderId: req.params.id,
+      reason: req.body?.reason,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(order)
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+
+/**
  * POST /api/purchases/orders/:id/lines
  * Agrega línea a OC en draft.
  */

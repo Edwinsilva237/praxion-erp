@@ -60,6 +60,7 @@ const STATUS_OPTS = [
   ['sent', 'Enviada'],
   ['partially_received', 'Parc. recibida'],
   ['received', 'Recibida'],
+  ['closed', 'Cerrada'],
   ['invoiced', 'Facturada'],
   ['cancelled', 'Cancelada'],
 ]

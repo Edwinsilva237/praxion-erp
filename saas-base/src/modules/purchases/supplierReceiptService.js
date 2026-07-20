@@ -676,8 +676,13 @@ async function updatePurchaseOrderStatus(client, tenantId, purchaseOrderId) {
                       : totalReceived > 0             ? 'partially_received'
                       :                                 'sent'
 
+  // No revivir una OC cerrada manualmente ('closed', "dar por completa") ni una
+  // cancelada: una recepción confirmada tardía no debe reabrir el ciclo. Solo se
+  // recalcula el estatus mientras la OC sigue en su flujo de recepción.
   await client.query(
-    `UPDATE purchase_orders SET status = $1 WHERE id = $2 AND tenant_id = $3`,
+    `UPDATE purchase_orders SET status = $1
+       WHERE id = $2 AND tenant_id = $3
+         AND status NOT IN ('closed', 'cancelled')`,
     [newStatus, purchaseOrderId, tenantId]
   )
 }
