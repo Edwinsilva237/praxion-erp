@@ -19,6 +19,11 @@ const attachmentService = require('../attachments/attachmentService')
 const storage = require('../../utils/storage')
 const { enqueueEmail } = require('../../queues/emailQueue')
 const { audit } = require('../../utils/audit')
+const { fiscalDocsEmail } = require('../email/templates')
+
+// Logos que los clientes de correo renderizan inline de forma confiable (SVG NO
+// — Gmail lo bloquea; si el logo es SVG el correo cae al encabezado de texto).
+const LOGO_MIME_BY_EXT = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }
 
 const ENTITY_TYPE = 'tenant'
 const CATEGORY = { csf: 'fiscal_csf', opinion: 'fiscal_32d' }
@@ -169,12 +174,6 @@ async function previewRecipients({ tenantId, partnerIds }) {
   }
 }
 
-function escapeHtml(s) {
-  return String(s || '').replace(/[&<>"']/g, (ch) => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
-  ))
-}
-
 // Correos manuales (campo tipo "Para" de Gmail): separados por coma/;/espacio/
 // salto de línea. Normaliza (trim+lowercase), valida forma básica, DEDUPE y topa
 // a 200 por seguridad. Los inválidos se IGNORAN en silencio (el front ya avisa).
@@ -191,26 +190,6 @@ function normalizeManualEmails(input) {
     out.push(e)
   }
   return out.slice(0, 200)
-}
-
-function buildEmailHtml({ tenantName, clientName, userMessage, docLabels }) {
-  // clientName ausente (correo manual) → saludo genérico.
-  const greeting = clientName
-    ? `Estimad@ <strong>${escapeHtml(clientName)}</strong>,`
-    : 'Estimad@ cliente,'
-  const msg = userMessage
-    ? `<p>${escapeHtml(userMessage).replace(/\n/g, '<br>')}</p>`
-    : `<p>${greeting}</p>
-       <p>Adjuntamos nuestros documentos fiscales vigentes para sus registros y trámites.</p>`
-  return `
-    <div style="font-family:Helvetica,Arial,sans-serif;max-width:600px;margin:0 auto;color:#1F2937">
-      <h2 style="color:#1F2937">Documentos fiscales — ${escapeHtml(tenantName)}</h2>
-      ${msg}
-      <p style="margin:16px 0 4px">Documentos adjuntos:</p>
-      <ul style="margin:0 0 16px">${docLabels.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>
-      <p style="color:#6B7280;font-size:12px">Este correo fue enviado por ${escapeHtml(tenantName)}. Si no
-        esperabas recibir estos documentos, puedes ignorar este mensaje.</p>
-    </div>`
 }
 
 // ─── Enviar los docs fiscales a los clientes ─────────────────────────────────
@@ -247,6 +226,34 @@ async function distributeToClients({ tenantId, partnerIds, manualEmails, message
   const tenantName = await resolveIssuerName(tenantId)
   const finalSubject = (subject || '').trim() || `Documentos fiscales — ${tenantName}`
 
+  // 4b) Branding del tenant para el correo: color de marca + logo. El logo se
+  //     incrusta INLINE (cid) — un solo adjunto compartido por todos los correos
+  //     del lote — para que se vea sin depender de hosting público ni CORS. SVG
+  //     y formatos raros se omiten (caen al encabezado de texto).
+  const { rows: brandRows } = await query(
+    `SELECT brand_color_primary, logo_storage_path FROM tenants WHERE id = $1`,
+    [tenantId]
+  )
+  const brandColor = brandRows[0]?.brand_color_primary || null
+  let logoCid = null
+  const logoPath = brandRows[0]?.logo_storage_path
+  if (logoPath) {
+    const ext  = String(logoPath.split('.').pop() || '').toLowerCase()
+    const mime = LOGO_MIME_BY_EXT[ext]
+    if (mime) {
+      try {
+        const logoBuf = await storage.fetchBuffer(logoPath)
+        if (logoBuf) {
+          logoCid = 'brandlogo'
+          attachments.push({
+            filename: `logo.${ext}`, content: logoBuf, contentType: mime,
+            cid: logoCid, contentDisposition: 'inline',
+          })
+        }
+      } catch (_) { /* si el logo falla, el correo sale con encabezado de texto */ }
+    }
+  }
+
   // 5) Crear el batch de envío (bitácora).
   const { rows: sendRows } = await query(
     `INSERT INTO fiscal_doc_sends
@@ -267,7 +274,7 @@ async function distributeToClients({ tenantId, partnerIds, manualEmails, message
   let failed = 0
   let idx = 0
   for (const client of clients) {
-    const html = buildEmailHtml({ tenantName, clientName: client.name, userMessage: message, docLabels })
+    const html = fiscalDocsEmail({ tenantName, clientName: client.name, userMessage: message, docLabels, brandColor, logoCid })
     let clientFailed = false
     let errMsg = null
     try {
@@ -302,7 +309,7 @@ async function distributeToClients({ tenantId, partnerIds, manualEmails, message
   // 6b) Correos manuales: UN correo individual por dirección (privacidad, mismo
   //     criterio que por cliente). Sin nombre de cliente → saludo genérico.
   for (const email of manual) {
-    const html = buildEmailHtml({ tenantName, clientName: null, userMessage: message, docLabels })
+    const html = fiscalDocsEmail({ tenantName, clientName: null, userMessage: message, docLabels, brandColor, logoCid })
     let recFailed = false
     let errMsg = null
     try {

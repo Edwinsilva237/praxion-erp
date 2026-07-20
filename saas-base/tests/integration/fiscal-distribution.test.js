@@ -18,6 +18,7 @@ jest.mock('../../src/queues/emailQueue', () => ({
 const { createTenant, loginAs, authedClient, cleanupTestTenants } = require('../helpers/factory')
 const { pool, query, withBypass } = require('../../src/db')
 const { enqueueEmail } = require('../../src/queues/emailQueue')
+const storage = require('../../src/utils/storage')
 
 const PDF = Buffer.from('%PDF-1.4\n test doc fiscal\n%%EOF', 'utf8')
 
@@ -191,5 +192,32 @@ describe('Distribución de documentos fiscales a clientes', () => {
 
     const subject = enqueueEmail.mock.calls[0][0].subject
     expect(subject).toBe('Documentos fiscales — RAZON SOCIAL PRUEBA SA DE CV')
+  })
+
+  test('el correo lleva branding del tenant: color, logo inline (cid) y pie Powered by Praxion', async () => {
+    // Logo mínimo (PNG 1x1) en storage + branding en el tenant.
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64')
+    const logoKey = `test-logo-${tenantInfo.tenant.id}.png`
+    await storage.put(logoKey, png, { contentType: 'image/png' })
+    await withBypass(() => query(
+      `UPDATE tenants SET brand_color_primary = '#123456', logo_storage_path = $2 WHERE id = $1`,
+      [tenantInfo.tenant.id, logoKey]
+    ))
+
+    await client.post('/api/fiscal-distribution/send', {
+      partnerIds: [], manualEmails: 'brand@ext.local',
+    }).expect(200)
+
+    const payload = enqueueEmail.mock.calls[0][0]
+    expect(payload.html).toContain('Powered by')     // pie de Praxion (witness mark)
+    expect(payload.html).toContain('#123456')         // color de marca en el header
+    expect(payload.html).toContain('cid:brandlogo')   // logo inline referenciado
+    // El logo va como adjunto INLINE con ese cid.
+    const logoAtt = payload.attachments.find(a => a.cid === 'brandlogo')
+    expect(logoAtt).toBeTruthy()
+    expect(logoAtt.contentType).toBe('image/png')
+    expect(logoAtt.contentDisposition).toBe('inline')
   })
 })

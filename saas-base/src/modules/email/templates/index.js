@@ -11,10 +11,17 @@ const { htmlWitnessMark } = require('../../../utils/praxionWitnessMark')
  * la identidad del tenant (no la de Praxion). Cuando no hay tenant context
  * — por ejemplo en auto-registro — se cae al branding por defecto.
  */
-function baseTemplate({ title, preheader, body, brandColor, headerName }) {
+function baseTemplate({ title, preheader, body, brandColor, headerName, logoCid }) {
   const headerBg = brandColor || '#1a1a2e'
   const btnBg    = brandColor || '#4f46e5'
   const heading  = headerName || config.email.fromName
+  // Si el tenant tiene logo, lo mostramos dentro de un "chip" blanco para que
+  // sea legible sobre cualquier color de marca; si no, cae al nombre en texto.
+  const headerInner = logoCid
+    ? `<span style="display:inline-block;background:#ffffff;border-radius:10px;padding:10px 16px;">
+         <img src="cid:${logoCid}" alt="${heading}" style="max-height:44px;max-width:220px;display:block;">
+       </span>`
+    : `<h1>${heading}</h1>`
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -42,7 +49,7 @@ function baseTemplate({ title, preheader, body, brandColor, headerName }) {
   <div style="display:none;max-height:0;overflow:hidden;">${preheader}</div>
   <div class="wrapper">
     <div class="header">
-      <h1>${heading}</h1>
+      ${headerInner}
     </div>
     <div class="body">
       ${body}
@@ -158,4 +165,44 @@ function passwordResetEmail({ fullName, resetToken, tenantSlug, tenantName, bran
   })
 }
 
-module.exports = { invitationEmail, welcomeEmail, passwordResetEmail }
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, (ch) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+  ))
+}
+
+/**
+ * Email de distribución de documentos fiscales (CSF + Opinión 32-D) a un
+ * cliente. Usa el layout branded compartido (header con color/logo del tenant +
+ * pie "Powered by Praxion"). `clientName` ausente = correo manual (saludo
+ * genérico). `userMessage` reemplaza el saludo estándar si viene.
+ */
+function fiscalDocsEmail({ tenantName, clientName, userMessage, docLabels = [], brandColor, logoCid }) {
+  const heading = tenantName || config.email.fromName
+  const greeting = clientName
+    ? `Estimad@ <strong>${escapeHtml(clientName)}</strong>,`
+    : 'Estimad@ cliente,'
+  const intro = userMessage
+    ? `<p>${escapeHtml(userMessage).replace(/\n/g, '<br>')}</p>`
+    : `<p>${greeting}</p>
+       <p>Adjuntamos nuestros documentos fiscales vigentes para sus registros y trámites.</p>`
+  const list = docLabels.length
+    ? `<p style="margin:16px 0 4px">Documentos adjuntos:</p>
+       <ul style="margin:0 0 16px">${docLabels.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>`
+    : ''
+  return baseTemplate({
+    title:     `Documentos fiscales — ${escapeHtml(heading)}`,
+    preheader: `Documentos fiscales de ${escapeHtml(heading)}`,
+    brandColor,
+    headerName: heading,
+    logoCid,
+    body: `
+      <h2>Documentos fiscales</h2>
+      ${intro}
+      ${list}
+      <p style="font-size:13px;color:#6b7280;">Si no esperabas recibir estos documentos, puedes ignorar este mensaje.</p>
+    `,
+  })
+}
+
+module.exports = { invitationEmail, welcomeEmail, passwordResetEmail, fiscalDocsEmail }
