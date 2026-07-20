@@ -81,7 +81,14 @@ router.get('/docs/:docType/file', checkPermission('fiscal', 'distribute'), async
     if (!DOC_TYPES.includes(docType)) return res.status(400).json({ error: "docType debe ser 'csf' u 'opinion'." })
     const info = await svc.getFiscalDocForServe({ tenantId: req.tenant.id, docType })
     if (!info) return res.status(404).json({ error: 'Documento no encontrado.' })
-    await storage.serve(res, info.storage_path, { filename: info.filename, mimeType: info.mime_type })
+    // proxy:true → el backend transmite los bytes en vez de redirigir a la URL
+    // firmada de R2 (cuyo CORS no permite el origen del frontend → el XHR blob de
+    // axios falla y sale "no se pudo abrir el documento"). Mismo patrón que la
+    // evidencia de recepción / adjuntos de factura. inline = "ver", no "descargar".
+    await storage.serve(res, info.storage_path, {
+      filename: info.filename, mimeType: info.mime_type,
+      disposition: 'inline', proxy: true,
+    })
   } catch (err) { next(err) }
 })
 
