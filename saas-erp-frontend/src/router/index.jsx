@@ -27,6 +27,7 @@ const MisTurnos               = lazy(() => import('@/pages/Produccion/MisTurnos'
 const Inventario              = lazy(() => import('@/pages/Inventario'))
 const ConteosLista            = lazy(() => import('@/pages/Inventario/ConteosLista'))
 const ConteoDetalle           = lazy(() => import('@/pages/Inventario/ConteoDetalle'))
+const Comunicados             = lazy(() => import('@/pages/Comunicados/Comunicados'))
 const ComprasOrdenes          = lazy(() => import('@/pages/Compras/ComprasOrdenes'))
 const ComprasRecepciones      = lazy(() => import('@/pages/Compras/ComprasRecepciones'))
 const ComprasDevoluciones     = lazy(() => import('@/pages/Compras/Devoluciones'))
@@ -190,6 +191,7 @@ const router = createBrowserRouter([
     children: [
       { path: '/',                    element: <Dashboard /> },
       { path: '/socios',              element: <Socios /> },
+      { path: '/comunicados',         element: <Comunicados /> },
       { path: '/clientes',            element: <Socios /> },
       { path: '/productos',           element: <Productos /> },
       { path: '/precios-cliente',     element: <PreciosCliente /> },

@@ -1,0 +1,382 @@
+import { useState, useMemo, useEffect } from 'react'
+import { createPortal } from 'react-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { communicationsApi } from '@/api/communications'
+import Spinner from '@/components/ui/Spinner'
+import { fmtDate } from '@/utils/fmt'
+import clsx from 'clsx'
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const CATEGORIES = ['Vacaciones / cierre', 'Ajuste de precios', 'Personal (alta/baja)', 'General']
+
+function fmtBytes(n) {
+  if (!n) return '0 KB'
+  return n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+function openBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.target = '_blank'; a.rel = 'noopener'
+  if (filename) a.download = filename
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 30000)
+}
+
+// ── Lista de audiencia (clientes o proveedores) con búsqueda + seleccionar todos ──
+function AudienceList({ title, items, selected, onToggle, onSelectAll, emptyLabel }) {
+  const [q, setQ] = useState('')
+  const filtered = useMemo(
+    () => items.filter(i => i.name.toLowerCase().includes(q.trim().toLowerCase())),
+    [items, q])
+  const allSel = items.length > 0 && items.every(i => selected.has(i.id))
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <label className="label mb-0">{title} ({[...selected].length}/{items.length})</label>
+        {items.length > 0 && (
+          <button type="button" onClick={() => onSelectAll(!allSel)} className="text-xs text-brand-300 hover:underline">
+            {allSel ? 'Quitar todos' : 'Seleccionar todos'}
+          </button>
+        )}
+      </div>
+      {items.length === 0 ? (
+        <p className="text-[11px] text-ink-muted bg-surface-elevated/40 border border-line-subtle rounded-lg px-3 py-2">
+          {emptyLabel}
+        </p>
+      ) : (
+        <>
+          {items.length > 6 && (
+            <input className="input input-sm mb-1" placeholder="Buscar…" value={q} onChange={e => setQ(e.target.value)} />
+          )}
+          <div className="border border-line-subtle rounded-lg max-h-44 overflow-y-auto divide-y divide-line-subtle">
+            {filtered.map(i => (
+              <label key={i.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-surface-elevated/50">
+                <input type="checkbox" className="w-4 h-4 accent-brand-600"
+                  checked={selected.has(i.id)} onChange={() => onToggle(i.id)} />
+                <span className="flex-1 min-w-0 truncate text-ink-primary">{i.name}</span>
+                <span className="text-[11px] text-ink-muted">{i.emails.length} correo(s)</span>
+              </label>
+            ))}
+            {filtered.length === 0 && <p className="text-[11px] text-ink-muted px-3 py-2">Sin coincidencias.</p>}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── Modal de composición ────────────────────────────────────────────────────
+function ComposerModal({ onClose, onSent }) {
+  const [subject, setSubject]   = useState('')
+  const [category, setCategory] = useState('')
+  const [message, setMessage]   = useState('')
+  const [manualRaw, setManualRaw] = useState('')
+  const [files, setFiles]       = useState([])
+  const [selClients, setSelClients]     = useState(new Set())
+  const [selSuppliers, setSelSuppliers] = useState(new Set())
+  const [error, setError]   = useState(null)
+  const [result, setResult] = useState(null)
+
+  const { data: rec, isLoading } = useQuery({
+    queryKey: ['comm-recipients'],
+    queryFn: () => communicationsApi.getRecipients(),
+  })
+
+  const manualEmails = useMemo(() => {
+    const seen = new Set(); const out = []
+    for (const t of manualRaw.split(/[\s,;]+/)) {
+      const e = t.trim().toLowerCase()
+      if (e && EMAIL_RE.test(e) && !seen.has(e)) { seen.add(e); out.push(e) }
+    }
+    return out
+  }, [manualRaw])
+  const manualHasInvalid = useMemo(
+    () => manualRaw.split(/[\s,;]+/).some(t => t.trim() && !EMAIL_RE.test(t.trim())), [manualRaw])
+
+  const clients   = rec?.clients   || []
+  const suppliers = rec?.suppliers || []
+  const emailsOf = (list, sel) => list.filter(i => sel.has(i.id)).reduce((n, i) => n + i.emails.length, 0)
+  // Conteo aproximado (el backend deduplica correos repetidos y reporta el exacto).
+  const approxCount = emailsOf(clients, selClients) + emailsOf(suppliers, selSuppliers) + manualEmails.length
+  const totalBytes = files.reduce((n, f) => n + f.size, 0)
+  const tooBig = totalBytes > 20 * 1024 * 1024
+
+  function toggle(setter) {
+    return (id) => setter(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  function selectAll(list, setter) {
+    return (all) => setter(all ? new Set(list.map(i => i.id)) : new Set())
+  }
+  function addFiles(fileList) {
+    const incoming = Array.from(fileList || [])
+    setFiles(prev => [...prev, ...incoming].slice(0, 10))
+  }
+
+  const sendMut = useMutation({
+    mutationFn: () => {
+      const fd = new FormData()
+      fd.append('subject', subject.trim())
+      if (message.trim())  fd.append('message', message.trim())
+      if (category.trim()) fd.append('category', category.trim())
+      fd.append('clientIds',   JSON.stringify([...selClients]))
+      fd.append('supplierIds', JSON.stringify([...selSuppliers]))
+      if (manualEmails.length) fd.append('manualEmails', manualEmails.join(','))
+      files.forEach(f => fd.append('files', f))
+      return communicationsApi.send(fd)
+    },
+    onSuccess: (res) => { setResult(res); onSent?.() },
+    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al enviar'),
+  })
+
+  const canSend = subject.trim() && approxCount > 0 && !tooBig
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-2xl p-6 flex flex-col gap-4 max-h-[92vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-ink-primary">📣 Nuevo comunicado</h2>
+          <button onClick={onClose} className="text-ink-muted hover:text-ink-primary">✕</button>
+        </div>
+
+        {result ? (
+          <div className="flex flex-col gap-3">
+            <div className="bg-status-success/10 border border-status-success/40 rounded-lg p-4 text-center">
+              <p className="text-2xl">✓</p>
+              <p className="text-sm font-semibold text-status-success mt-1">Enviado · {result.recipientCount} correo(s)</p>
+              <p className="text-xs text-ink-muted mt-0.5">
+                {result.clientCount} cliente(s) · {result.supplierCount} proveedor(es)
+                {result.manualCount > 0 && ` · ${result.manualCount} manual(es)`}
+              </p>
+              {result.failedCount > 0 && (
+                <p className="text-xs text-status-warning mt-1">{result.failedCount} correo(s) fallaron. Revisa el historial.</p>
+              )}
+            </div>
+            <button onClick={onClose} className="btn-primary w-full">Cerrar</button>
+          </div>
+        ) : isLoading ? (
+          <div className="flex justify-center py-10"><Spinner /></div>
+        ) : (
+          <>
+            <div>
+              <label className="label">Asunto *</label>
+              <input className="input" value={subject} onChange={e => setSubject(e.target.value)}
+                placeholder="Ej: Cierre por vacaciones del 15 al 30 de diciembre" />
+            </div>
+
+            <div>
+              <label className="label">Categoría (opcional)</label>
+              <input className="input" list="comm-cats" value={category} onChange={e => setCategory(e.target.value)}
+                placeholder="Vacaciones, precios, personal…" />
+              <datalist id="comm-cats">{CATEGORIES.map(c => <option key={c} value={c} />)}</datalist>
+            </div>
+
+            <div>
+              <label className="label">Mensaje</label>
+              <textarea className="input min-h-[90px]" value={message} onChange={e => setMessage(e.target.value)}
+                placeholder="Escribe el aviso. Se envía con el logo y color de tu marca." />
+            </div>
+
+            {/* Adjuntos */}
+            <div>
+              <label className="label">Adjuntos (opcional, hasta 10)</label>
+              <div className="flex items-center gap-2 flex-wrap">
+                <label className="btn-secondary btn-sm cursor-pointer">
+                  + Agregar archivos
+                  <input type="file" multiple className="hidden"
+                    onChange={e => { addFiles(e.target.files); e.target.value = '' }} />
+                </label>
+                {files.length > 0 && (
+                  <span className={clsx('text-[11px]', tooBig ? 'text-status-danger' : 'text-ink-muted')}>
+                    {files.length} archivo(s) · {fmtBytes(totalBytes)} {tooBig && '(supera 20 MB)'}
+                  </span>
+                )}
+              </div>
+              {files.length > 0 && (
+                <div className="mt-2 flex flex-col gap-1">
+                  {files.map((f, i) => (
+                    <div key={i} className="flex items-center justify-between gap-2 text-xs bg-surface-elevated/40 border border-line-subtle rounded px-2.5 py-1.5">
+                      <span className="truncate text-ink-primary">{f.name}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-ink-muted">{fmtBytes(f.size)}</span>
+                        <button onClick={() => setFiles(prev => prev.filter((_, j) => j !== i))}
+                          className="text-status-danger hover:underline">Quitar</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Audiencia */}
+            <div className="bg-brand-500/10 border border-brand-100 rounded-lg p-3 text-[11px] text-brand-300">
+              Se envía <strong>un correo individual por destinatario</strong> (no se cruzan entre sí).
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <AudienceList title="Clientes" items={clients} selected={selClients}
+                onToggle={toggle(setSelClients)} onSelectAll={selectAll(clients, setSelClients)}
+                emptyLabel="Sin clientes con correo. Puedes usar correos manuales." />
+              <AudienceList title="Proveedores" items={suppliers} selected={selSuppliers}
+                onToggle={toggle(setSelSuppliers)} onSelectAll={selectAll(suppliers, setSelSuppliers)}
+                emptyLabel="Sin proveedores con correo. Puedes usar correos manuales." />
+            </div>
+
+            <div>
+              <label className="label">Para — correos manuales (opcional)</label>
+              <textarea className="input min-h-[48px]" value={manualRaw} onChange={e => setManualRaw(e.target.value)}
+                placeholder="correo1@dominio.com, correo2@dominio.com" />
+              <div className="flex items-center justify-between mt-1">
+                <span className="text-[11px] text-ink-muted">
+                  Separa por coma, espacio o salto de línea.{manualEmails.length > 0 && ` ${manualEmails.length} válido(s).`}
+                </span>
+                {manualHasInvalid && <span className="text-[11px] text-status-warning">Hay correos inválidos (se ignoran).</span>}
+              </div>
+            </div>
+
+            {error && <p className="field-error">{error}</p>}
+
+            <div className="flex gap-2 pt-1">
+              <button onClick={onClose} className="btn-secondary flex-1">Cancelar</button>
+              <button onClick={() => { setError(null); sendMut.mutate() }}
+                disabled={sendMut.isPending || !canSend}
+                className="btn-primary flex-1">
+                {sendMut.isPending ? <Spinner size="sm" /> : `Enviar${approxCount > 0 ? ` (~${approxCount})` : ''}`}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// ── Detalle de un envío ─────────────────────────────────────────────────────
+const R_STATUS = {
+  queued: { label: 'Encolado', cls: 'text-status-info' },
+  sent:   { label: 'Enviado',  cls: 'text-status-success' },
+  failed: { label: 'Falló',    cls: 'text-status-danger' },
+}
+const T_LABEL = { customer: 'Cliente', supplier: 'Proveedor', manual: 'Manual' }
+
+function SendDetailModal({ sendId, onClose }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['comm-send', sendId],
+    queryFn: () => communicationsApi.getSend(sendId),
+  })
+  async function download(att) {
+    const blob = await communicationsApi.downloadAttachment(sendId, att.id)
+    openBlob(blob, att.filename)
+  }
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-lg p-6 flex flex-col gap-3 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-ink-primary truncate">{data?.subject || 'Comunicado'}</h2>
+          <button onClick={onClose} className="text-ink-muted hover:text-ink-primary shrink-0">✕</button>
+        </div>
+        {isLoading ? <div className="flex justify-center py-8"><Spinner /></div> : (
+          <>
+            {data?.message && (
+              <p className="text-sm text-ink-secondary whitespace-pre-wrap bg-surface-elevated/40 border border-line-subtle rounded-lg p-3">{data.message}</p>
+            )}
+            {data?.attachments?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-ink-secondary mb-1">Adjuntos</p>
+                <div className="flex flex-col gap-1">
+                  {data.attachments.map(a => (
+                    <button key={a.id} onClick={() => download(a)}
+                      className="flex items-center justify-between gap-2 text-xs text-brand-300 hover:underline bg-surface-elevated/40 border border-line-subtle rounded px-2.5 py-1.5">
+                      <span className="truncate">{a.filename}</span>
+                      <span className="text-ink-muted shrink-0">{fmtBytes(a.file_size_bytes)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <p className="text-xs font-semibold text-ink-secondary">Destinatarios ({data?.recipients?.length || 0})</p>
+            <div className="border border-line-subtle rounded-lg divide-y divide-line-subtle max-h-[50vh] overflow-y-auto">
+              {(data?.recipients || []).map(r => (
+                <div key={r.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <p className="text-ink-primary truncate">{r.partner_name || T_LABEL[r.partner_type] || '—'}</p>
+                    <p className="text-[11px] text-ink-muted truncate">{r.email} · {T_LABEL[r.partner_type] || r.partner_type}</p>
+                  </div>
+                  <span className={clsx('text-[11px] font-medium shrink-0', (R_STATUS[r.status] || {}).cls)}>
+                    {(R_STATUS[r.status] || {}).label || r.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        <button onClick={onClose} className="btn-secondary w-full">Cerrar</button>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// ── Página ──────────────────────────────────────────────────────────────────
+export default function Comunicados() {
+  const qc = useQueryClient()
+  const [showComposer, setShowComposer] = useState(false)
+  const [detailId, setDetailId] = useState(null)
+
+  const { data: sends = [], isLoading } = useQuery({
+    queryKey: ['comm-sends'],
+    queryFn: () => communicationsApi.listSends(),
+  })
+
+  return (
+    <div className="page-enter max-w-3xl mx-auto flex flex-col gap-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-ink-primary">📣 Comunicados</h1>
+          <p className="text-xs text-ink-muted mt-0.5 leading-relaxed">
+            Envía avisos por correo a tus clientes y proveedores (vacaciones, ajustes de precios, cambios de
+            personal…), con archivos adjuntos. Sale con el logo y color de tu marca.
+          </p>
+        </div>
+        <button onClick={() => setShowComposer(true)} className="btn-primary btn-sm shrink-0">📣 Nuevo comunicado</button>
+      </div>
+
+      <div className="card p-4">
+        <p className="text-xs font-semibold text-ink-secondary mb-2">Historial de comunicados</p>
+        {isLoading ? (
+          <div className="flex justify-center py-8"><Spinner /></div>
+        ) : sends.length === 0 ? (
+          <p className="text-sm text-ink-muted text-center py-8">Aún no has enviado comunicados.</p>
+        ) : (
+          <div className="border border-line-subtle rounded-lg divide-y divide-line-subtle">
+            {sends.map(s => (
+              <button key={s.id} onClick={() => setDetailId(s.id)}
+                className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-sm text-left hover:bg-surface-elevated/50">
+                <div className="min-w-0">
+                  <p className="text-ink-primary truncate font-medium">{s.subject}</p>
+                  <p className="text-[11px] text-ink-muted truncate">
+                    {fmtDate(s.created_at)} · {s.recipient_count} correo(s)
+                    {s.attachment_count > 0 && ` · ${s.attachment_count} adjunto(s)`}
+                    {s.category && ` · ${s.category}`}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {Number(s.failed_count) > 0 && <span className="text-[11px] text-status-warning">{s.failed_count} falló</span>}
+                  <span className="text-[11px] text-brand-300">Ver ›</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {showComposer && (
+        <ComposerModal
+          onClose={() => setShowComposer(false)}
+          onSent={() => { qc.invalidateQueries({ queryKey: ['comm-sends'] }) }}
+        />
+      )}
+      {detailId && <SendDetailModal sendId={detailId} onClose={() => setDetailId(null)} />}
+    </div>
+  )
+}

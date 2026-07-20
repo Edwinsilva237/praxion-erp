@@ -205,4 +205,37 @@ function fiscalDocsEmail({ tenantName, clientName, userMessage, docLabels = [], 
   })
 }
 
-module.exports = { invitationEmail, welcomeEmail, passwordResetEmail, fiscalDocsEmail }
+/**
+ * Email de un COMUNICADO/aviso a un cliente o proveedor. Usa el layout branded
+ * compartido (header con color/logo del tenant + pie "Powered by Praxion").
+ * `recipientName` ausente = correo manual (saludo genérico). `message` es el
+ * cuerpo que escribió el tenant; `attachmentLabels` lista los archivos adjuntos.
+ */
+function communicationEmail({ tenantName, recipientName, subject, message, attachmentLabels = [], brandColor, logoCid }) {
+  const heading  = tenantName || config.email.fromName
+  const greeting = recipientName
+    ? `<p>Estimad@ <strong>${escapeHtml(recipientName)}</strong>,</p>`
+    : '<p>Estimad@ cliente,</p>'
+  const bodyMsg = message && String(message).trim()
+    ? `<p>${escapeHtml(message).replace(/\n/g, '<br>')}</p>`
+    : ''
+  const list = attachmentLabels.length
+    ? `<p style="margin:16px 0 4px">Archivos adjuntos:</p>
+       <ul style="margin:0 0 16px">${attachmentLabels.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>`
+    : ''
+  return baseTemplate({
+    title:     escapeHtml(subject || `Comunicado — ${heading}`),
+    preheader: escapeHtml(subject || `Comunicado de ${heading}`),
+    brandColor,
+    headerName: heading,
+    logoCid,
+    body: `
+      <h2>${escapeHtml(subject || 'Comunicado')}</h2>
+      ${greeting}
+      ${bodyMsg}
+      ${list}
+    `,
+  })
+}
+
+module.exports = { invitationEmail, welcomeEmail, passwordResetEmail, fiscalDocsEmail, communicationEmail }

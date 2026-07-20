@@ -149,6 +149,7 @@ app.use('/api/credit-cards', require('./modules/credit-cards/routes'))
 app.use('/api/invoicing', require('./modules/invoicing/routes'))
 app.use('/api/fiscal-profiles', require('./modules/fiscal-profiles/routes'))
 app.use('/api/fiscal-distribution', require('./modules/fiscal-distribution/routes')) // enviar CSF+32-D a clientes
+app.use('/api/communications', require('./modules/communications/routes')) // avisos/comunicados a clientes+proveedores
 app.use('/api/invoice-series',  require('./modules/invoice-series/routes'))
 app.use('/api/document-series', require('./modules/document-series/routes'))
 app.use('/api/code-formats',    require('./modules/code-formats/routes'))

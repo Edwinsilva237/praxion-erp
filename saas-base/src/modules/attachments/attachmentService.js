@@ -37,6 +37,20 @@ const MIME_BY_CATEGORY = {
   // Opinión de Cumplimiento (art. 32-D). Se descargan del SAT en PDF.
   fiscal_csf: ['application/pdf'],
   fiscal_32d: ['application/pdf'],
+  // Adjuntos LIBRES de un comunicado (módulo Comunicados): PDF, imágenes y los
+  // documentos de oficina más comunes. Se bloquean ejecutables por seguridad.
+  communication: [
+    'application/pdf',
+    'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',      // xlsx
+    'application/vnd.ms-excel',                                                // xls
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // docx
+    'application/msword',                                                      // doc
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation', // pptx
+    'application/vnd.ms-powerpoint',                                           // ppt
+    'text/csv', 'text/plain',
+    'application/zip', 'application/x-zip-compressed',
+  ],
 }
 
 /**

@@ -15,6 +15,7 @@ export const RESOURCE_LABELS = {
   sales:             'Pedidos, remisiones y cotizaciones',
   invoicing:         'Facturación CFDI',
   fiscal:            'Distribución de documentos fiscales (CSF/32-D) a clientes',
+  communications:    'Comunicados/avisos a clientes y proveedores',
   financials:        'Pagos recibidos y emitidos',
   business_partners: 'Clientes y proveedores',
   products:          'Catálogo de productos',
@@ -53,7 +54,7 @@ export const PROCESS_GROUPS = [
     key:   'commercial',
     label: '🛒 Comercial',
     description: 'Todo lo relacionado al cliente: pedidos, entregas, facturación, cobros.',
-    resources: ['sales', 'invoicing', 'fiscal', 'financials', 'business_partners', 'products'],
+    resources: ['sales', 'invoicing', 'fiscal', 'communications', 'financials', 'business_partners', 'products'],
   },
   {
     key:   'purchases',

@@ -37,6 +37,12 @@ export const NAV_SECTIONS = [
     ],
   },
   {
+    label: 'Comunicados',
+    items: [
+      { label: 'Comunicados', to: '/comunicados', iconKey: 'megaphone', permission: 'communications:read', module: 'communications' },
+    ],
+  },
+  {
     label: 'Reportes',
     items: [
       { label: 'Ventas',              to: '/reportes/ventas',             iconKey: 'chartBar',  permission: 'reports:sales',       module: 'reports' },
