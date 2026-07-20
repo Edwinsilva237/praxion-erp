@@ -82,6 +82,12 @@ async function deleteFiscalDoc({ tenantId, docType }) {
 // ─── Armar destinatarios: clientes activos con contacto(s) con email ─────────
 // Devuelve por cliente sus correos. `partnerIds` (opcional) acota la selección.
 async function buildRecipients({ tenantId, partnerIds }) {
+  // Semántica: partnerIds `undefined` = TODOS los clientes activos; un array VACÍO
+  // = NINGUNO (el usuario deseleccionó todo y solo manda a correos manuales). Sin
+  // esta distinción, `[]` caería en "sin filtro" = enviar a todos por accidente.
+  if (Array.isArray(partnerIds) && partnerIds.length === 0) {
+    return { clients: [], clientsWithoutEmail: [] }
+  }
   const params = [tenantId]
   let idFilter = ''
   if (Array.isArray(partnerIds) && partnerIds.length > 0) {
@@ -127,6 +133,30 @@ async function buildRecipients({ tenantId, partnerIds }) {
   return { clients, clientsWithoutEmail }
 }
 
+// ─── Razón social del emisor (para asunto/cuerpo por default) ────────────────
+// Muchos clientes tienen registrado a su proveedor por su RAZÓN SOCIAL, no por
+// el nombre comercial. Prioridad: perfil fiscal activo (tax_name = razón social
+// CFDI) → tenant_fiscal_info legacy (razon_social) → nombre comercial del tenant.
+async function resolveIssuerName(tenantId) {
+  const { rows } = await query(
+    `SELECT COALESCE(
+       -- El tenant tiene 1 perfil activo en la práctica (igual que getProfile /
+       -- listProfiles del módulo fiscal-profiles); ordenamos por created_at.
+       (SELECT NULLIF(TRIM(tax_name), '')
+          FROM tenant_fiscal_profiles
+         WHERE tenant_id = $1 AND is_active = TRUE
+         ORDER BY created_at ASC
+         LIMIT 1),
+       (SELECT NULLIF(TRIM(razon_social), '')
+          FROM tenant_fiscal_info WHERE tenant_id = $1),
+       (SELECT NULLIF(TRIM(display_name), '') FROM tenants WHERE id = $1),
+       (SELECT name FROM tenants WHERE id = $1)
+     ) AS issuer_name`,
+    [tenantId]
+  )
+  return rows[0]?.issuer_name || 'Su proveedor'
+}
+
 // ─── Preview de conteos antes de enviar ──────────────────────────────────────
 async function previewRecipients({ tenantId, partnerIds }) {
   const { clients, clientsWithoutEmail } = await buildRecipients({ tenantId, partnerIds })
@@ -145,10 +175,32 @@ function escapeHtml(s) {
   ))
 }
 
+// Correos manuales (campo tipo "Para" de Gmail): separados por coma/;/espacio/
+// salto de línea. Normaliza (trim+lowercase), valida forma básica, DEDUPE y topa
+// a 200 por seguridad. Los inválidos se IGNORAN en silencio (el front ya avisa).
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+function normalizeManualEmails(input) {
+  if (!input) return []
+  const arr = Array.isArray(input) ? input : String(input).split(/[\s,;]+/)
+  const seen = new Set()
+  const out = []
+  for (const raw of arr) {
+    const e = String(raw || '').trim().toLowerCase()
+    if (!e || !EMAIL_RE.test(e) || seen.has(e)) continue
+    seen.add(e)
+    out.push(e)
+  }
+  return out.slice(0, 200)
+}
+
 function buildEmailHtml({ tenantName, clientName, userMessage, docLabels }) {
+  // clientName ausente (correo manual) → saludo genérico.
+  const greeting = clientName
+    ? `Estimad@ <strong>${escapeHtml(clientName)}</strong>,`
+    : 'Estimad@ cliente,'
   const msg = userMessage
     ? `<p>${escapeHtml(userMessage).replace(/\n/g, '<br>')}</p>`
-    : `<p>Estimad@ <strong>${escapeHtml(clientName)}</strong>,</p>
+    : `<p>${greeting}</p>
        <p>Adjuntamos nuestros documentos fiscales vigentes para sus registros y trámites.</p>`
   return `
     <div style="font-family:Helvetica,Arial,sans-serif;max-width:600px;margin:0 auto;color:#1F2937">
@@ -162,7 +214,7 @@ function buildEmailHtml({ tenantName, clientName, userMessage, docLabels }) {
 }
 
 // ─── Enviar los docs fiscales a los clientes ─────────────────────────────────
-async function distributeToClients({ tenantId, partnerIds, message, subject, sentBy, ipAddress, userAgent }) {
+async function distributeToClients({ tenantId, partnerIds, manualEmails, message, subject, sentBy, ipAddress, userAgent }) {
   // 1) Documentos: al menos uno requerido.
   const docs = await getFiscalDocs({ tenantId })
   if (!docs.csf && !docs.opinion) {
@@ -181,19 +233,18 @@ async function distributeToClients({ tenantId, partnerIds, message, subject, sen
     docLabels.push(docType === 'csf' ? 'Constancia de Situación Fiscal (CSF)' : 'Opinión de Cumplimiento (art. 32-D)')
   }
 
-  // 3) Destinatarios.
+  // 3) Destinatarios: clientes del catálogo + correos manuales (campo tipo Gmail).
   const { clients } = await buildRecipients({ tenantId, partnerIds })
-  if (clients.length === 0) {
-    throw createError(400, 'No hay clientes con contactos de correo en la selección.')
+  const manual = normalizeManualEmails(manualEmails)
+  if (clients.length === 0 && manual.length === 0) {
+    throw createError(400, 'No hay destinatarios: selecciona clientes con correo o escribe al menos un correo manual válido.')
   }
-  const recipientCount = clients.reduce((n, c) => n + c.emails.length, 0)
+  const clientRecipientCount = clients.reduce((n, c) => n + c.emails.length, 0)
+  const recipientCount = clientRecipientCount + manual.length
 
-  // 4) Nombre del tenant para el asunto/cuerpo.
-  const { rows: tr } = await query(
-    `SELECT COALESCE(NULLIF(display_name, ''), name) AS tenant_name FROM tenants WHERE id = $1`,
-    [tenantId]
-  )
-  const tenantName = tr[0]?.tenant_name || 'Su proveedor'
+  // 4) Razón social del emisor para el asunto/cuerpo por default (ver
+  //    resolveIssuerName: razón social fiscal → legacy → nombre comercial).
+  const tenantName = await resolveIssuerName(tenantId)
   const finalSubject = (subject || '').trim() || `Documentos fiscales — ${tenantName}`
 
   // 5) Crear el batch de envío (bitácora).
@@ -248,6 +299,32 @@ async function distributeToClients({ tenantId, partnerIds, message, subject, sen
     idx++
   }
 
+  // 6b) Correos manuales: UN correo individual por dirección (privacidad, mismo
+  //     criterio que por cliente). Sin nombre de cliente → saludo genérico.
+  for (const email of manual) {
+    const html = buildEmailHtml({ tenantName, clientName: null, userMessage: message, docLabels })
+    let recFailed = false
+    let errMsg = null
+    try {
+      await enqueueEmail(
+        { to: email, subject: finalSubject, html, attachments, tenantId },
+        { delay: idx * SEND_STAGGER_MS }
+      )
+    } catch (err) {
+      recFailed = true
+      errMsg = err?.message || 'Error al enviar'
+    }
+    if (recFailed) failed++
+    await query(
+      `INSERT INTO fiscal_doc_send_recipients
+         (send_id, tenant_id, partner_id, partner_name, email, status, error)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [sendId, tenantId, null, '(Correo manual)', email,
+       recFailed ? 'failed' : 'queued', errMsg]
+    )
+    idx++
+  }
+
   // 7) Estado final del batch.
   const status = failed === 0 ? 'completed' : 'partial'
   await query(`UPDATE fiscal_doc_sends SET status = $1 WHERE id = $2`, [status, sendId])
@@ -256,12 +333,12 @@ async function distributeToClients({ tenantId, partnerIds, message, subject, sen
     await audit({
       tenantId, userId: sentBy,
       action: 'fiscal_docs.distributed', resource: 'fiscal_doc_sends', resourceId: sendId,
-      payload: { clientCount: clients.length, recipientCount, failed, docLabels },
+      payload: { clientCount: clients.length, manualCount: manual.length, recipientCount, failed, docLabels },
       ipAddress, userAgent,
     })
   } catch (_) { /* audit no debe romper el envío */ }
 
-  return { sendId, clientCount: clients.length, recipientCount, failedCount: failed, status }
+  return { sendId, clientCount: clients.length, manualCount: manual.length, recipientCount, failedCount: failed, status }
 }
 
 // ─── Historial de envíos ─────────────────────────────────────────────────────

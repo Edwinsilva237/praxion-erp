@@ -84,11 +84,28 @@ function DocCard({ docType, doc, onChanged }) {
 }
 
 // ── Modal de envío ───────────────────────────────────────────────────────────
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
 function SendModal({ docs, onClose, onSent }) {
+  const [subject, setSubject] = useState('')
   const [message, setMessage] = useState('')
+  const [manualRaw, setManualRaw] = useState('')
   const [selected, setSelected] = useState(null) // Set de partnerIds; null = aún cargando
   const [error, setError] = useState(null)
   const [result, setResult] = useState(null)
+
+  // Correos manuales válidos (deduplicados) + si hay tokens con forma inválida.
+  const manualEmails = useMemo(() => {
+    const seen = new Set(); const out = []
+    for (const tok of manualRaw.split(/[\s,;]+/)) {
+      const e = tok.trim().toLowerCase()
+      if (e && EMAIL_RE.test(e) && !seen.has(e)) { seen.add(e); out.push(e) }
+    }
+    return out
+  }, [manualRaw])
+  const manualHasInvalid = useMemo(
+    () => manualRaw.split(/[\s,;]+/).some(t => t.trim() && !EMAIL_RE.test(t.trim())),
+    [manualRaw])
 
   const { data: preview, isLoading } = useQuery({
     queryKey: ['fiscal-preview'],
@@ -105,13 +122,19 @@ function SendModal({ docs, onClose, onSent }) {
   const selectedClients = useMemo(
     () => (preview?.clients || []).filter(c => selected?.has(c.id)),
     [preview, selected])
-  const recipientCount = selectedClients.reduce((n, c) => n + c.emails.length, 0)
+  const clientRecipientCount = selectedClients.reduce((n, c) => n + c.emails.length, 0)
+  const totalRecipients = clientRecipientCount + manualEmails.length
 
   const sendMut = useMutation({
     mutationFn: () => {
-      const all = preview.clients.length === selectedClients.length
+      // `all` solo cuando hay clientes Y están todos marcados → partnerIds
+      // undefined (=todos). Si no, mandamos la lista exacta (vacía = ninguno).
+      const clientCount = preview?.clients?.length || 0
+      const all = clientCount > 0 && clientCount === selectedClients.length
       return fiscalDistributionApi.send({
+        subject: subject.trim() || undefined,
         message: message.trim() || undefined,
+        manualEmails: manualEmails.length ? manualEmails : undefined,
         partnerIds: all ? undefined : selectedClients.map(c => c.id),
       })
     },
@@ -146,7 +169,11 @@ function SendModal({ docs, onClose, onSent }) {
             <div className="bg-status-success/10 border border-status-success/40 rounded-lg p-4 text-center">
               <p className="text-2xl">✓</p>
               <p className="text-sm font-semibold text-status-success mt-1">
-                Enviado a {result.clientCount} cliente(s) · {result.recipientCount} correo(s)
+                Enviado · {result.recipientCount} correo(s)
+              </p>
+              <p className="text-xs text-ink-muted mt-0.5">
+                {result.clientCount} cliente(s)
+                {result.manualCount > 0 && ` · ${result.manualCount} manual(es)`}
               </p>
               {result.failedCount > 0 && (
                 <p className="text-xs text-status-warning mt-1">
@@ -159,19 +186,21 @@ function SendModal({ docs, onClose, onSent }) {
         ) : (
           <>
             <div className="bg-brand-500/10 border border-brand-100 rounded-lg p-3 text-xs text-brand-300">
-              Se enviará <strong>un correo individual por cliente</strong> (no se cruzan entre sí), a todos sus
-              contactos con email, con estos adjuntos:
+              Se envía <strong>un correo individual por destinatario</strong> (no se cruzan entre sí), con estos adjuntos:
               <ul className="mt-1 ml-4 list-disc">{docLabels.map(l => <li key={l}>{l}</li>)}</ul>
             </div>
 
             {isLoading || selected === null ? (
               <div className="flex justify-center py-8"><Spinner /></div>
-            ) : preview.clients.length === 0 ? (
-              <p className="text-sm text-status-warning bg-status-warning/10 border border-status-warning/40 rounded-lg p-3">
-                No hay clientes activos con contactos de correo. Agrega un contacto con email a tus clientes.
-              </p>
             ) : (
               <>
+                <div>
+                  <label className="label">Asunto (opcional)</label>
+                  <input className="input" value={subject}
+                    onChange={e => setSubject(e.target.value)}
+                    placeholder="Documentos fiscales — (tu razón social)" />
+                </div>
+
                 <div>
                   <label className="label">Mensaje (opcional)</label>
                   <textarea className="input min-h-[70px]" value={message}
@@ -180,37 +209,59 @@ function SendModal({ docs, onClose, onSent }) {
                 </div>
 
                 <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="label mb-0">Clientes ({selectedClients.length}/{preview.clients.length})</label>
-                    <button onClick={toggleAll} className="text-xs text-brand-300 hover:underline">
-                      {allChecked ? 'Quitar todos' : 'Seleccionar todos'}
-                    </button>
+                  <label className="label">Para — correos manuales (opcional)</label>
+                  <textarea className="input min-h-[54px]" value={manualRaw}
+                    onChange={e => setManualRaw(e.target.value)}
+                    placeholder="correo1@dominio.com, correo2@dominio.com" />
+                  <div className="flex items-center justify-between mt-1">
+                    <span className="text-[11px] text-ink-muted">
+                      Separa por coma, espacio o salto de línea.
+                      {manualEmails.length > 0 && ` ${manualEmails.length} válido(s).`}
+                    </span>
+                    {manualHasInvalid && (
+                      <span className="text-[11px] text-status-warning">Hay correos con formato inválido (se ignoran).</span>
+                    )}
                   </div>
-                  <div className="border border-line-subtle rounded-lg max-h-52 overflow-y-auto divide-y divide-line-subtle">
-                    {preview.clients.map(c => (
-                      <label key={c.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-surface-elevated/50">
-                        <input type="checkbox" className="w-4 h-4 accent-brand-600"
-                          checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
-                        <span className="flex-1 min-w-0 truncate text-ink-primary">{c.name}</span>
-                        <span className="text-[11px] text-ink-muted">{c.emails.length} correo(s)</span>
-                      </label>
-                    ))}
-                  </div>
-                  {preview.clientsWithoutEmail.length > 0 && (
-                    <p className="text-[11px] text-ink-muted mt-1">
-                      {preview.clientsWithoutEmail.length} cliente(s) sin correo quedan fuera.
-                    </p>
-                  )}
                 </div>
+
+                {preview.clients.length > 0 ? (
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="label mb-0">Clientes ({selectedClients.length}/{preview.clients.length})</label>
+                      <button onClick={toggleAll} className="text-xs text-brand-300 hover:underline">
+                        {allChecked ? 'Quitar todos' : 'Seleccionar todos'}
+                      </button>
+                    </div>
+                    <div className="border border-line-subtle rounded-lg max-h-52 overflow-y-auto divide-y divide-line-subtle">
+                      {preview.clients.map(c => (
+                        <label key={c.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-surface-elevated/50">
+                          <input type="checkbox" className="w-4 h-4 accent-brand-600"
+                            checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
+                          <span className="flex-1 min-w-0 truncate text-ink-primary">{c.name}</span>
+                          <span className="text-[11px] text-ink-muted">{c.emails.length} correo(s)</span>
+                        </label>
+                      ))}
+                    </div>
+                    {preview.clientsWithoutEmail.length > 0 && (
+                      <p className="text-[11px] text-ink-muted mt-1">
+                        {preview.clientsWithoutEmail.length} cliente(s) sin correo quedan fuera.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-ink-muted bg-surface-elevated/40 border border-line-subtle rounded-lg px-3 py-2">
+                    No hay clientes activos con contactos de correo. Puedes enviar solo a los correos manuales de arriba.
+                  </p>
+                )}
 
                 {error && <p className="field-error">{error}</p>}
 
                 <div className="flex gap-2 pt-1">
                   <button onClick={onClose} className="btn-secondary flex-1">Cancelar</button>
                   <button onClick={() => { setError(null); sendMut.mutate() }}
-                    disabled={sendMut.isPending || recipientCount === 0}
+                    disabled={sendMut.isPending || totalRecipients === 0}
                     className="btn-primary flex-1">
-                    {sendMut.isPending ? <Spinner size="sm" /> : `Enviar (${recipientCount} correo${recipientCount === 1 ? '' : 's'})`}
+                    {sendMut.isPending ? <Spinner size="sm" /> : `Enviar (${totalRecipients} correo${totalRecipients === 1 ? '' : 's'})`}
                   </button>
                 </div>
               </>

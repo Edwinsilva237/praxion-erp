@@ -114,13 +114,16 @@ router.post('/preview', checkPermission('fiscal', 'distribute'), async (req, res
   } catch (err) { next(err) }
 })
 
-// Enviar. Body: { partnerIds?, subject?, message? }
+// Enviar. Body: { partnerIds?, manualEmails?, subject?, message? }
+//   manualEmails: correos escritos a mano (string o array); se validan/dedupean
+//   en el servicio y cada uno recibe un correo individual.
 router.post('/send', checkPermission('fiscal', 'distribute'), async (req, res, next) => {
   try {
     const partnerIds = Array.isArray(req.body?.partnerIds) ? req.body.partnerIds.filter(Boolean) : undefined
     const result = await svc.distributeToClients({
       tenantId:  req.tenant.id,
       partnerIds,
+      manualEmails: req.body?.manualEmails,
       subject:   req.body?.subject,
       message:   req.body?.message,
       sentBy:    req.auth?.userId,
