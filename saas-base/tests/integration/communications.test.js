@@ -2,17 +2,19 @@
 
 /**
  * Módulo Comunicados: envío de avisos (texto + adjuntos) a clientes, proveedores
- * y correos manuales. Mockeamos enqueueEmail para validar el flujo sin enviar.
+ * y correos manuales. Fase 2: el fan-out corre en 2º plano (pg-boss); en tests
+ * pg-boss no arranca → distribute cae a envío SÍNCRONO inline, que usa
+ * sendEmail directamente. Mockeamos sendEmail para validar el flujo sin enviar.
  */
 
-jest.mock('../../src/queues/emailQueue', () => ({
-  enqueueEmail: jest.fn().mockResolvedValue({ queued: true, jobId: 'x' }),
-  emailQueue: null,
+jest.mock('../../src/modules/email/emailService', () => ({
+  sendEmail: jest.fn().mockResolvedValue({ messageId: 'test-msg' }),
+  verifyConnection: jest.fn().mockResolvedValue(true),
 }))
 
 const { createTenant, loginAs, authedClient, cleanupTestTenants } = require('../helpers/factory')
 const { pool } = require('../../src/db')
-const { enqueueEmail } = require('../../src/queues/emailQueue')
+const { sendEmail } = require('../../src/modules/email/emailService')
 
 const PDF = Buffer.from('%PDF-1.4\n aviso adjunto\n%%EOF', 'utf8')
 
@@ -42,7 +44,7 @@ describe('Comunicados a clientes/proveedores', () => {
     proveedorP = await createPartner(client, { name: 'Proveedor P', type: 'supplier', emails: ['p1@test.local'] })
   })
 
-  beforeEach(() => enqueueEmail.mockClear())
+  beforeEach(() => sendEmail.mockClear())
 
   test('recipients lista clientes y proveedores con correo, separa los sin correo', async () => {
     const res = await client.get('/api/communications/recipients').expect(200)
@@ -83,9 +85,9 @@ describe('Comunicados a clientes/proveedores', () => {
     expect(res.body.failedCount).toBe(0)
     expect(res.body.status).toBe('completed')
 
-    // enqueue: A, B, P (1 c/u a sus contactos) + 1 manual = 4 correos.
-    expect(enqueueEmail).toHaveBeenCalledTimes(4)
-    const first = enqueueEmail.mock.calls[0][0]
+    // sendEmail: A, B, P (1 c/u a sus contactos) + 1 manual = 4 correos.
+    expect(sendEmail).toHaveBeenCalledTimes(4)
+    const first = sendEmail.mock.calls[0][0]
     expect(first.subject).toBe('Ajuste de precios julio')
     expect(first.html).toContain('Powered by')              // branded (pie Praxion)
     expect(first.attachments.some(a => a.filename === 'lista-precios.pdf')).toBe(true)
@@ -117,7 +119,7 @@ describe('Comunicados a clientes/proveedores', () => {
     expect(res.body.clientCount).toBe(0)
     expect(res.body.supplierCount).toBe(1)
     expect(res.body.recipientCount).toBe(1)
-    expect(enqueueEmail).toHaveBeenCalledTimes(1)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
   })
 
   test('rechaza un adjunto de tipo no permitido (ejecutable)', async () => {
@@ -127,5 +129,58 @@ describe('Comunicados a clientes/proveedores', () => {
       .attach('files', Buffer.from('MZ'), { filename: 'virus.exe', contentType: 'application/x-msdownload' })
       .expect(400)
     expect(res.body.error).toMatch(/no permitido/i)
+  })
+
+  test('filtra el historial por categoría', async () => {
+    const all = await client.get('/api/communications/sends').expect(200)
+    expect(all.body.length).toBeGreaterThanOrEqual(2)
+    const precios = await client.get('/api/communications/sends?category=precios').expect(200)
+    expect(precios.body.length).toBeGreaterThanOrEqual(1)
+    expect(precios.body.every(s => s.category === 'precios')).toBe(true)
+  })
+
+  // ── Plantillas ─────────────────────────────────────────────────────────────
+  test('CRUD de plantillas', async () => {
+    const created = await client.post('/api/communications/templates')
+      .send({ name: 'Cierre anual', subject: 'Cerramos por fin de año', message: 'Estimados…', category: 'Vacaciones' })
+      .expect(201)
+    expect(created.body.id).toBeTruthy()
+
+    const list = await client.get('/api/communications/templates').expect(200)
+    expect(list.body.find(t => t.id === created.body.id)?.subject).toBe('Cerramos por fin de año')
+
+    const upd = await client.put(`/api/communications/templates/${created.body.id}`)
+      .send({ name: 'Cierre anual', subject: 'Cerramos del 20 al 5', message: 'Estimados…', category: 'Vacaciones' })
+      .expect(200)
+    expect(upd.body.subject).toBe('Cerramos del 20 al 5')
+
+    await client.delete(`/api/communications/templates/${created.body.id}`).expect(200)
+    const after = await client.get('/api/communications/templates').expect(200)
+    expect(after.body.find(t => t.id === created.body.id)).toBeUndefined()
+  })
+
+  test('crear plantilla sin nombre → 400', async () => {
+    const res = await client.post('/api/communications/templates').send({ subject: 'x' }).expect(400)
+    expect(res.body.error).toMatch(/nombre/i)
+  })
+
+  // ── Categorías configurables ─────────────────────────────────────────────────
+  test('CRUD de categorías + rechazo de duplicado', async () => {
+    const c1 = await client.post('/api/communications/categories').send({ name: 'Promociones' }).expect(201)
+    expect(c1.body.name).toBe('Promociones')
+
+    // Duplicado (case-insensitive) → 409.
+    await client.post('/api/communications/categories').send({ name: 'promociones' }).expect(409)
+
+    const upd = await client.put(`/api/communications/categories/${c1.body.id}`)
+      .send({ name: 'Promos', isActive: false }).expect(200)
+    expect(upd.body.name).toBe('Promos')
+    expect(upd.body.is_active).toBe(false)
+
+    // activeOnly excluye la inactiva.
+    const active = await client.get('/api/communications/categories?activeOnly=true').expect(200)
+    expect(active.body.find(c => c.id === c1.body.id)).toBeUndefined()
+
+    await client.delete(`/api/communications/categories/${c1.body.id}`).expect(200)
   })
 })

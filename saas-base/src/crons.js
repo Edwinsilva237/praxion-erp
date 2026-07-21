@@ -18,6 +18,12 @@ const { registerCron, registerCatchup } = require('./utils/pgboss')
 const { withBypass } = require('./db')
 const logger = require('./config/logger')
 
+// ── 0) Cola ad-hoc: fan-out de Comunicados en segundo plano ──────────────────
+// No es un cron: registra el worker `communications.dispatch` para que
+// startBoss() lo levante. El endpoint POST /communications/send encola el job;
+// el worker hace el envío individual, actualiza progreso y es reanudable.
+require('./modules/communications/communicationsService').registerDispatchWorker()
+
 // ── 1) Auto-activación de turnos programados ────────────────────────────────
 // Antes: setInterval cada 60s en app.js. Pg-boss tiene resolución mínima de
 // 1 minuto, lo cual es equivalente — y sobra de sobra para activar turnos

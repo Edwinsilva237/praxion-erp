@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { communicationsApi } from '@/api/communications'
@@ -7,7 +7,8 @@ import { fmtDate } from '@/utils/fmt'
 import clsx from 'clsx'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const CATEGORIES = ['Vacaciones / cierre', 'Ajuste de precios', 'Personal (alta/baja)', 'General']
+// Sugerencias por defecto si el tenant aún no configuró sus propias categorías.
+const DEFAULT_CATEGORIES = ['Vacaciones / cierre', 'Ajuste de precios', 'Personal (alta/baja)', 'General']
 
 function fmtBytes(n) {
   if (!n) return '0 KB'
@@ -21,6 +22,15 @@ function openBlob(blob, filename) {
   document.body.appendChild(a); a.click(); a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 30000)
 }
+
+// Estado del batch de envío (barra de progreso en el historial).
+const SEND_STATUS = {
+  queued:    { label: 'En cola',   cls: 'text-status-info' },
+  sending:   { label: 'Enviando',  cls: 'text-status-info' },
+  completed: { label: 'Enviado',   cls: 'text-status-success' },
+  partial:   { label: 'Con fallos', cls: 'text-status-warning' },
+}
+const isInProgress = (s) => s?.status === 'queued' || s?.status === 'sending'
 
 // ── Lista de audiencia (clientes o proveedores) con búsqueda + seleccionar todos ──
 function AudienceList({ title, items, selected, onToggle, onSelectAll, emptyLabel }) {
@@ -77,11 +87,29 @@ function ComposerModal({ onClose, onSent }) {
   const [selSuppliers, setSelSuppliers] = useState(new Set())
   const [error, setError]   = useState(null)
   const [result, setResult] = useState(null)
+  const [saveTplOpen, setSaveTplOpen] = useState(false)
+  const [tplName, setTplName] = useState('')
 
+  const qc = useQueryClient()
   const { data: rec, isLoading } = useQuery({
     queryKey: ['comm-recipients'],
     queryFn: () => communicationsApi.getRecipients(),
   })
+  const { data: templates = [] } = useQuery({
+    queryKey: ['comm-templates'],
+    queryFn: () => communicationsApi.listTemplates(),
+  })
+  const { data: categories = [] } = useQuery({
+    queryKey: ['comm-categories', 'active'],
+    queryFn: () => communicationsApi.listCategories(true),
+  })
+
+  // Sugerencias del datalist: las categorías del tenant + las por defecto que falten.
+  const catSuggestions = useMemo(() => {
+    const tenant = categories.map(c => c.name)
+    const lower = new Set(tenant.map(n => n.toLowerCase()))
+    return [...tenant, ...DEFAULT_CATEGORIES.filter(d => !lower.has(d.toLowerCase()))]
+  }, [categories])
 
   const manualEmails = useMemo(() => {
     const seen = new Set(); const out = []
@@ -97,7 +125,6 @@ function ComposerModal({ onClose, onSent }) {
   const clients   = rec?.clients   || []
   const suppliers = rec?.suppliers || []
   const emailsOf = (list, sel) => list.filter(i => sel.has(i.id)).reduce((n, i) => n + i.emails.length, 0)
-  // Conteo aproximado (el backend deduplica correos repetidos y reporta el exacto).
   const approxCount = emailsOf(clients, selClients) + emailsOf(suppliers, selSuppliers) + manualEmails.length
   const totalBytes = files.reduce((n, f) => n + f.size, 0)
   const tooBig = totalBytes > 20 * 1024 * 1024
@@ -112,6 +139,22 @@ function ComposerModal({ onClose, onSent }) {
     const incoming = Array.from(fileList || [])
     setFiles(prev => [...prev, ...incoming].slice(0, 10))
   }
+  function loadTemplate(id) {
+    const t = templates.find(x => x.id === id)
+    if (!t) return
+    setSubject(t.subject || ''); setMessage(t.message || ''); setCategory(t.category || '')
+  }
+
+  const saveTplMut = useMutation({
+    mutationFn: () => communicationsApi.createTemplate({
+      name: tplName.trim(), subject: subject.trim(), message: message.trim(), category: category.trim(),
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['comm-templates'] })
+      setSaveTplOpen(false); setTplName('')
+    },
+    onError: (e) => setError(e.response?.data?.error || 'No se pudo guardar la plantilla'),
+  })
 
   const sendMut = useMutation({
     mutationFn: () => {
@@ -143,11 +186,18 @@ function ComposerModal({ onClose, onSent }) {
           <div className="flex flex-col gap-3">
             <div className="bg-status-success/10 border border-status-success/40 rounded-lg p-4 text-center">
               <p className="text-2xl">✓</p>
-              <p className="text-sm font-semibold text-status-success mt-1">Enviado · {result.recipientCount} correo(s)</p>
+              <p className="text-sm font-semibold text-status-success mt-1">
+                {result.queued ? 'Enviando en segundo plano' : 'Enviado'} · {result.recipientCount} correo(s)
+              </p>
               <p className="text-xs text-ink-muted mt-0.5">
                 {result.clientCount} cliente(s) · {result.supplierCount} proveedor(es)
                 {result.manualCount > 0 && ` · ${result.manualCount} manual(es)`}
               </p>
+              {result.queued && (
+                <p className="text-[11px] text-ink-muted mt-1">
+                  Puedes cerrar esta ventana. El progreso aparece en el historial.
+                </p>
+              )}
               {result.failedCount > 0 && (
                 <p className="text-xs text-status-warning mt-1">{result.failedCount} correo(s) fallaron. Revisa el historial.</p>
               )}
@@ -158,6 +208,17 @@ function ComposerModal({ onClose, onSent }) {
           <div className="flex justify-center py-10"><Spinner /></div>
         ) : (
           <>
+            {/* Cargar plantilla */}
+            {templates.length > 0 && (
+              <div>
+                <label className="label">Cargar plantilla</label>
+                <select className="input" defaultValue="" onChange={e => { loadTemplate(e.target.value); e.target.value = '' }}>
+                  <option value="" disabled>Elige una plantilla guardada…</option>
+                  {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+            )}
+
             <div>
               <label className="label">Asunto *</label>
               <input className="input" value={subject} onChange={e => setSubject(e.target.value)}
@@ -168,13 +229,31 @@ function ComposerModal({ onClose, onSent }) {
               <label className="label">Categoría (opcional)</label>
               <input className="input" list="comm-cats" value={category} onChange={e => setCategory(e.target.value)}
                 placeholder="Vacaciones, precios, personal…" />
-              <datalist id="comm-cats">{CATEGORIES.map(c => <option key={c} value={c} />)}</datalist>
+              <datalist id="comm-cats">{catSuggestions.map(c => <option key={c} value={c} />)}</datalist>
             </div>
 
             <div>
               <label className="label">Mensaje</label>
               <textarea className="input min-h-[90px]" value={message} onChange={e => setMessage(e.target.value)}
                 placeholder="Escribe el aviso. Se envía con el logo y color de tu marca." />
+            </div>
+
+            {/* Guardar como plantilla */}
+            <div>
+              {saveTplOpen ? (
+                <div className="flex items-center gap-2">
+                  <input className="input input-sm flex-1" placeholder="Nombre de la plantilla" value={tplName}
+                    onChange={e => setTplName(e.target.value)} />
+                  <button onClick={() => saveTplMut.mutate()} disabled={!tplName.trim() || saveTplMut.isPending}
+                    className="btn-primary btn-sm">Guardar</button>
+                  <button onClick={() => { setSaveTplOpen(false); setTplName('') }} className="btn-secondary btn-sm">✕</button>
+                </div>
+              ) : (
+                <button onClick={() => setSaveTplOpen(true)} disabled={!subject.trim() && !message.trim()}
+                  className="text-xs text-brand-300 hover:underline disabled:opacity-40 disabled:no-underline">
+                  💾 Guardar como plantilla
+                </button>
+              )}
             </div>
 
             {/* Adjuntos */}
@@ -251,9 +330,99 @@ function ComposerModal({ onClose, onSent }) {
   )
 }
 
+// ── Gestión de categorías ────────────────────────────────────────────────────
+function CategoriesModal({ onClose }) {
+  const qc = useQueryClient()
+  const [newName, setNewName] = useState('')
+  const [error, setError] = useState(null)
+  const [editId, setEditId] = useState(null)
+  const [editName, setEditName] = useState('')
+
+  const { data: cats = [], isLoading } = useQuery({
+    queryKey: ['comm-categories', 'all'],
+    queryFn: () => communicationsApi.listCategories(false),
+  })
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['comm-categories'] })
+  const onErr = (e) => setError(e.response?.data?.error || 'Error')
+
+  const createMut = useMutation({
+    mutationFn: () => communicationsApi.createCategory({ name: newName.trim(), sortOrder: cats.length }),
+    onSuccess: () => { setNewName(''); setError(null); invalidate() }, onError: onErr,
+  })
+  const updateMut = useMutation({
+    mutationFn: ({ id, data }) => communicationsApi.updateCategory(id, data),
+    onSuccess: () => { setEditId(null); setError(null); invalidate() }, onError: onErr,
+  })
+  const deleteMut = useMutation({
+    mutationFn: (id) => communicationsApi.deleteCategory(id),
+    onSuccess: invalidate, onError: onErr,
+  })
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-md p-6 flex flex-col gap-3 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-ink-primary">🏷️ Categorías</h2>
+          <button onClick={onClose} className="text-ink-muted hover:text-ink-primary">✕</button>
+        </div>
+        <p className="text-[11px] text-ink-muted">
+          Las categorías clasifican tus comunicados y alimentan el selector al componer. No cambian el correo.
+        </p>
+
+        <div className="flex items-center gap-2">
+          <input className="input input-sm flex-1" placeholder="Nueva categoría" value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && newName.trim()) createMut.mutate() }} />
+          <button onClick={() => createMut.mutate()} disabled={!newName.trim() || createMut.isPending}
+            className="btn-primary btn-sm">Agregar</button>
+        </div>
+        {error && <p className="field-error">{error}</p>}
+
+        {isLoading ? (
+          <div className="flex justify-center py-6"><Spinner /></div>
+        ) : cats.length === 0 ? (
+          <p className="text-sm text-ink-muted text-center py-6">Sin categorías. Se usan las sugeridas por defecto.</p>
+        ) : (
+          <div className="border border-line-subtle rounded-lg divide-y divide-line-subtle">
+            {cats.map(c => (
+              <div key={c.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                {editId === c.id ? (
+                  <>
+                    <input className="input input-sm flex-1" value={editName} onChange={e => setEditName(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && editName.trim()) updateMut.mutate({ id: c.id, data: { name: editName.trim() } }) }} autoFocus />
+                    <button onClick={() => updateMut.mutate({ id: c.id, data: { name: editName.trim() } })}
+                      disabled={!editName.trim()} className="text-brand-300 text-xs hover:underline">Guardar</button>
+                    <button onClick={() => setEditId(null)} className="text-ink-muted text-xs hover:underline">✕</button>
+                  </>
+                ) : (
+                  <>
+                    <span className={clsx('flex-1 min-w-0 truncate', c.is_active ? 'text-ink-primary' : 'text-ink-muted line-through')}>
+                      {c.name}
+                    </span>
+                    <button onClick={() => updateMut.mutate({ id: c.id, data: { isActive: !c.is_active } })}
+                      className="text-[11px] text-ink-muted hover:text-ink-primary" title={c.is_active ? 'Ocultar' : 'Mostrar'}>
+                      {c.is_active ? '👁️' : '🚫'}
+                    </button>
+                    <button onClick={() => { setEditId(c.id); setEditName(c.name) }}
+                      className="text-[11px] text-brand-300 hover:underline">Editar</button>
+                    <button onClick={() => deleteMut.mutate(c.id)}
+                      className="text-[11px] text-status-danger hover:underline">Borrar</button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <button onClick={onClose} className="btn-secondary w-full mt-1">Cerrar</button>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 // ── Detalle de un envío ─────────────────────────────────────────────────────
 const R_STATUS = {
-  queued: { label: 'Encolado', cls: 'text-status-info' },
+  queued: { label: 'En cola',  cls: 'text-status-info' },
   sent:   { label: 'Enviado',  cls: 'text-status-success' },
   failed: { label: 'Falló',    cls: 'text-status-danger' },
 }
@@ -263,11 +432,15 @@ function SendDetailModal({ sendId, onClose }) {
   const { data, isLoading } = useQuery({
     queryKey: ['comm-send', sendId],
     queryFn: () => communicationsApi.getSend(sendId),
+    // Refrescar mientras el envío esté en curso (barra de progreso viva).
+    refetchInterval: (q) => isInProgress(q.state.data) ? 2500 : false,
   })
   async function download(att) {
     const blob = await communicationsApi.downloadAttachment(sendId, att.id)
     openBlob(blob, att.filename)
   }
+  const pct = data && data.recipient_count
+    ? Math.round((Number(data.sent_count || 0) / data.recipient_count) * 100) : 0
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
       <div className="card w-full max-w-lg p-6 flex flex-col gap-3 max-h-[90vh] overflow-y-auto">
@@ -277,6 +450,17 @@ function SendDetailModal({ sendId, onClose }) {
         </div>
         {isLoading ? <div className="flex justify-center py-8"><Spinner /></div> : (
           <>
+            {isInProgress(data) && (
+              <div>
+                <div className="flex items-center justify-between text-[11px] text-ink-muted mb-1">
+                  <span>Enviando en segundo plano…</span>
+                  <span>{data.sent_count || 0}/{data.recipient_count}</span>
+                </div>
+                <div className="h-1.5 bg-surface-elevated rounded-full overflow-hidden">
+                  <div className="h-full bg-brand-500 transition-all" style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            )}
             {data?.message && (
               <p className="text-sm text-ink-secondary whitespace-pre-wrap bg-surface-elevated/40 border border-line-subtle rounded-lg p-3">{data.message}</p>
             )}
@@ -317,16 +501,63 @@ function SendDetailModal({ sendId, onClose }) {
   )
 }
 
+// ── Fila del historial con progreso ──────────────────────────────────────────
+function SendRow({ s, onClick }) {
+  const st = SEND_STATUS[s.status] || {}
+  const inProgress = isInProgress(s)
+  const pct = s.recipient_count ? Math.round((Number(s.sent_count || 0) / s.recipient_count) * 100) : 0
+  return (
+    <button onClick={onClick}
+      className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-sm text-left hover:bg-surface-elevated/50">
+      <div className="min-w-0 flex-1">
+        <p className="text-ink-primary truncate font-medium">{s.subject}</p>
+        <p className="text-[11px] text-ink-muted truncate">
+          {fmtDate(s.created_at)} · {s.recipient_count} correo(s)
+          {s.attachment_count > 0 && ` · ${s.attachment_count} adjunto(s)`}
+          {s.category && ` · ${s.category}`}
+        </p>
+        {inProgress && (
+          <div className="mt-1.5 h-1 bg-surface-elevated rounded-full overflow-hidden max-w-[220px]">
+            <div className="h-full bg-brand-500 transition-all" style={{ width: `${pct}%` }} />
+          </div>
+        )}
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        {inProgress
+          ? <span className="text-[11px] text-status-info">{s.sent_count || 0}/{s.recipient_count}</span>
+          : Number(s.failed_count) > 0 && <span className="text-[11px] text-status-warning">{s.failed_count} falló</span>}
+        <span className={clsx('text-[11px]', st.cls || 'text-ink-muted')}>{st.label || s.status}</span>
+        <span className="text-[11px] text-brand-300">Ver ›</span>
+      </div>
+    </button>
+  )
+}
+
 // ── Página ──────────────────────────────────────────────────────────────────
 export default function Comunicados() {
   const qc = useQueryClient()
   const [showComposer, setShowComposer] = useState(false)
+  const [showCategories, setShowCategories] = useState(false)
   const [detailId, setDetailId] = useState(null)
+  const [filterCat, setFilterCat] = useState('')
 
   const { data: sends = [], isLoading } = useQuery({
-    queryKey: ['comm-sends'],
-    queryFn: () => communicationsApi.listSends(),
+    queryKey: ['comm-sends', filterCat],
+    queryFn: () => communicationsApi.listSends(filterCat || undefined),
+    // Mientras algún envío esté en curso, refrescar para animar la barra.
+    refetchInterval: (q) => (q.state.data || []).some(isInProgress) ? 2500 : false,
   })
+  const { data: categories = [] } = useQuery({
+    queryKey: ['comm-categories', 'all'],
+    queryFn: () => communicationsApi.listCategories(false),
+  })
+
+  // Categorías disponibles para filtrar = configuradas + las ya usadas en envíos.
+  const filterOptions = useMemo(() => {
+    const set = new Set(categories.map(c => c.name))
+    for (const s of sends) if (s.category) set.add(s.category)
+    return [...set].sort((a, b) => a.localeCompare(b))
+  }, [categories, sends])
 
   return (
     <div className="page-enter max-w-3xl mx-auto flex flex-col gap-4">
@@ -338,34 +569,31 @@ export default function Comunicados() {
             personal…), con archivos adjuntos. Sale con el logo y color de tu marca.
           </p>
         </div>
-        <button onClick={() => setShowComposer(true)} className="btn-primary btn-sm shrink-0">📣 Nuevo comunicado</button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={() => setShowCategories(true)} className="btn-secondary btn-sm">🏷️ Categorías</button>
+          <button onClick={() => setShowComposer(true)} className="btn-primary btn-sm">📣 Nuevo comunicado</button>
+        </div>
       </div>
 
       <div className="card p-4">
-        <p className="text-xs font-semibold text-ink-secondary mb-2">Historial de comunicados</p>
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <p className="text-xs font-semibold text-ink-secondary">Historial de comunicados</p>
+          {filterOptions.length > 0 && (
+            <select className="input input-sm w-auto" value={filterCat} onChange={e => setFilterCat(e.target.value)}>
+              <option value="">Todas las categorías</option>
+              {filterOptions.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          )}
+        </div>
         {isLoading ? (
           <div className="flex justify-center py-8"><Spinner /></div>
         ) : sends.length === 0 ? (
-          <p className="text-sm text-ink-muted text-center py-8">Aún no has enviado comunicados.</p>
+          <p className="text-sm text-ink-muted text-center py-8">
+            {filterCat ? 'Sin comunicados en esta categoría.' : 'Aún no has enviado comunicados.'}
+          </p>
         ) : (
           <div className="border border-line-subtle rounded-lg divide-y divide-line-subtle">
-            {sends.map(s => (
-              <button key={s.id} onClick={() => setDetailId(s.id)}
-                className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-sm text-left hover:bg-surface-elevated/50">
-                <div className="min-w-0">
-                  <p className="text-ink-primary truncate font-medium">{s.subject}</p>
-                  <p className="text-[11px] text-ink-muted truncate">
-                    {fmtDate(s.created_at)} · {s.recipient_count} correo(s)
-                    {s.attachment_count > 0 && ` · ${s.attachment_count} adjunto(s)`}
-                    {s.category && ` · ${s.category}`}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {Number(s.failed_count) > 0 && <span className="text-[11px] text-status-warning">{s.failed_count} falló</span>}
-                  <span className="text-[11px] text-brand-300">Ver ›</span>
-                </div>
-              </button>
-            ))}
+            {sends.map(s => <SendRow key={s.id} s={s} onClick={() => setDetailId(s.id)} />)}
           </div>
         )}
       </div>
@@ -376,6 +604,7 @@ export default function Comunicados() {
           onSent={() => { qc.invalidateQueries({ queryKey: ['comm-sends'] }) }}
         />
       )}
+      {showCategories && <CategoriesModal onClose={() => setShowCategories(false)} />}
       {detailId && <SendDetailModal sendId={detailId} onClose={() => setDetailId(null)} />}
     </div>
   )

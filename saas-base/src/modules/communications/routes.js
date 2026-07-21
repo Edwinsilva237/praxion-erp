@@ -104,11 +104,78 @@ router.post('/send', checkPermission('communications', 'send'), handleUpload('fi
 
 /**
  * GET /api/communications/sends — historial de comunicados enviados.
+ * ?category= filtra por categoría; ?limit= acota.
  */
 router.get('/sends', checkPermission('communications', 'read'), async (req, res, next) => {
   try {
-    res.json(await svc.listSends({ tenantId: req.tenant.id, limit: req.query.limit }))
+    res.json(await svc.listSends({
+      tenantId: req.tenant.id, limit: req.query.limit, category: req.query.category,
+    }))
   } catch (err) { retErr(res, next)(err) }
+})
+
+// ─── Plantillas / borradores ────────────────────────────────────────────────
+router.get('/templates', checkPermission('communications', 'read'), async (req, res, next) => {
+  try { res.json(await svc.listTemplates({ tenantId: req.tenant.id })) }
+  catch (err) { retErr(res, next)(err) }
+})
+
+router.post('/templates', checkPermission('communications', 'send'), async (req, res, next) => {
+  try {
+    const b = req.body || {}
+    const tpl = await svc.createTemplate({
+      tenantId: req.tenant.id, name: b.name, subject: b.subject,
+      message: b.message, category: b.category, createdBy: req.auth?.userId,
+    })
+    res.status(201).json(tpl)
+  } catch (err) { retErr(res, next)(err) }
+})
+
+router.put('/templates/:id', checkPermission('communications', 'send'), async (req, res, next) => {
+  try {
+    const b = req.body || {}
+    res.json(await svc.updateTemplate({
+      tenantId: req.tenant.id, id: req.params.id, name: b.name,
+      subject: b.subject, message: b.message, category: b.category,
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
+
+router.delete('/templates/:id', checkPermission('communications', 'send'), async (req, res, next) => {
+  try { res.json(await svc.deleteTemplate({ tenantId: req.tenant.id, id: req.params.id })) }
+  catch (err) { retErr(res, next)(err) }
+})
+
+// ─── Categorías configurables por tenant ────────────────────────────────────
+router.get('/categories', checkPermission('communications', 'read'), async (req, res, next) => {
+  try {
+    res.json(await svc.listCategories({
+      tenantId: req.tenant.id, activeOnly: req.query.activeOnly === 'true',
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
+
+router.post('/categories', checkPermission('communications', 'send'), async (req, res, next) => {
+  try {
+    const b = req.body || {}
+    const cat = await svc.createCategory({ tenantId: req.tenant.id, name: b.name, sortOrder: b.sortOrder })
+    res.status(201).json(cat)
+  } catch (err) { retErr(res, next)(err) }
+})
+
+router.put('/categories/:id', checkPermission('communications', 'send'), async (req, res, next) => {
+  try {
+    const b = req.body || {}
+    res.json(await svc.updateCategory({
+      tenantId: req.tenant.id, id: req.params.id,
+      name: b.name, sortOrder: b.sortOrder, isActive: b.isActive,
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
+
+router.delete('/categories/:id', checkPermission('communications', 'send'), async (req, res, next) => {
+  try { res.json(await svc.deleteCategory({ tenantId: req.tenant.id, id: req.params.id })) }
+  catch (err) { retErr(res, next)(err) }
 })
 
 /**

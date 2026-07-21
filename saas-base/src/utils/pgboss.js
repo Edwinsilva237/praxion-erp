@@ -14,8 +14,13 @@
 //   - registerCron(name, cronExpr, handler)  — registra una tarea recurrente.
 //   - registerCatchup(name, delayMs, handler) — registra una tarea one-shot
 //     que se ejecuta al arrancar (típico catch-up post-restart).
+//   - registerWorker(name, handler, options) — registra un worker para una cola
+//     de trabajos AD-HOC (sin cron). El caller encola con enqueue(name, data).
+//   - enqueue(name, data, options)  — mete un trabajo one-off en la cola `name`.
+//     Devuelve el jobId si se encoló, o null si pg-boss no está disponible
+//     (p.ej. tests) → el caller cae a ejecución sincrónica.
 //   - startBoss()  — invocado por app.js al arrancar. Conecta a PG, crea
-//     schema si no existe, activa workers para todos los crons registrados.
+//     schema si no existe, activa workers para todos los crons/colas registradas.
 //   - shutdown()   — graceful shutdown.
 
 const { PgBoss } = require('pg-boss')
@@ -29,6 +34,7 @@ let started = false
 // startBoss() las procesa al final.
 const cronJobs = []   // { name, cronExpr, handler, options }
 const catchups = []   // { name, delayMs, handler }
+const workers  = []   // { name, handler, options } — colas ad-hoc (sin cron)
 
 function registerCron(name, cronExpr, handler, options = {}) {
   cronJobs.push({ name, cronExpr, handler, options })
@@ -36,6 +42,32 @@ function registerCron(name, cronExpr, handler, options = {}) {
 
 function registerCatchup(name, delayMs, handler) {
   catchups.push({ name, delayMs, handler })
+}
+
+// Registra un worker para una cola de trabajos AD-HOC (encolados con enqueue).
+// Debe llamarse en require-time (igual que registerCron) para que startBoss()
+// lo levante al arrancar.
+function registerWorker(name, handler, options = {}) {
+  workers.push({ name, handler, options })
+}
+
+// Extrae el payload de un job de pg-boss v12. `boss.work` puede entregar el job
+// suelto o dentro de un arreglo (batch); normalizamos ambos.
+function jobData(job) {
+  const j = Array.isArray(job) ? job[0] : job
+  return (j && j.data !== undefined) ? j.data : j
+}
+
+// Encola un trabajo one-off. Si pg-boss no arrancó (tests, o falló el start),
+// devuelve null para que el caller ejecute sincrónico como fallback.
+async function enqueue(name, data, options = {}) {
+  if (!boss || !started) return null
+  try {
+    return await boss.send(name, data, options)
+  } catch (err) {
+    logger.error(`[pgboss] no se pudo encolar '${name}'`, { error: err.message })
+    return null
+  }
 }
 
 async function startBoss() {
@@ -91,6 +123,25 @@ async function startBoss() {
     }
   }
 
+  // Colas de trabajos ad-hoc (sin cron): solo creamos la cola y su worker; los
+  // jobs entran por enqueue(name, data).
+  for (const w of workers) {
+    try {
+      await boss.createQueue(w.name)
+      await boss.work(w.name, w.options, async (job) => {
+        try {
+          await w.handler(jobData(job))
+        } catch (err) {
+          logger.error(`[pgboss:${w.name}] falló`, { error: err.message })
+          throw err
+        }
+      })
+      logger.info(`[pgboss] worker '${w.name}' activo`)
+    } catch (err) {
+      logger.error(`[pgboss] no se pudo registrar worker ${w.name}`, { error: err.message })
+    }
+  }
+
   // Catch-ups: tareas one-shot que se disparan poco después del arranque.
   // Útil para recuperarse de tiempo offline (p.ej. revisar cotizaciones vencidas).
   for (const cu of catchups) {
@@ -116,6 +167,8 @@ async function shutdown() {
 module.exports = {
   registerCron,
   registerCatchup,
+  registerWorker,
+  enqueue,
   startBoss,
   shutdown,
 }
