@@ -148,6 +148,49 @@ async function storeCfdiBackup({ tenantId, invoiceId, filename, mimetype, conten
   }
 }
 
+/**
+ * Respaldo XML/PDF de un REP recibido, pegado al complemento (espejo de
+ * storeCfdiBackup pero sobre entity_type='supplier_payment_complement').
+ * Best-effort + dedupe por tipo (xml/pdf) para correos repetidos.
+ */
+async function storeComplementBackup({ tenantId, complementId, filename, mimetype, contentBase64, siblings = [], userId }) {
+  const kinds = new Set()
+  try {
+    const { rows } = await query(
+      `SELECT mime_type, filename FROM attachments
+        WHERE tenant_id = $1 AND entity_type = 'supplier_payment_complement'
+          AND entity_id = $2 AND category = 'cfdi'`,
+      [tenantId, complementId])
+    for (const r of rows) {
+      const mt = (r.mime_type || '').toLowerCase()
+      const fn = (r.filename || '').toLowerCase()
+      if (mt.includes('xml') || fn.endsWith('.xml')) kinds.add('xml')
+      if (mt.includes('pdf') || fn.endsWith('.pdf')) kinds.add('pdf')
+    }
+  } catch { /* best-effort */ }
+
+  const files = [{ filename, mimetype, contentBase64 }, ...(siblings || [])]
+  for (const f of files) {
+    const mime = cfdiMime(f.filename, f.mimetype)
+    if (!mime) continue
+    const kind = mime.includes('xml') ? 'xml' : 'pdf'
+    if (kinds.has(kind)) continue
+    try {
+      await attachmentService.saveAttachment({
+        tenantId, entityType: 'supplier_payment_complement', entityId: complementId,
+        category: 'cfdi',
+        originalFilename: f.filename || (kind === 'xml' ? 'rep.xml' : 'rep.pdf'),
+        buffer: Buffer.from(f.contentBase64, 'base64'),
+        mimeType: mime, uploadedBy: userId,
+      })
+      kinds.add(kind)
+    } catch (e) {
+      logger.warn('inbound: no se pudo guardar el respaldo del REP', {
+        tenantId, complementId, filename: f.filename, error: e.message })
+    }
+  }
+}
+
 function attIsXml(a) {
   return /xml/i.test(a?.mimetype || '') || /\.xml$/i.test(a?.filename || '')
 }
@@ -277,6 +320,40 @@ async function ingestInboundDocument({ token, filename, mimetype, contentBase64,
     throw err(403, 'El RFC receptor del CFDI no corresponde a este tenant.')
   }
 
+  // created_by / audit: atribuir al owner del tenant (no hay sesión de usuario).
+  const { rows: ow } = await query(
+    `SELECT user_id FROM tenant_memberships
+      WHERE tenant_id = $1 AND role = 'owner' ORDER BY created_at LIMIT 1`, [tenant.id])
+  const userId = ow[0]?.user_id || null
+
+  // 3.5. CFDI tipo P (REP / complemento de pago) → NO es un gasto (Total=0):
+  //      se desvía al registro de complementos, que lo liga a las facturas que
+  //      liquida (por UUID) y al pago registrado. Crear un gasto aquí generaría
+  //      una CXP fantasma en $0.
+  if (parsed?.tipoComprobante === 'P') {
+    const supplierComplementService = require('../purchases/supplierComplementService')
+    let compResult
+    try {
+      compResult = await supplierComplementService.ingestComplement({
+        tenantId: tenant.id, parsed, source: 'email', from, userId,
+      })
+    } catch (e) {
+      logger.warn('inbound: REP no procesable', {
+        tenant: tenant.slug, uuid: parsed?.uuid || null, error: e.message })
+      throw e
+    }
+    logger.info('inbound: complemento de pago recibido', {
+      tenant: tenant.slug, uuid: parsed?.uuid || null, result: compResult.status })
+    // Respaldo XML/PDF pegado al complemento (best-effort, misma regla que gastos).
+    if (compResult.complementId) {
+      await storeComplementBackup({
+        tenantId: tenant.id, complementId: compResult.complementId,
+        filename, mimetype, contentBase64, siblings, userId,
+      })
+    }
+    return { ...compResult, kind: 'payment_complement', tenant: tenant.slug, uuid: parsed?.uuid || null }
+  }
+
   // 4. Match de proveedor por RFC emisor (supplier/both). Si no, gasto genérico.
   const emisorRfc = normRfc(parsed?.emisor?.rfc)
   let supplierId = null, genericSupplier = null
@@ -290,12 +367,6 @@ async function ingestInboundDocument({ token, filename, mimetype, contentBase64,
     if (bp[0]) supplierId = bp[0].id
   }
   if (!supplierId) genericSupplier = parsed?.emisor?.name || 'Proveedor (correo)'
-
-  // created_by / audit: atribuir al owner del tenant (no hay sesión de usuario).
-  const { rows: ow } = await query(
-    `SELECT user_id FROM tenant_memberships
-      WHERE tenant_id = $1 AND role = 'owner' ORDER BY created_at LIMIT 1`, [tenant.id])
-  const userId = ow[0]?.user_id || null
 
   // 5. Alta del GASTO (anti-dup por UUID dentro de registerInvoice → 409 idempotente).
   //    El correo SIEMPRE crea un gasto (reversible). Si es mercancía que cuadra con
@@ -319,6 +390,7 @@ async function ingestInboundDocument({ token, filename, mimetype, contentBase64,
       rfcEmisor: parsed?.emisor?.rfc || null,
       subtotal, tax, total,
       invoiceDate,
+      metodoPagoSat: parsed?.metodoPago || null,   // PUE/PPD → tablero de REP
       creditDays: 0,             // → auto: días de crédito del proveedor (si lo hay)
       isExpense: true,
       expenseCategoryId: null,   // sin categoría: el usuario la clasifica al revisar

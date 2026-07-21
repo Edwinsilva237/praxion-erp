@@ -15,6 +15,7 @@ const cxpService              = require('./cxpService')
 const apAdvanceService        = require('./apAdvanceService')
 const supplierPriceService    = require('./supplierPriceService')
 const supplierReturnService   = require('./supplierReturnService')
+const supplierComplementService = require('./supplierComplementService')
 const inboundEmailService     = require('../inbound/inboundEmailService')
 const attachmentService       = require('../attachments/attachmentService')
 const storage                 = require('../../utils/storage')
@@ -1254,6 +1255,158 @@ router.get('/suppliers/:id/statement', checkPermission('purchases', 'read'), asy
     res.json(statement)
   } catch (err) { next(err) }
 })
+
+// ─── Complementos de pago RECIBIDOS (REP, CFDI tipo P — mig 235) ─────────────
+// Reusa permisos purchases:* (SIN permiso nuevo → sin re-login).
+
+/**
+ * GET /api/purchases/complements
+ * Query: status (matched|review), partnerId, search, page, limit
+ */
+router.get('/complements', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const { status, partnerId, search, page, limit } = req.query
+    res.json(await supplierComplementService.listComplements({
+      tenantId: req.tenant.id, status, partnerId, search,
+      page:  parseInt(page || 1, 10),
+      limit: Math.min(parseInt(limit || 20, 10), 100),
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
+
+/**
+ * GET /api/purchases/complements/compliance
+ * Tablero: facturas PPD con pago aplicado cuya cobertura de REP no alcanza.
+ */
+router.get('/complements/compliance', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    res.json(await supplierComplementService.listCompliance({ tenantId: req.tenant.id }))
+  } catch (err) { retErr(res, next)(err) }
+})
+
+/**
+ * POST /api/purchases/complements/upload
+ * Sube el XML de un REP a mano (multipart 'file'). Mismo procesamiento que el
+ * correo: parseo, candado de tipo P, anti-dup por UUID, auto-ligado.
+ */
+router.post('/complements/upload',
+  checkPermission('purchases', 'create'),
+  uploadDoc.single('file'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'Archivo requerido (XML del complemento).' })
+      const parsed = await documentParserService.parseSupplierDocument(
+        req.file.buffer, req.file.mimetype, req.file.originalname)
+      if (parsed?.tipoComprobante !== 'P') {
+        return res.status(400).json({
+          error: 'Ese XML no es un complemento de pago (tipo P). Si es una factura, regístrala en Gastos o Facturas de compra.' })
+      }
+      const result = await supplierComplementService.ingestComplement({
+        tenantId: req.tenant.id, parsed, source: 'manual',
+        userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+      })
+      // Respaldo del XML pegado al complemento (best-effort).
+      if (result.complementId && result.status === 'created') {
+        try {
+          await attachmentService.saveAttachment({
+            tenantId: req.tenant.id,
+            entityType: 'supplier_payment_complement', entityId: result.complementId,
+            category: 'cfdi',
+            originalFilename: req.file.originalname || 'rep.xml',
+            buffer: req.file.buffer,
+            mimeType: req.file.mimetype.includes('xml') ? req.file.mimetype : 'application/xml',
+            uploadedBy: req.auth.userId,
+          })
+        } catch { /* respaldo faltante no es fatal */ }
+      }
+      res.status(result.status === 'created' ? 201 : 200).json(result)
+    } catch (err) { retErr(res, next)(err) }
+  }
+)
+
+/**
+ * GET /api/purchases/complements/:id
+ */
+router.get('/complements/:id', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    res.json(await supplierComplementService.getComplement({
+      tenantId: req.tenant.id, complementId: req.params.id }))
+  } catch (err) { retErr(res, next)(err) }
+})
+
+/**
+ * POST /api/purchases/complements/:id/rematch
+ * Reintenta el cruce (facturas registradas después del REP + pago).
+ */
+router.post('/complements/:id/rematch', checkPermission('purchases', 'update'), async (req, res, next) => {
+  try {
+    res.json(await supplierComplementService.rematchComplement({
+      tenantId: req.tenant.id, complementId: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
+
+/**
+ * POST /api/purchases/complements/:id/link-payment   Body: { paymentId }
+ */
+router.post('/complements/:id/link-payment', checkPermission('purchases', 'update'), async (req, res, next) => {
+  try {
+    if (!req.body?.paymentId) return res.status(400).json({ error: 'paymentId es requerido.' })
+    res.json(await supplierComplementService.linkPayment({
+      tenantId: req.tenant.id, complementId: req.params.id, paymentId: req.body.paymentId,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
+
+/**
+ * POST /api/purchases/complements/:id/unlink-payment
+ */
+router.post('/complements/:id/unlink-payment', checkPermission('purchases', 'update'), async (req, res, next) => {
+  try {
+    res.json(await supplierComplementService.unlinkPayment({
+      tenantId: req.tenant.id, complementId: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
+
+/**
+ * DELETE /api/purchases/complements/:id
+ * Elimina el REP (no mueve dinero; el anti-dup permite re-subirlo).
+ */
+router.delete('/complements/:id', checkPermission('purchases', 'update'), async (req, res, next) => {
+  try {
+    res.json(await supplierComplementService.removeComplement({
+      tenantId: req.tenant.id, complementId: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
+
+/**
+ * GET /api/purchases/complements/:id/attachments/:attachmentId/download
+ * Descarga el XML/PDF de respaldo. proxy:true — gotcha R2 (todo endpoint que
+ * sirve archivo al navegador DEBE proxear; el redirect a R2 muere por CORS).
+ */
+router.get('/complements/:id/attachments/:attachmentId/download',
+  checkPermission('purchases', 'read'),
+  async (req, res, next) => {
+    try {
+      const file = await attachmentService.getAttachmentInfo({
+        tenantId: req.tenant.id, attachmentId: req.params.attachmentId,
+      })
+      if (!file) return res.status(404).json({ error: 'Archivo no encontrado.' })
+      await storage.serve(res, file.storage_path, {
+        filename:    file.filename,
+        mimeType:    file.mime_type,
+        disposition: 'inline',
+        proxy:       true,
+      })
+    } catch (err) { next(err) }
+  }
+)
 
 // ─── CXP — Cuentas por pagar (vista centrada en accounts_payable) ────────────
 

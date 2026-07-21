@@ -78,6 +78,7 @@ export const NAV_SECTIONS = [
       { label: 'Cuentas por pagar',      to: '/cxp',                 iconKey: 'money',    permission: 'financials:read', module: 'purchases', end: true },
       { label: 'Pagos emitidos',         to: '/pagos-emitidos',      iconKey: 'money',    permission: 'financials:read', module: 'purchases' },
       { label: '└ Anticipos a proveedor', to: '/cxp/anticipos',      iconKey: 'money',    permission: 'financials:read', module: 'purchases' },
+      { label: 'Complementos de pago',   to: '/complementos-pago',   iconKey: 'invoice',  permission: 'purchases:read',  module: 'purchases' },
     ],
   },
   {

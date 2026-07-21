@@ -48,6 +48,7 @@ async function registerInvoice({
   xmlContent = null,
   isExpense = false, expenseCategoryId = null,  // módulo de Gastos (Fase 1)
   paymentMethod = null,                         // forma de pago del gasto (mig 183)
+  metodoPagoSat = null,                         // MetodoPago del CFDI: PUE/PPD (mig 235)
   userId, ipAddress, userAgent,
   client: existingClient,   // permite reusar la txn (p.ej. sustitución de devolución)
 }) {
@@ -59,6 +60,16 @@ async function registerInvoice({
     if (paymentMethod && !['transfer', 'cash', 'check', 'credit_card'].includes(paymentMethod)) {
       throw createError(400, 'paymentMethod inválido (transfer | cash | check | credit_card).')
     }
+
+    // MetodoPago SAT (PUE/PPD): solo las PPD exigen complemento de pago (REP) →
+    // alimenta el tablero "PPD pagadas sin complemento". Si el caller no lo manda
+    // pero SÍ hay XML, se extrae de ahí (cubre los flujos manuales sin tocar UI).
+    let resolvedMetodoPago = (metodoPagoSat || '').toUpperCase() || null
+    if (!resolvedMetodoPago && xmlContent) {
+      const m = String(xmlContent).match(/Comprobante[^>]+MetodoPago="(PUE|PPD)"/i)
+      if (m) resolvedMetodoPago = m[1].toUpperCase()
+    }
+    if (resolvedMetodoPago && !['PUE', 'PPD'].includes(resolvedMetodoPago)) resolvedMetodoPago = null
 
     // Verificar duplicado por UUID SAT — las CANCELADAS no cuentan (se permite
     // recargar una factura que se canceló por estar mal cargada).
@@ -191,8 +202,8 @@ async function registerInvoice({
           invoice_date, due_date, received_date,
           reconciliation_status, reconciliation_diff,
           is_expense, expense_category_id,
-          xml_content, notes, created_by, payment_method)
-       VALUES ($1,$2,$3,'pending',$4,$5,$6,$7,$8::uuid,$8::varchar,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18,$19::date,$20::date,$19::date,$21,$22,$23,$24,$25,$26,$27,$28)
+          xml_content, notes, created_by, payment_method, metodo_pago_sat)
+       VALUES ($1,$2,$3,'pending',$4,$5,$6,$7,$8::uuid,$8::varchar,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18,$19::date,$20::date,$19::date,$21,$22,$23,$24,$25,$26,$27,$28,$29)
        RETURNING *`,
       [tenantId, documentNumber,
        documentType === 'remission' ? 'remission' : 'invoice',
@@ -204,7 +215,8 @@ async function registerInvoice({
        issueDate, dueDate,
        reconStatus, reconDiff,
        !!isExpense, expenseCategoryId || null,
-       xmlContent || null, notes || null, userId, paymentMethod || null]
+       xmlContent || null, notes || null, userId, paymentMethod || null,
+       resolvedMetodoPago]
     )
     const invoice = invRows[0]
 
@@ -1958,6 +1970,14 @@ async function reReadExpenseFromXml({ tenantId, id, userId, ipAddress, userAgent
     if (xmlDocNumber && xmlDocNumber !== (exp.invoice_number || '')) {
       newInvoiceNumber = xmlDocNumber
       set.push(`invoice_number = $${i++}`); p.push(xmlDocNumber); changed.folioNumber = xmlDocNumber
+    }
+
+    // MetodoPago SAT (PUE/PPD, mig 235): dato fiscal sin impacto contable → se
+    // rellena siempre que el XML lo traiga (backfill de facturas previas a la
+    // mig — habilita vigilarlas en el tablero de complementos).
+    const pMetodo = (parsed?.metodoPago || '').toUpperCase()
+    if (['PUE', 'PPD'].includes(pMetodo) && pMetodo !== (exp.metodo_pago_sat || '')) {
+      set.push(`metodo_pago_sat = $${i++}`); p.push(pMetodo); changed.metodoPago = pMetodo
     }
 
     // Totales: re-sincronizan sólo si NO hay CXP ni pagos → no desincroniza nada.

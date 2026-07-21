@@ -41,6 +41,7 @@ const CuentasPorPagar         = lazy(() => import('@/pages/Finanzas/CuentasPorPa
 const PagosRecibidos          = lazy(() => import('@/pages/Finanzas/PagosRecibidos'))
 const PagosEmitidos           = lazy(() => import('@/pages/Finanzas/PagosEmitidos'))
 const AnticiposProveedor      = lazy(() => import('@/pages/Finanzas/AnticiposProveedor'))
+const ComplementosPago        = lazy(() => import('@/pages/Finanzas/ComplementosPago'))
 const Facturacion             = lazy(() => import('@/pages/Finanzas/Facturacion'))
 const ReporteContable         = lazy(() => import('@/pages/Finanzas/ReporteContable'))
 const ReportesVentas          = lazy(() => import('@/pages/Reportes/ReportesVentas'))
@@ -230,6 +231,7 @@ const router = createBrowserRouter([
       { path: '/pagos-recibidos',     element: <PagosRecibidos /> },
       { path: '/pagos-emitidos',      element: <PagosEmitidos /> },
       { path: '/cxp/anticipos',       element: <AnticiposProveedor /> },
+      { path: '/complementos-pago',   element: <ComplementosPago /> },
       { path: '/inventario',          element: <Inventario /> },
       { path: '/inventario/conteos',     element: <ConteosLista /> },
       { path: '/inventario/conteos/:id', element: <ConteoDetalle /> },

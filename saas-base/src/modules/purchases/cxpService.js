@@ -56,6 +56,20 @@ async function listCXP({ tenantId, status, partnerId, from, to, sortBy, sortDir,
             bp.name AS partner_name, bp.rfc AS partner_rfc,
             si.uuid_sat, si.type AS invoice_type, si.status AS invoice_status,
             si.reconciliation_status,
+            si.metodo_pago_sat,
+            -- Semáforo de complemento de pago RECIBIDO (REP, mig 235). Espejo
+            -- invertido del complement_status de CxC: aquí vigilamos que el
+            -- PROVEEDOR nos emita el REP de lo que le pagamos (solo PPD).
+            CASE
+              WHEN si.type IS DISTINCT FROM 'invoice' THEN 'not_applicable'
+              WHEN si.status = 'cancelled'            THEN 'not_applicable'
+              WHEN si.metodo_pago_sat IS NULL         THEN 'unknown'
+              WHEN si.metodo_pago_sat = 'PUE'         THEN 'not_required'
+              WHEN ap.amount_paid <= 0.01             THEN 'awaiting_payment'
+              WHEN COALESCE(repcov.covered_mxn, 0) >= ap.amount_paid - 0.01 THEN 'complete'
+              WHEN COALESCE(repcov.covered_mxn, 0) > 0.01                   THEN 'partial'
+              ELSE 'pending'
+            END AS rep_status,
             COALESCE((
               SELECT COUNT(*) FROM attachments a
                WHERE a.tenant_id = ap.tenant_id
@@ -73,6 +87,13 @@ async function listCXP({ tenantId, status, partnerId, from, to, sortBy, sortDir,
      FROM accounts_payable ap
      JOIN business_partners bp     ON bp.id = ap.partner_id
      LEFT JOIN supplier_invoices si ON si.id = ap.document_id
+     LEFT JOIN LATERAL (
+       SELECT SUM(d.imp_pagado * CASE WHEN c.currency = 'MXN' OR c.exchange_rate IS NULL
+                                      THEN 1 ELSE c.exchange_rate END) AS covered_mxn
+         FROM supplier_payment_complement_docs d
+         JOIN supplier_payment_complements c ON c.id = d.complement_id
+        WHERE d.supplier_invoice_id = si.id
+     ) repcov ON true
      WHERE ap.tenant_id = $1 ${where}
      ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -288,6 +309,7 @@ async function getPayment({ tenantId, paymentId }) {
   const { rows: apps } = await query(
     `SELECT spa.amount_applied,
             si.invoice_number AS document_number,
+            si.metodo_pago_sat,
             ap.document_type, ap.amount_total, ap.amount_pending, ap.status AS ap_status
        FROM supplier_payment_applications spa
        JOIN supplier_invoices si ON si.id = spa.supplier_invoice_id
@@ -297,7 +319,18 @@ async function getPayment({ tenantId, paymentId }) {
     [paymentId, tenantId]
   )
 
-  return { ...rows[0], applications: apps }
+  // Complementos de pago (REP) recibidos ligados a este pago (mig 235) — para
+  // que el detalle muestre si el proveedor ya emitió el recibo de lo pagado.
+  const { rows: complements } = await query(
+    `SELECT c.id, c.cfdi_uuid, c.serie, c.folio, c.payment_date, c.payment_form,
+            c.amount, c.currency, c.match_status, c.created_at
+       FROM supplier_payment_complements c
+      WHERE c.tenant_id = $2 AND c.supplier_payment_id = $1
+      ORDER BY c.created_at DESC`,
+    [paymentId, tenantId]
+  )
+
+  return { ...rows[0], applications: apps, complements }
 }
 
 module.exports = { listCXP, getCXP, listPayments, getPayment }

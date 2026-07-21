@@ -280,6 +280,21 @@ export default function CuentasPorPagar() {
                             CFDI
                           </span>
                         )}
+                        {/* Semáforo del complemento de pago (REP) — solo facturas PPD */}
+                        {d.rep_status === 'complete' && (
+                          <span className="text-[10px] font-bold uppercase bg-status-success/15 text-status-success px-1.5 py-0.5 rounded-full"
+                            title="Factura PPD: el proveedor ya emitió el complemento de pago (REP) de lo pagado">
+                            REP ✓
+                          </span>
+                        )}
+                        {(d.rep_status === 'pending' || d.rep_status === 'partial') && (
+                          <span className="text-[10px] font-bold uppercase bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded-full"
+                            title={d.rep_status === 'partial'
+                              ? 'Factura PPD pagada: el complemento recibido no cubre todo lo pagado'
+                              : 'Factura PPD pagada SIN complemento de pago del proveedor — hay que solicitarlo'}>
+                            {d.rep_status === 'partial' ? 'REP parcial' : 'Falta REP'}
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td>

@@ -84,6 +84,13 @@ function parseXMLCFDI(buffer) {
   const currency     = extractXMLAttr(xml, /Comprobante[^>]+Moneda="([^"]+)"/i) || 'MXN'
   const exchangeRate = parseFloat(extractXMLAttr(xml, /Comprobante[^>]+TipoCambio="([^"]+)"/i) || '1')
 
+  // Tipo de comprobante: I=Ingreso (factura), E=Egreso (NC), P=Pago (REP), etc.
+  // MetodoPago: PUE (una exhibición) / PPD (parcialidades o diferido). Solo las
+  // PPD exigen que el proveedor emita después un complemento de pago (REP).
+  const tipoComprobante = (extractXMLAttr(xml, /Comprobante[^>]+TipoDeComprobante="([^"]+)"/i) || '').toUpperCase() || null
+  const metodoPago      = (extractXMLAttr(xml, /Comprobante[^>]+MetodoPago="([^"]+)"/i) || '').toUpperCase() || null
+  const formaPago       = extractXMLAttr(xml, /Comprobante[^>]+FormaPago="([^"]+)"/i)
+
   // Emisor (proveedor)
   const rfcEmisor     = extractXMLAttr(xml, /Emisor[^>]+Rfc="([^"]+)"/i)
   const nombreEmisor  = extractXMLAttr(xml, /Emisor[^>]+Nombre="([^"]+)"/i)
@@ -107,6 +114,9 @@ function parseXMLCFDI(buffer) {
     subtotal,
     tax,
     total,
+    tipoComprobante,
+    metodoPago,
+    formaPago,
     emisor: {
       rfc:    rfcEmisor,
       name:   nombreEmisor,
@@ -120,8 +130,80 @@ function parseXMLCFDI(buffer) {
     method: 'xml',
   }
 
-  logger.info('CFDI XML parsed', { uuid, rfcEmisor, total })
+  // CFDI tipo P (REP / complemento de pago): el Comprobante trae Total=0 y el
+  // detalle real vive en el nodo Complemento → Pagos → Pago → DoctoRelacionado.
+  if (tipoComprobante === 'P') {
+    result.paymentComplement = extractXMLPagos(xml)
+  }
+
+  logger.info('CFDI XML parsed', { uuid, rfcEmisor, total, tipoComprobante })
   return result
+}
+
+/**
+ * Extrae los pagos de un CFDI tipo P (complemento de pago / REP).
+ * Soporta Pagos 2.0 (CFDI 4.0, prefijo pago20:) y 1.0 (CFDI 3.3, pago10:).
+ *
+ * Estructura:
+ *   <pago20:Pagos>
+ *     <pago20:Pago FechaPago FormaDePagoP MonedaP TipoCambioP Monto>
+ *       <pago20:DoctoRelacionado IdDocumento Serie Folio MonedaDR
+ *          NumParcialidad ImpSaldoAnt ImpPagado ImpSaldoInsoluto/>
+ *     </pago20:Pago>
+ *   </pago20:Pagos>
+ *
+ * OJO regex: `Pago\s` NO matchea `Pagos` (la `s` rompe el \s) ni el cierre
+ * `</...Pagos>` — por eso los patrones de abajo son seguros sin parser XML real.
+ */
+function extractXMLPagos(xml) {
+  const payments = []
+
+  // Un Pago con hijos: <Pago ...> ... </Pago>. Self-closing (sin doctos) es
+  // inválido según el estándar, pero lo toleramos con el segundo patrón.
+  const pagoBlockRegex = /<(?:pago(?:10|20):)?Pago\s([^>]*?)(\/)?>([\s\S]*?)(?:<\/(?:pago(?:10|20):)?Pago>|(?=<(?:pago(?:10|20):)?Pago\s)|$)/gi
+  let m
+  while ((m = pagoBlockRegex.exec(xml)) !== null) {
+    const attrs = m[1]
+    const selfClosed = m[2] === '/'
+    const body = selfClosed ? '' : (m[3] || '')
+
+    const fechaPago = extractAttrFromString(attrs, 'FechaPago')
+    const payment = {
+      paymentDate:  fechaPago ? fechaPago.split('T')[0] : null,
+      paymentForm:  extractAttrFromString(attrs, 'FormaDePagoP') || null,
+      currency:     (extractAttrFromString(attrs, 'MonedaP') || 'MXN').toUpperCase(),
+      exchangeRate: parseFloat(extractAttrFromString(attrs, 'TipoCambioP') || '1'),
+      amount:       parseFloat(extractAttrFromString(attrs, 'Monto') || '0'),
+      relatedDocs:  [],
+    }
+
+    const doctoRegex = /<(?:pago(?:10|20):)?DoctoRelacionado\s([^>]*?)\/?>/gi
+    let d
+    while ((d = doctoRegex.exec(body)) !== null) {
+      const da = d[1]
+      payment.relatedDocs.push({
+        uuid:            (extractAttrFromString(da, 'IdDocumento') || '').toLowerCase() || null,
+        serie:           extractAttrFromString(da, 'Serie') || null,
+        folio:           extractAttrFromString(da, 'Folio') || null,
+        currency:        (extractAttrFromString(da, 'MonedaDR') || payment.currency).toUpperCase(),
+        parcialidad:     parseInt(extractAttrFromString(da, 'NumParcialidad') || '0', 10) || null,
+        impSaldoAnt:     parseFloat(extractAttrFromString(da, 'ImpSaldoAnt') || '0'),
+        impPagado:       parseFloat(extractAttrFromString(da, 'ImpPagado') || '0'),
+        impSaldoInsoluto: parseFloat(extractAttrFromString(da, 'ImpSaldoInsoluto') || '0'),
+      })
+    }
+
+    // Pagos 1.0 no trae Monto obligatorio a nivel Pago en todos los PAC: si
+    // falta, lo derivamos de la suma de ImpPagado de sus doctos.
+    if (!payment.amount && payment.relatedDocs.length) {
+      payment.amount = parseFloat(
+        payment.relatedDocs.reduce((s, doc) => s + (doc.impPagado || 0), 0).toFixed(2))
+    }
+
+    payments.push(payment)
+  }
+
+  return { payments }
 }
 
 /**

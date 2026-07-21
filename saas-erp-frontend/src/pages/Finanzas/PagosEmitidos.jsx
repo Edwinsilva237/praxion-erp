@@ -361,6 +361,36 @@ function SupplierPaymentDetailModal({ paymentId, onClose, onReverse }) {
               )}
             </div>
 
+            {/* Complementos de pago (REP) del proveedor por este pago. Solo se
+                avisa "falta" cuando el pago liquidó facturas PPD (las únicas
+                que exigen REP). */}
+            {(() => {
+              const hasPPD = (p.applications || []).some(a => a.metodo_pago_sat === 'PPD')
+              if (!p.complements?.length && !hasPPD) return null
+              return (
+                <div>
+                  <p className="text-xs font-bold text-brand-300 uppercase tracking-wider mb-1.5">Complemento de pago (REP)</p>
+                  {p.complements?.length ? (
+                    <div className="flex flex-col gap-1.5">
+                      {p.complements.map(c => (
+                        <div key={c.id} className="flex items-center justify-between gap-2 border border-status-success/40 bg-status-success/5 rounded-xl px-3 py-2 text-sm">
+                          <span className="text-ink-primary">
+                            Recibido · pago del {fmtDateOnly(c.payment_date)}
+                            {(c.serie || c.folio) && <span className="text-ink-muted text-xs"> ({[c.serie, c.folio].filter(Boolean).join('-')})</span>}
+                          </span>
+                          <span className="font-mono tabular-nums font-semibold">{fmtMXN(c.amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="border border-status-warning/40 bg-status-warning/5 rounded-xl px-3 py-2 text-sm text-status-warning">
+                      Sin complemento recibido — este pago liquidó factura(s) PPD; el proveedor debe emitirte el REP.
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+
             {p.notes && <p className="text-xs text-ink-muted">Notas: {p.notes}</p>}
 
             {!p.reversed_at && p.payment_method !== 'advance_application' && (
