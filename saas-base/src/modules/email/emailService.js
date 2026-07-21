@@ -7,6 +7,29 @@ const logger = require('../../config/logger')
 // Transporter singleton
 let transporter = null
 
+// Deriva un texto-plano legible desde el HTML del correo. OJO: un simple
+// strip de etiquetas (/<[^>]*>/g) deja INTACTO el contenido de <style>/<head>
+// /<script>, así que el CSS de la plantilla branded se colaba como texto y
+// aparecía en el snippet de la bandeja (Gmail muestra "body { margin:0; ... }").
+// Primero eliminamos esos bloques completos, luego las etiquetas restantes,
+// desescapamos las entidades comunes y colapsamos el espacio en blanco.
+function htmlToText(html) {
+  return String(html || '')
+    .replace(/<!DOCTYPE[^>]*>/gi, '')
+    .replace(/<head[\s\S]*?<\/head>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function getTransporter() {
   if (transporter) return transporter
 
@@ -53,7 +76,7 @@ async function sendEmail({ to, subject, html, text, fromName, replyTo, cc, bcc, 
     bcc,
     subject,
     html,
-    text: text || html.replace(/<[^>]*>/g, ''),
+    text: text || htmlToText(html),
     replyTo,
     attachments,
   })
