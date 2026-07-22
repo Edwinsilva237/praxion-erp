@@ -11,8 +11,19 @@ const storage = require('../../utils/storage')
 const { query } = require('../../db')
 const { addPraxionFooterPDF, addPraxionFooterAllPagesPDF } = require('../../utils/praxionWitnessMark')
 
-const fmtMXN  = (n) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(n || 0)
-const fmtMXNf = (n) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n || 0)
+const fmtMXN  = (n) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n || 0)
+const fmtMXNf = fmtMXN
+
+// Reduce el tamaño de fuente hasta que el texto quepa en maxW (asume font ya seteada).
+function fitFontSize(doc, text, maxW, base, min = 6.5) {
+  let s = base
+  doc.fontSize(s)
+  while (s > min && doc.widthOfString(text) > maxW) {
+    s -= 0.5
+    doc.fontSize(s)
+  }
+  return s
+}
 const fmtNum  = (n) => new Intl.NumberFormat('es-MX').format(n || 0)
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
 
@@ -344,11 +355,14 @@ function drawPartnerDocuments(doc, data, t, labels) {
     let statusText = STATUS_LABEL[d.aging_status] || ''
     if (d.days_overdue != null && d.days_overdue > 0) statusText += ` (${d.days_overdue}d)`
     doc.text(statusText, cols.status.x, ry + 4, { width: cols.status.w })
-    doc.fillColor('#374151').font('Helvetica').fontSize(9)
+    doc.fillColor('#374151').font('Helvetica')
+    fitFontSize(doc, fmtMXN(d.amount_total), cols.total.w, 9)
     doc.text(fmtMXN(d.amount_total), cols.total.x, ry + 2, { width: cols.total.w, align: 'right' })
+    fitFontSize(doc, fmtMXN(d.amount_paid), cols.paid.w, 9)
     doc.text(fmtMXN(d.amount_paid),  cols.paid.x,  ry + 2, { width: cols.paid.w,  align: 'right' })
     doc.font('Helvetica-Bold')
-       .text(fmtMXN(d.amount_pending), cols.pending.x, ry + 2, { width: cols.pending.w, align: 'right' })
+    fitFontSize(doc, fmtMXN(d.amount_pending), cols.pending.w, 9)
+    doc.text(fmtMXN(d.amount_pending), cols.pending.x, ry + 2, { width: cols.pending.w, align: 'right' })
     doc.y = ry + 22
   }
 
@@ -356,9 +370,15 @@ function drawPartnerDocuments(doc, data, t, labels) {
   const ry = doc.y
   doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(10)
   doc.text('TOTAL', cols.status.x, ry + 4, { width: cols.status.w })
-  doc.text(fmtMXN(data.documents.reduce((s, d) => s + d.amount_total, 0)), cols.total.x, ry + 4, { width: cols.total.w, align: 'right' })
-  doc.text(fmtMXN(data.documents.reduce((s, d) => s + d.amount_paid, 0)),  cols.paid.x,  ry + 4, { width: cols.paid.w,  align: 'right' })
-  doc.text(fmtMXN(data.summary.total_pending_amount),                       cols.pending.x, ry + 4, { width: cols.pending.w, align: 'right' })
+  const totTotal   = fmtMXN(data.documents.reduce((s, d) => s + d.amount_total, 0))
+  const totPaid    = fmtMXN(data.documents.reduce((s, d) => s + d.amount_paid, 0))
+  const totPending = fmtMXN(data.summary.total_pending_amount)
+  fitFontSize(doc, totTotal, cols.total.w, 10)
+  doc.text(totTotal, cols.total.x, ry + 4, { width: cols.total.w, align: 'right' })
+  fitFontSize(doc, totPaid, cols.paid.w, 10)
+  doc.text(totPaid,  cols.paid.x,  ry + 4, { width: cols.paid.w,  align: 'right' })
+  fitFontSize(doc, totPending, cols.pending.w, 10)
+  doc.text(totPending, cols.pending.x, ry + 4, { width: cols.pending.w, align: 'right' })
   doc.y = ry + 24
 }
 
@@ -482,8 +502,9 @@ function drawKpiGrid(doc, cards) {
     doc.roundedRect(x, y, cardW, cardH, 6).fillAndStroke('#F9FAFB', '#E5E7EB')
     doc.fillColor('#606060').font('Helvetica').fontSize(8)
        .text(c.label.toUpperCase(), x + 12, y + 10, { characterSpacing: 1 })
-    doc.fillColor(c.accent || '#1F2937').font('Helvetica-Bold').fontSize(16)
-       .text(c.value, x + 12, y + 28, { width: cardW - 24 })
+    doc.fillColor(c.accent || '#1F2937').font('Helvetica-Bold')
+    fitFontSize(doc, c.value, cardW - 24, 16)
+    doc.text(c.value, x + 12, y + 28, { width: cardW - 24 })
     if (c.sub) {
       doc.fillColor('#9CA3AF').font('Helvetica').fontSize(7)
          .text(c.sub, x + 12, y + 56, { width: cardW - 24 })
