@@ -148,14 +148,16 @@ function drawAgingBars(doc, data, t) {
     if (b.data.amount === 0) return
     const y = doc.y
     const pct = (b.data.amount / total) * 100
-    const barMax = doc.page.width - 280
+    // La barra termina antes de la zona del monto para que una barra al 100%
+    // nunca encime "$monto" con el "%".
+    const barMax = doc.page.width - 340
     const barW = Math.max(2, (b.data.amount / total) * barMax)
 
     doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(10).text(b.label, 40, y, { width: 100 })
     doc.fillColor('#606060').font('Helvetica').fontSize(8).text(`${b.data.count} doc${b.data.count !== 1 ? 's' : ''}`, 40, y + 12)
     doc.rect(150, y + 2, barW, 18).fill(b.color)
     doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(10)
-       .text(fmtMXN(b.data.amount), 150 + barW + 8, y + 4)
+       .text(fmtMXN(b.data.amount), doc.page.width - 185, y + 4, { width: 95, align: 'right' })
     doc.fillColor('#606060').font('Helvetica').fontSize(8)
        .text(`${pct.toFixed(1)}%`, doc.page.width - 80, y + 6, { width: 40, align: 'right' })
     doc.y = y + 28
