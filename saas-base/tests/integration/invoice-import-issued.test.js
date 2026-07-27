@@ -41,9 +41,14 @@ function issuedXml({ uuid, folio = '10', serie = 'F', receptorRfc = CUSTOMER_RFC
 </cfdi:Comprobante>`
 }
 
-const toFile = (xml) => ({
-  filename: 'f.xml', mimetype: 'application/xml',
+const toFile = (xml, filename = 'f.xml') => ({
+  filename, mimetype: 'application/xml',
   contentBase64: Buffer.from(xml, 'utf8').toString('base64'),
+})
+
+const toPdf = (filename) => ({
+  filename, mimetype: 'application/pdf',
+  contentBase64: Buffer.from('%PDF-1.4 respaldo fake', 'utf8').toString('base64'),
 })
 
 beforeAll(async () => {
@@ -194,6 +199,25 @@ test('importBatch: mismo UUID otra vez → duplicate (idempotente)', async () =>
   expect(rows[0].n).toBe(1)
 })
 
+test('importBatch: folio ya ocupado → sufijo -IMP sin abortar la transacción', async () => {
+  // Mismo SERIE-FOLIO que otra factura (p.ej. choca con una serie local), UUID
+  // distinto. Regresión: el reintento con sufijo corría en la transacción ya
+  // abortada por el 23505 → "current transaction is aborted".
+  const first  = 'ff000050-0000-0000-0000-000000000050'
+  const second = 'ff000051-0000-0000-0000-000000000051'
+  await importIssuedService.importBatch({
+    tenantId, userId, files: [toFile(issuedXml({ uuid: first, folio: '50' }))],
+  })
+  const out = await importIssuedService.importBatch({
+    tenantId, userId, files: [toFile(issuedXml({ uuid: second, folio: '50' }))],
+  })
+  expect(out.summary).toMatchObject({ created: 1, errors: 0 })
+  const { rows } = await withBypass(() => query(
+    `SELECT document_number FROM invoices WHERE tenant_id = $1 AND cfdi_uuid = $2`,
+    [tenantId, second]))
+  expect(rows[0].document_number).toBe('F-50-IMP')
+})
+
 test('importBatch: saldo mayor al total → error en esa factura', async () => {
   const uuid = 'ff000013-0000-0000-0000-000000000013'
   const out = await importIssuedService.importBatch({
@@ -309,4 +333,60 @@ test('POST /invoicing/import/parse y /invoicing/import (multipart) funcionan', a
     [tenantId, 'ff000030-0000-0000-0000-000000000030']))
   expect(rows[0].imported_installments).toBe(3)
   expect(parseFloat(rows[0].imported_initial_balance)).toBeCloseTo(500, 2)
+})
+
+// ── PDFs de respaldo ────────────────────────────────────────────────────────
+
+async function pdfBackupsOf(uuid) {
+  const { rows } = await withBypass(() => query(
+    `SELECT a.id FROM attachments a
+       JOIN invoices i ON i.id = a.entity_id
+      WHERE a.tenant_id = $1 AND a.entity_type = 'invoice' AND a.category = 'cfdi'
+        AND (a.mime_type ILIKE '%pdf%' OR a.filename ILIKE '%.pdf')
+        AND i.cfdi_uuid = $2`, [tenantId, uuid]))
+  return rows
+}
+
+test('importBatch: lote grande empareja PDF↔XML por nombre; PDF suelto → error claro', async () => {
+  const u1 = 'ff000060-0000-0000-0000-000000000060'
+  const u2 = 'ff000061-0000-0000-0000-000000000061'
+  const out = await importIssuedService.importBatch({
+    tenantId, userId, files: [
+      toFile(issuedXml({ uuid: u1, folio: '60' }), 'F-60.xml'),
+      toFile(issuedXml({ uuid: u2, folio: '61' }), 'F-61.xml'),
+      toPdf('F-60.pdf'),
+      toPdf('F-61.pdf'),
+      toPdf('sin-pareja.pdf'),
+    ],
+  })
+  expect(out.summary.created).toBe(2)
+  expect(out.summary.errors).toBe(1)            // el PDF sin XML del mismo nombre
+  expect(out.results.find(r => r.filename === 'sin-pareja.pdf').error).toMatch(/PDF sin su XML/i)
+  expect(await pdfBackupsOf(u1)).toHaveLength(1)
+  expect(await pdfBackupsOf(u2)).toHaveLength(1)
+})
+
+test('re-subir XML+PDF de una YA importada → agrega el PDF de respaldo y pdf-stamped funciona', async () => {
+  const uuid = 'ff000010-0000-0000-0000-000000000010'   // F-20: se importó SOLO con XML
+  expect(await pdfBackupsOf(uuid)).toHaveLength(0)
+
+  const files = [toFile(issuedXml({ uuid, folio: '20' }), 'F-20.xml'), toPdf('F-20.pdf')]
+  const out = await importIssuedService.importBatch({ tenantId, userId, files })
+  expect(out.summary).toMatchObject({ created: 0, duplicates: 1, backupsAdded: 1 })
+  expect(out.results[0].backupAdded).toBe(true)
+  expect(await pdfBackupsOf(uuid)).toHaveLength(1)
+
+  // Idempotente: repetir no duplica el respaldo.
+  const again = await importIssuedService.importBatch({ tenantId, userId, files })
+  expect(again.summary.backupsAdded).toBe(0)
+  expect(await pdfBackupsOf(uuid)).toHaveLength(1)
+
+  // Y la descarga del PDF de una importada ya sirve el respaldo.
+  const { rows: inv } = await withBypass(() => query(
+    `SELECT id FROM invoices WHERE tenant_id = $1 AND cfdi_uuid = $2`, [tenantId, uuid]))
+  const res = await request(app)
+    .get(`/api/invoicing/invoices/${inv[0].id}/pdf-stamped`)
+    .set({ 'X-Tenant-Slug': slug, Authorization: `Bearer ${authToken}` })
+  expect(res.status).toBe(200)
+  expect(res.headers['content-type']).toContain('pdf')
 })

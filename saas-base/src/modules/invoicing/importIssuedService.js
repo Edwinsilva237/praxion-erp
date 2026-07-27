@@ -30,6 +30,67 @@ function createError(status, message) { const e = new Error(message); e.status =
 function normRfc(r) { return (r || '').toUpperCase().replace(/\s+/g, '').trim() }
 const round2 = (n) => parseFloat(Number(n).toFixed(2))
 
+const isXmlAtt = (a) => /xml/i.test(a.mimetype || '') || /\.xml$/i.test(a.filename || '')
+const isPdfAtt = (a) => !isXmlAtt(a) && (/pdf/i.test(a.mimetype || '') || /\.pdf$/i.test(a.filename || ''))
+const baseName = (n) => (n || '').toLowerCase().replace(/\.[^.]+$/, '').trim()
+
+/**
+ * Expande zips y empareja cada PDF con su XML por NOMBRE de archivo
+ * (F-123.xml ↔ F-123.pdf) para guardarlo como respaldo descargable.
+ * expandAttachments solo cubre el caso de UN XML en el lote; esto cubre lotes
+ * grandes. Un PDF sin XML del mismo nombre se reporta como fila aparte.
+ */
+function expandAndPair(files) {
+  const flat = expandAttachments(files)
+  const xmls   = flat.filter(isXmlAtt)
+  const others = flat.filter(a => !isXmlAtt(a) && !isPdfAtt(a))
+  const byBase = new Map(xmls.map(x => [baseName(x.filename), x]))
+  const orphanPdfs = []
+  for (const p of flat.filter(isPdfAtt)) {
+    const owner = byBase.get(baseName(p.filename))
+    if (owner) owner.siblings = [...(owner.siblings || []), p]
+    else orphanPdfs.push(p)
+  }
+  return { attachments: [...xmls, ...others], orphanPdfs }
+}
+
+const orphanPdfRow = (p) => ({
+  filename: p.filename, status: 'error',
+  error: 'PDF sin su XML: nómbralo igual que el XML de la factura (F-123.xml y F-123.pdf) y súbelos juntos.',
+})
+
+/**
+ * Si una factura ya importada NO tiene PDF de respaldo y este lote trae el PDF
+ * (hermano del XML duplicado), se lo pega — permite completar el respaldo
+ * re-subiendo XML+PDF sin re-importar nada.
+ */
+async function addMissingPdfBackup({ tenantId, userId, invoiceId, att }) {
+  const pdf = (att?.siblings || []).find(isPdfAtt)
+  if (!pdf) return null
+  const { rows } = await query(
+    `SELECT 1 FROM attachments
+      WHERE tenant_id = $1 AND entity_type = 'invoice' AND entity_id = $2
+        AND category = 'cfdi'
+        AND (mime_type ILIKE '%pdf%' OR filename ILIKE '%.pdf')
+      LIMIT 1`, [tenantId, invoiceId])
+  if (rows.length) return null
+  try {
+    await attachmentService.saveAttachment({
+      tenantId, entityType: 'invoice', entityId: invoiceId,
+      category: 'cfdi',
+      originalFilename: pdf.filename || 'cfdi.pdf',
+      buffer: Buffer.from(pdf.contentBase64, 'base64'),
+      mimeType: 'application/pdf',
+      uploadedBy: userId,
+    })
+    return { backupAdded: true }
+  } catch (e) {
+    logger.warn('import emitidas: no se pudo agregar el PDF de respaldo al duplicado', {
+      tenantId, invoiceId, error: e.message })
+    return null
+  }
+}
+
 /** RFCs activos del tenant (perfiles fiscales) + perfil por RFC. */
 async function loadTenantProfiles(tenantId) {
   const { rows } = await query(
@@ -94,6 +155,7 @@ async function previewOne({ tenantId, att, profiles }) {
     filename:   att.filename,
     status:     dup.length ? 'duplicate' : 'ok',
     duplicateOf: dup[0]?.document_number || null,
+    _dupId:     dup[0]?.id || null,
     uuid:       parsed.uuid,
     serie:      parsed.serie || null,
     folio:      parsed.folio || null,
@@ -114,21 +176,22 @@ async function previewOne({ tenantId, att, profiles }) {
 }
 
 /** Quita los campos internos de una fila de preview antes de responder. */
-function publicRow({ _parsed, _att, ...row }) { return row }
+function publicRow({ _parsed, _att, _dupId, ...row }) { return row }
 
 /**
  * PASO 1 — Preview del lote (no guarda nada).
  */
 async function parseBatch({ tenantId, files }) {
-  const expanded = expandAttachments(files)
-  if (!expanded.length) {
+  const { attachments, orphanPdfs } = expandAndPair(files)
+  if (!attachments.length && !orphanPdfs.length) {
     throw createError(422, 'Ningún archivo procesable: se aceptan CFDI XML o .zip que los contenga.')
   }
   const profiles = await loadTenantProfiles(tenantId)
   const rows = []
-  for (const att of expanded) {
+  for (const att of attachments) {
     rows.push(await previewOne({ tenantId, att, profiles }))
   }
+  rows.push(...orphanPdfs.map(orphanPdfRow))
   return {
     rows: rows.map(publicRow),
     summary: {
@@ -165,17 +228,21 @@ async function resolvePartner(client, { tenantId, receptor, userId }) {
  * Cada archivo se importa en SU PROPIA transacción: uno malo no tira el lote.
  */
 async function importBatch({ tenantId, userId, files, adjustments = {}, ipAddress, userAgent }) {
-  const expanded = expandAttachments(files)
-  if (!expanded.length) {
+  const { attachments, orphanPdfs } = expandAndPair(files)
+  if (!attachments.length && !orphanPdfs.length) {
     throw createError(422, 'Ningún archivo procesable: se aceptan CFDI XML o .zip que los contenga.')
   }
   const profiles = await loadTenantProfiles(tenantId)
 
   const results = []
-  for (const att of expanded) {
+  for (const att of attachments) {
     const row = await previewOne({ tenantId, att, profiles })
     if (row.status !== 'ok') {
-      results.push(publicRow(row))
+      // Duplicada pero el lote trae su PDF y aún no tenía → completa el respaldo.
+      const extra = row.status === 'duplicate' && row._dupId
+        ? await addMissingPdfBackup({ tenantId, userId, invoiceId: row._dupId, att: row._att })
+        : null
+      results.push({ ...publicRow(row), ...(extra || {}) })
       continue
     }
     try {
@@ -195,6 +262,8 @@ async function importBatch({ tenantId, userId, files, adjustments = {}, ipAddres
     }
   }
 
+  results.push(...orphanPdfs.map(orphanPdfRow))
+
   return {
     results,
     summary: {
@@ -202,6 +271,7 @@ async function importBatch({ tenantId, userId, files, adjustments = {}, ipAddres
       duplicates: results.filter(r => r.status === 'duplicate').length,
       errors:     results.filter(r => r.status === 'error').length,
       customersCreated: results.filter(r => r.customerCreated).length,
+      backupsAdded:     results.filter(r => r.backupAdded).length,
     },
   }
 }
@@ -276,14 +346,21 @@ async function importOne({ tenantId, userId, row, adjustment, ipAddress, userAge
       return inv[0]
     }
 
+    // Colisión de folio con una serie local → reintenta con sufijo. El reintento
+    // exige SAVEPOINT: tras un 23505 la transacción queda abortada y cualquier
+    // query posterior da "current transaction is aborted".
+    const candidates = [baseNumber, `${baseNumber}-IMP`,
+      `IMP-${row.uuid.slice(0, 8).toUpperCase()}`]
     let invoiceRow
-    try {
-      invoiceRow = await insertInvoice(baseNumber)
-    } catch (e) {
-      // Colisión de folio con una serie local → reintenta con sufijo.
-      if (e.code === '23505' && (e.constraint || '').includes('number')) {
-        invoiceRow = await insertInvoice(`${baseNumber}-IMP`)
-      } else { throw e }
+    for (let i = 0; i < candidates.length && !invoiceRow; i++) {
+      await client.query('SAVEPOINT import_inv')
+      try {
+        invoiceRow = await insertInvoice(candidates[i])
+      } catch (e) {
+        await client.query('ROLLBACK TO SAVEPOINT import_inv')
+        const folioTaken = e.code === '23505' && (e.constraint || '').includes('number')
+        if (!folioTaken || i === candidates.length - 1) throw e
+      }
     }
 
     // CXC para cartera/aging: total en MXN, con lo ya cobrado allá como pagado.

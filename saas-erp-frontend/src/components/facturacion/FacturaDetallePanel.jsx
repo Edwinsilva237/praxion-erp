@@ -1369,7 +1369,12 @@ export function FacturaDetallePanel({ invoiceId, onClose }) {
       const r = await downloadFn()
       downloadBlob(r.data, `${invoice.document_number}${suffix}.${ext}`)
     } catch (e) {
-      setError(e.response?.data?.error || e.message || 'Error al descargar')
+      // responseType:'blob' → el JSON de error del servidor llega como Blob.
+      let msg = e.response?.data?.error
+      if (!msg && e.response?.data instanceof Blob) {
+        try { msg = JSON.parse(await e.response.data.text()).error } catch { /* no-json */ }
+      }
+      setError(msg || e.message || 'Error al descargar')
     } finally {
       setLoadingAction(null)
     }

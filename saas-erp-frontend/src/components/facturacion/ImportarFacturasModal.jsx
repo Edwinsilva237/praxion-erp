@@ -250,6 +250,7 @@ export function ImportarFacturasModal({ onClose, onImported }) {
                       <td><StatusChip s={r.status} /></td>
                       <td className="text-xs text-ink-muted">
                         {r.status === 'error' ? <span className="text-status-danger">{r.error}</span>
+                          : r.backupAdded ? 'Se agregó el PDF de respaldo a la factura ya importada'
                           : r.customerCreated ? 'Cliente creado automáticamente'
                           : ''}
                       </td>
