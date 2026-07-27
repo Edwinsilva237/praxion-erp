@@ -119,6 +119,13 @@ export const invoicingApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     }).then(r => r.data),
 
+  // Exportación por cliente/periodo. El ZIP baja cada XML/PDF del timbrador,
+  // así que puede tardar — timeout largo propio.
+  exportExcel: (params) =>
+    api.get(`${B}/export/excel`, { params, responseType: 'blob' }),
+  exportZip: (params) =>
+    api.get(`${B}/export/zip`, { params, responseType: 'blob', timeout: 300000 }),
+
   // Descargas — devuelven blob para que el componente cree URL temporal
   downloadXmlStamped: (id) =>
     api.get(`${B}/invoices/${id}/xml-stamped`, { responseType: 'blob' }),

@@ -12,6 +12,7 @@ import Can from '@/components/auth/Can'
 import CollapsibleFilters from '@/components/ui/CollapsibleFilters'
 import { FacturaFormModal } from '@/components/facturacion/FacturaFormModal'
 import { ImportarFacturasModal } from '@/components/facturacion/ImportarFacturasModal'
+import { ExportarFacturasModal } from '@/components/facturacion/ExportarFacturasModal'
 import { FacturaDetallePanel } from '@/components/facturacion/FacturaDetallePanel'
 import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import DocLink from '@/components/ui/DocLink'
@@ -37,6 +38,7 @@ export default function Facturacion() {
 
   const [showForm, setShowForm]         = useState(false)
   const [showImport, setShowImport]     = useState(false)
+  const [showExport, setShowExport]     = useState(false)
   const qc = useQueryClient()
   const { selectedId, setSelectedId, close: closeDoc, href: docHref } = useDeepLinkDoc('/facturacion')
   const [createdMsg, setCreatedMsg]     = useState(null)
@@ -83,6 +85,9 @@ export default function Facturacion() {
           <p className="text-xs text-ink-muted mt-0.5">CFDI 4.0 — genera, timbra y envía facturas a tus clientes</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+          <button onClick={() => setShowExport(true)} className="btn-secondary w-full justify-center sm:w-auto">
+            ⬇️ Exportar
+          </button>
           <Can do="invoicing:create">
             <button onClick={() => setShowImport(true)} className="btn-secondary w-full justify-center sm:w-auto">
               ⬆️ Importar XML
@@ -305,6 +310,15 @@ export default function Facturacion() {
             qc.invalidateQueries({ queryKey: ['cxc'] })
             qc.invalidateQueries({ queryKey: ['account-statement'] })
           }}
+        />
+      )}
+
+      {showExport && (
+        <ExportarFacturasModal
+          onClose={() => setShowExport(false)}
+          initialPartner={partner}
+          initialFrom={from}
+          initialTo={to}
         />
       )}
 

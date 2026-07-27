@@ -103,6 +103,55 @@ router.post('/import',
   }
 )
 
+// ─── Exportación por cliente/periodo (Excel y ZIP de XML/PDF) ────────────────
+
+const exportService = require('./exportService')
+
+function readExportQuery(req) {
+  const { partnerId, dateFrom, dateTo } = req.query
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom || '') || !/^\d{4}-\d{2}-\d{2}$/.test(dateTo || '')) {
+    throw Object.assign(new Error('Se requiere el periodo: dateFrom y dateTo (AAAA-MM-DD).'), { status: 400 })
+  }
+  const flag = (v) => v === '1' || v === 'true'
+  return {
+    tenantId: req.tenant.id,
+    partnerId: partnerId || null,
+    dateFrom, dateTo,
+    includeCancelled:   flag(req.query.includeCancelled),
+    includeCreditNotes: flag(req.query.includeCreditNotes),
+    includeComplements: flag(req.query.includeComplements),
+  }
+}
+
+const exportFilename = (req, ext) =>
+  `Facturas_${req.query.dateFrom}_a_${req.query.dateTo}.${ext}`
+
+/** GET /api/invoicing/export/excel — listado en Excel del filtro. */
+router.get('/export/excel', checkPermission('invoicing', 'read'), async (req, res, next) => {
+  try {
+    const buf = await exportService.generateExcel(readExportQuery(req))
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    res.setHeader('Content-Disposition', `attachment; filename="${exportFilename(req, 'xlsx')}"`)
+    res.send(buf)
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+
+/** GET /api/invoicing/export/zip — XML/PDF del filtro (+ Resumen.xlsx). */
+router.get('/export/zip', checkPermission('invoicing', 'read'), async (req, res, next) => {
+  try {
+    const buf = await exportService.generateZip(readExportQuery(req))
+    res.setHeader('Content-Type', 'application/zip')
+    res.setHeader('Content-Disposition', `attachment; filename="${exportFilename(req, 'zip')}"`)
+    res.send(buf)
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+
 /**
  * GET /api/invoicing/invoices
  * Lista facturas emitidas con filtros.
