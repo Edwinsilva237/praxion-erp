@@ -1282,12 +1282,21 @@ async function cancelInvoice({ tenantId, invoiceId, reason, userId, ipAddress, u
 async function deleteDraftInvoice({ tenantId, invoiceId, userId, ipAddress, userAgent }) {
   return withTransaction(async (client) => {
     const { rows } = await client.query(
-      `SELECT id, document_number, status, cfdi_uuid, delivery_note_id
+      `SELECT id, document_number, status, cfdi_uuid, delivery_note_id, source
          FROM invoices WHERE id = $1 AND tenant_id = $2`,
       [invoiceId, tenantId]
     )
     if (!rows.length) throw createError(404, 'Factura no encontrada.')
     const invoice = rows[0]
+
+    // Una factura IMPORTADA (timbrada en otro sistema) sí puede eliminarse:
+    // aquí solo es un espejo para cobranza — "des-importar" permite corregir
+    // una importación con datos equivocados y volverla a subir. Candados: sin
+    // cobros registrados AQUÍ y sin REPs timbrados desde este ERP.
+    if (invoice.source === 'imported') {
+      return deleteImportedInvoice(client, { tenantId, invoice, userId, ipAddress, userAgent })
+    }
+
     if (invoice.status !== 'draft' || invoice.cfdi_uuid) {
       throw createError(409,
         'Solo se pueden eliminar facturas en borrador no timbradas. Una factura timbrada debe cancelarse ante el SAT.')
@@ -1335,6 +1344,57 @@ async function deleteDraftInvoice({ tenantId, invoiceId, userId, ipAddress, user
 
     return { id: invoiceId, document_number: invoice.document_number }
   })
+}
+
+/**
+ * "Des-importar": elimina una factura source='imported' junto con su CXC y sus
+ * respaldos XML/PDF, para poder re-importarla (p.ej. si el XML se leyó mal).
+ * Corre DENTRO de la transacción de deleteDraftInvoice.
+ */
+async function deleteImportedInvoice(client, { tenantId, invoice, userId, ipAddress, userAgent }) {
+  const invoiceId = invoice.id
+
+  // Cobros registrados EN ESTE ERP (los del sistema anterior solo viven como
+  // amount_paid inicial, sin renglones de pago) → primero reversar el pago.
+  const { rows: pays } = await client.query(
+    `SELECT 1 FROM ar_payments arp
+       JOIN accounts_receivable ar ON ar.id = arp.ar_id
+      WHERE ar.tenant_id = $1 AND ar.document_type = 'invoice' AND ar.document_id = $2
+      LIMIT 1`, [tenantId, invoiceId])
+  if (pays.length) {
+    throw createError(409,
+      'Esta factura importada tiene cobros registrados en el ERP. Reversa esos pagos antes de eliminarla.')
+  }
+
+  // REPs timbrados desde este ERP (documentos fiscales vivos ante el SAT).
+  const { rows: reps } = await client.query(
+    `SELECT 1 FROM payment_complements
+      WHERE tenant_id = $1 AND invoice_id = $2 AND status = 'stamped' LIMIT 1`,
+    [tenantId, invoiceId])
+  if (reps.length) {
+    throw createError(409,
+      'Esta factura importada ya tiene complementos de pago timbrados desde este ERP; no se puede eliminar.')
+  }
+
+  await client.query(
+    `DELETE FROM accounts_receivable
+      WHERE tenant_id = $1 AND document_type = 'invoice' AND document_id = $2`,
+    [tenantId, invoiceId])
+  // Respaldos XML/PDF (los archivos en storage quedan huérfanos; aceptable).
+  await client.query(
+    `DELETE FROM attachments
+      WHERE tenant_id = $1 AND entity_type = 'invoice' AND entity_id = $2`,
+    [tenantId, invoiceId])
+  await client.query(`DELETE FROM invoices WHERE id = $1 AND tenant_id = $2`, [invoiceId, tenantId])
+
+  await audit({
+    tenantId, userId, action: 'invoice.import_deleted',
+    resource: 'invoices', resourceId: invoiceId,
+    payload: { documentNumber: invoice.document_number, cfdiUuid: invoice.cfdi_uuid },
+    ipAddress, userAgent,
+  })
+
+  return { id: invoiceId, document_number: invoice.document_number, imported: true }
 }
 
 /**

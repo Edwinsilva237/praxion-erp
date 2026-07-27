@@ -1283,6 +1283,7 @@ export function FacturaDetallePanel({ invoiceId, onClose }) {
     mutationFn: () => invoicingApi.remove(invoiceId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['invoices'] })
+      qc.invalidateQueries({ queryKey: ['cxc'] })   // des-importar borra también su CXC
       onClose()
     },
     onError: (e) => setError(e.response?.data?.error || e.message || 'Error al eliminar'),
@@ -1649,10 +1650,23 @@ export function FacturaDetallePanel({ invoiceId, onClose }) {
                       </>
                     )}
                     {invoice.source === 'imported' && (
-                      <span className="text-xs text-ink-muted italic self-center"
-                        title="Timbrada en otro sistema e importada. El XML/PDF descargable es el respaldo importado; correo, nota de crédito y cancelación SAT se hacen desde el SAT o el sistema original.">
-                        📥 Importada de otro sistema — cancelación/NC vía SAT
-                      </span>
+                      <>
+                        <Can do="invoicing:delete">
+                          <Btn label="Eliminar importada" variant="danger" action="delete-draft"
+                            icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                            </svg>}
+                            onClick={() => {
+                              if (!confirm(`Eliminar la factura importada ${invoice.document_number} del ERP? La factura sigue vigente ante el SAT — aquí solo se quita el registro y su cuenta por cobrar, y podrás volver a importar el XML (útil si se importó con datos equivocados). No se puede si ya tiene cobros o complementos registrados aquí.`)) return
+                              setError(null); setMsg(null); setLoadingAction('delete-draft'); deleteMutation.mutate()
+                            }}
+                          />
+                        </Can>
+                        <span className="text-xs text-ink-muted italic self-center"
+                          title="Timbrada en otro sistema e importada. El XML/PDF descargable es el respaldo importado; correo, nota de crédito y cancelación SAT se hacen desde el SAT o el sistema original.">
+                          📥 Importada de otro sistema — cancelación/NC vía SAT
+                        </span>
+                      </>
                     )}
                   </>
                 )}

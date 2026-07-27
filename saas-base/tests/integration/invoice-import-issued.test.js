@@ -335,6 +335,79 @@ test('POST /invoicing/import/parse y /invoicing/import (multipart) funcionan', a
   expect(parseFloat(rows[0].imported_initial_balance)).toBeCloseTo(500, 2)
 })
 
+test('parser: XML con Total ANTES de SubTotal → lee el total CON IVA (no el subtotal)', async () => {
+  // El orden de atributos varía según el sistema emisor. Regresión: "SubTotal"
+  // termina en "Total" y el regex capturaba el subtotal cuando venía después.
+  const uuid = 'ff000070-0000-0000-0000-000000000070'
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Serie="F" Folio="70" Fecha="2026-06-15T12:00:00" Total="1160.00" Moneda="MXN" SubTotal="1000.00" TipoDeComprobante="I" MetodoPago="PUE">
+  <cfdi:Emisor Rfc="${TENANT_RFC}" Nombre="TENANT TEST SA" RegimenFiscal="601"/>
+  <cfdi:Receptor Rfc="${CUSTOMER_RFC}" Nombre="Cliente Migrado SA" DomicilioFiscalReceptor="64000" RegimenFiscalReceptor="601" UsoCFDI="G03"/>
+  <cfdi:Conceptos><cfdi:Concepto Cantidad="1" ClaveUnidad="H87" Descripcion="X" ValorUnitario="1000.00" Importe="1000.00"/></cfdi:Conceptos>
+  <cfdi:Complemento><tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" UUID="${uuid}"/></cfdi:Complemento>
+</cfdi:Comprobante>`
+  const p = await importIssuedService.parseBatch({ tenantId, files: [toFile(xml)] })
+  expect(p.rows[0].status).toBe('ok')
+  expect(p.rows[0].total).toBeCloseTo(1160, 2)
+  expect(p.rows[0].subtotal).toBeCloseTo(1000, 2)
+
+  const out = await importIssuedService.importBatch({ tenantId, userId, files: [toFile(xml)] })
+  expect(out.summary.created).toBe(1)
+  const { rows: inv } = await withBypass(() => query(
+    `SELECT total, subtotal FROM invoices WHERE tenant_id = $1 AND cfdi_uuid = $2`,
+    [tenantId, uuid]))
+  expect(parseFloat(inv[0].total)).toBeCloseTo(1160, 2)
+  expect(parseFloat(inv[0].subtotal)).toBeCloseTo(1000, 2)
+})
+
+test('DELETE de una importada = des-importar (borra CXC + respaldos) y permite re-importar', async () => {
+  const uuid = 'ff000071-0000-0000-0000-000000000071'
+  const files = [toFile(issuedXml({ uuid, folio: '71' }))]
+  await importIssuedService.importBatch({ tenantId, userId, files })
+  const { rows: inv } = await withBypass(() => query(
+    `SELECT id FROM invoices WHERE tenant_id = $1 AND cfdi_uuid = $2`, [tenantId, uuid]))
+
+  const del = await request(app)
+    .delete(`/api/invoicing/invoices/${inv[0].id}`)
+    .set({ 'X-Tenant-Slug': slug, Authorization: `Bearer ${authToken}` })
+  expect(del.status).toBe(200)
+
+  const check = async (sql, params) =>
+    (await withBypass(() => query(sql, params))).rows.length
+  expect(await check(`SELECT 1 FROM invoices WHERE id = $1`, [inv[0].id])).toBe(0)
+  expect(await check(
+    `SELECT 1 FROM accounts_receivable WHERE tenant_id = $1 AND document_type='invoice' AND document_id = $2`,
+    [tenantId, inv[0].id])).toBe(0)
+  expect(await check(
+    `SELECT 1 FROM attachments WHERE tenant_id = $1 AND entity_type='invoice' AND entity_id = $2`,
+    [tenantId, inv[0].id])).toBe(0)
+
+  // Ya no es duplicada: se puede volver a importar (p.ej. con el total corregido).
+  const again = await importIssuedService.importBatch({ tenantId, userId, files })
+  expect(again.summary.created).toBe(1)
+})
+
+test('DELETE de una importada CON cobro local → 409 (reversar el pago primero)', async () => {
+  const uuid = 'ff000072-0000-0000-0000-000000000072'
+  await importIssuedService.importBatch({
+    tenantId, userId, files: [toFile(issuedXml({ uuid, folio: '72' }))],
+  })
+  const { rows: inv } = await withBypass(() => query(
+    `SELECT id FROM invoices WHERE tenant_id = $1 AND cfdi_uuid = $2`, [tenantId, uuid]))
+  const { rows: ar } = await withBypass(() => query(
+    `SELECT id FROM accounts_receivable
+      WHERE tenant_id = $1 AND document_type='invoice' AND document_id = $2`, [tenantId, inv[0].id]))
+  await withBypass(() => query(
+    `INSERT INTO ar_payments (tenant_id, ar_id, amount, payment_date, payment_method, created_by)
+     VALUES ($1,$2,100,'2026-07-01','transfer',$3)`, [tenantId, ar[0].id, userId]))
+
+  const del = await request(app)
+    .delete(`/api/invoicing/invoices/${inv[0].id}`)
+    .set({ 'X-Tenant-Slug': slug, Authorization: `Bearer ${authToken}` })
+  expect(del.status).toBe(409)
+  expect(del.body.error).toMatch(/cobros registrados/i)
+})
+
 // ── PDFs de respaldo ────────────────────────────────────────────────────────
 
 async function pdfBackupsOf(uuid) {

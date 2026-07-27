@@ -75,9 +75,11 @@ function parseXMLCFDI(buffer) {
   const fecha = extractXMLAttr(xml, /Comprobante[^>]+Fecha="([^"]+)"/i)
   const invoiceDate = fecha ? fecha.split('T')[0] : null
 
-  // Totales
-  const subtotal = parseFloat(extractXMLAttr(xml, /Comprobante[^>]+SubTotal="([^"]+)"/i) || '0')
-  const total    = parseFloat(extractXMLAttr(xml, /Comprobante[^>]+Total="([^"]+)"/i) || '0')
+  // Totales. OJO: "SubTotal" termina en "Total" — sin el \s delante, un XML con
+  // los atributos en orden Total="…" SubTotal="…" hacía que Total capturara el
+  // valor del SubTotal (el orden de atributos varía según el PAC/sistema emisor).
+  const subtotal = parseFloat(extractXMLAttr(xml, /Comprobante[^>]+\sSubTotal="([^"]+)"/i) || '0')
+  const total    = parseFloat(extractXMLAttr(xml, /Comprobante[^>]+\sTotal="([^"]+)"/i) || '0')
   const tax      = parseFloat((total - subtotal).toFixed(2))
 
   // Moneda y tipo de cambio
