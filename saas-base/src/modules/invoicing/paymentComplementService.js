@@ -102,10 +102,13 @@ async function createPaymentComplement({
     if (!invRows.length) throw createError(404, 'Factura PPD timbrada no encontrada.')
     const inv = invRows[0]
 
-    // Extraer facturapi_id de la factura original
+    // Las facturas del sistema deben traer su facturapi_id; las IMPORTADAS
+    // (timbradas en otro sistema) no lo tienen ni lo necesitan — el REP
+    // referencia por cfdi_uuid crudo.
     const match = (inv.notes || '').match(/\[facturapi_id:([^\]]+)\]/)
-    if (!match) throw createError(500, 'No se encontró el ID de Facturapi en la factura.')
-    const facturApiInvoiceId = match[1]
+    if (!match && inv.source !== 'imported') {
+      throw createError(500, 'No se encontró el ID de Facturapi en la factura.')
+    }
 
     const facturapi = await getFacturapiForTenant(tenantId)
 
@@ -114,6 +117,29 @@ async function createPaymentComplement({
     const taxRate    = 0.16
     const base       = parseFloat((amountNum / (1 + taxRate)).toFixed(2))
     const taxAmount  = parseFloat((amountNum - base).toFixed(2))
+
+    // Parcialidad/saldo: histórico para facturas del sistema; para importadas
+    // se continúa la numeración del sistema anterior (misma regla que la
+    // versión de grupo — ver stampPaymentComplementGroup).
+    let installment = 1
+    let lastBalance = parseFloat(inv.total)
+    if (inv.source === 'imported') {
+      const { rows: prev } = await client.query(
+        `SELECT COUNT(*)::int AS n, COALESCE(SUM(amount), 0) AS paid
+           FROM payment_complements
+          WHERE tenant_id = $1 AND invoice_id = $2 AND status = 'stamped'`,
+        [tenantId, invoiceId]
+      )
+      const initial = inv.imported_initial_balance != null
+        ? parseFloat(inv.imported_initial_balance) : parseFloat(inv.total)
+      installment = (parseInt(inv.imported_installments, 10) || 0) + prev[0].n + 1
+      lastBalance = parseFloat((initial - parseFloat(prev[0].paid)).toFixed(2))
+      if (lastBalance < amountNum) {
+        throw createError(422,
+          `El complemento excede el saldo insoluto de la factura ` +
+          `(saldo ${lastBalance.toFixed(2)}, pago ${amountNum.toFixed(2)}).`)
+      }
+    }
 
     // Armar payload del complemento de pago para Facturapi
     const payload = {
@@ -135,8 +161,8 @@ async function createPaymentComplement({
             related_documents: [
               {
                 uuid:         inv.cfdi_uuid,
-                installment:  1,
-                last_balance: parseFloat(inv.total),
+                installment,
+                last_balance: lastBalance,
                 amount:       amountNum,
                 currency:     inv.currency,
                 taxes: [
@@ -248,6 +274,7 @@ async function stampPaymentComplementGroup(client, {
   const invoiceIds = docs.map(d => d.invoiceId)
   const { rows: invRows } = await client.query(
     `SELECT inv.id, inv.document_number, inv.cfdi_uuid, inv.total, inv.currency, inv.notes,
+            inv.source, inv.imported_installments, inv.imported_initial_balance,
             bp.name AS partner_name, bp.rfc AS partner_rfc,
             bp.facturapi_id AS partner_facturapi_id,
             bp.tax_regime_code AS partner_tax_regime,
@@ -259,11 +286,14 @@ async function stampPaymentComplementGroup(client, {
     [invoiceIds, tenantId]
   )
   const invById = new Map(invRows.map(r => [r.id, r]))
-  // Validar que todas existan y estén timbradas en Facturapi.
+  // Validar que todas existan y estén timbradas en Facturapi. Las IMPORTADAS
+  // (timbradas en otro sistema) no tienen facturapi_id y NO lo necesitan: el
+  // REP referencia la factura pagada por su cfdi_uuid crudo, que el SAT acepta
+  // aunque la haya timbrado otro PAC.
   for (const d of docs) {
     const inv = invById.get(d.invoiceId)
     if (!inv) throw createError(404, 'Factura PPD timbrada no encontrada.')
-    if (!/\[facturapi_id:([^\]]+)\]/.test(inv.notes || '')) {
+    if (inv.source !== 'imported' && !/\[facturapi_id:([^\]]+)\]/.test(inv.notes || '')) {
       throw createError(500, `No se encontró el ID de Facturapi en la factura ${inv.document_number}.`)
     }
   }
@@ -272,19 +302,47 @@ async function stampPaymentComplementGroup(client, {
   const facturapi = await getFacturapiForTenant(tenantId)
   const taxRate   = 0.16
 
-  const relatedDocuments = docs.map((d, i) => {
+  // Parcialidad y saldo anterior por factura. Para las del sistema se conserva
+  // el comportamiento histórico (parcialidad 1, saldo = total). Para las
+  // IMPORTADAS el SAT exige continuar la numeración del sistema anterior:
+  //   NumParcialidad = parcialidades importadas + REPs locales + 1
+  //   ImpSaldoAnt    = saldo al importar − Σ REPs locales (en moneda de la factura)
+  const relatedDocuments = []
+  for (const d of docs) {
     const inv       = invById.get(d.invoiceId)
     const amountNum = parseFloat(d.amount)
     const base      = parseFloat((amountNum / (1 + taxRate)).toFixed(2))
-    return {
+
+    let installment = 1
+    let lastBalance = parseFloat(inv.total)
+    if (inv.source === 'imported') {
+      const { rows: prev } = await client.query(
+        `SELECT COUNT(*)::int AS n, COALESCE(SUM(amount), 0) AS paid
+           FROM payment_complements
+          WHERE tenant_id = $1 AND invoice_id = $2 AND status = 'stamped'`,
+        [tenantId, d.invoiceId]
+      )
+      const initial = inv.imported_initial_balance != null
+        ? parseFloat(inv.imported_initial_balance) : parseFloat(inv.total)
+      installment = (parseInt(inv.imported_installments, 10) || 0) + prev[0].n + 1
+      lastBalance = parseFloat((initial - parseFloat(prev[0].paid)).toFixed(2))
+      if (lastBalance < amountNum) {
+        throw createError(422,
+          `El complemento de ${inv.document_number} excede el saldo insoluto ` +
+          `(saldo ${lastBalance.toFixed(2)}, pago ${amountNum.toFixed(2)}). ` +
+          `Revisa el saldo/parcialidades capturados al importarla.`)
+      }
+    }
+
+    relatedDocuments.push({
       uuid:         inv.cfdi_uuid,
-      installment:  1,
-      last_balance: parseFloat(inv.total),
+      installment,
+      last_balance: lastBalance,
       amount:       amountNum,
       currency:     inv.currency,
       taxes: [{ base, type: 'IVA', rate: taxRate }],
-    }
-  })
+    })
+  }
 
   const payload = {
     type: 'P',

@@ -1431,10 +1431,137 @@ function InboxModal({ onClose }) {
   )
 }
 
+// ── Modal: importar CFDI en lote (migración desde otro sistema) ─────────────
+function ImportModal({ onClose, onImported }) {
+  const [files, setFiles] = useState([])
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState(null)
+  const inputRef = useRef(null)
+
+  const imp = useMutation({
+    mutationFn: () => {
+      const fd = new FormData()
+      files.forEach(f => fd.append('files', f))
+      return purchasesApi.importExpenseDocuments(fd)
+    },
+    onSuccess: (data) => { setResult(data); setFiles([]); onImported() },
+    onError: (e) => setError(e.response?.data?.error || e.message),
+  })
+
+  function pickFiles(e) {
+    const picked = Array.from(e.target.files || [])
+    if (picked.length) { setFiles(picked); setError(null) }
+    e.target.value = ''   // permite volver a elegir los mismos archivos
+  }
+
+  const STATUS = {
+    created:   ['badge-green', 'Creado'],
+    duplicate: ['badge-blue',  'Ya existía'],
+    error:     ['badge-red',   'Error'],
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">
+      <div className="card w-full max-w-2xl p-6 flex flex-col gap-4 max-h-[92vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-ink-primary">⬆️ Importar facturas (XML)</h2>
+          <button type="button" onClick={onClose} className="btn-ghost btn-icon text-ink-muted">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <p className="text-sm text-ink-secondary">
+          Sube los <strong>CFDI XML</strong> de facturas de tus proveedores (también acepta PDF
+          o un <strong>.zip</strong> con varios). Cada factura se registra como gasto emparejando
+          al proveedor por RFC; los complementos de pago (REP) se van a su módulo. Los UUID ya
+          registrados no se duplican, así que puedes re-subir sin miedo.
+        </p>
+
+        {!result && (
+          <>
+            <input ref={inputRef} type="file" multiple accept=".xml,.zip,.pdf" className="hidden" onChange={pickFiles} />
+            <button type="button" onClick={() => inputRef.current?.click()}
+              className="border-2 border-dashed border-line rounded-lg p-6 text-center text-sm text-ink-muted hover:border-brand-500/60 hover:text-ink-secondary">
+              {files.length
+                ? <>{files.length} archivo(s) seleccionado(s) — <span className="underline">cambiar</span></>
+                : <>Haz clic para elegir archivos (XML, ZIP o PDF, hasta 50)</>}
+            </button>
+
+            {files.length > 0 && (
+              <ul className="text-xs text-ink-secondary max-h-40 overflow-y-auto flex flex-col gap-1">
+                {files.map((f, i) => (
+                  <li key={i} className="truncate font-mono">{f.name}</li>
+                ))}
+              </ul>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={onClose} className="btn-ghost">Cancelar</button>
+              <button type="button" onClick={() => imp.mutate()} disabled={!files.length || imp.isPending}
+                className="btn-primary">
+                {imp.isPending ? <Spinner size="sm" /> : `Importar ${files.length || ''} archivo(s)`}
+              </button>
+            </div>
+          </>
+        )}
+
+        {result && (
+          <>
+            <div className="flex flex-wrap gap-2 text-sm">
+              <span className="badge-green">Creados: {result.summary.created}</span>
+              <span className="badge-blue">Ya existían: {result.summary.duplicates}</span>
+              {result.summary.complements > 0 && (
+                <span className="badge-purple">Complementos de pago: {result.summary.complements}</span>
+              )}
+              {result.summary.errors > 0 && (
+                <span className="badge-red">Errores: {result.summary.errors}</span>
+              )}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="table w-full text-sm">
+                <thead>
+                  <tr><th className="text-left">Archivo</th><th className="text-left">Resultado</th><th className="text-left">Detalle</th></tr>
+                </thead>
+                <tbody>
+                  {result.results.map((r, i) => {
+                    const [cls, label] = STATUS[r.status] || ['badge-gray', r.status]
+                    return (
+                      <tr key={i}>
+                        <td className="font-mono text-xs truncate max-w-[14rem]">{r.filename}</td>
+                        <td><span className={cls}>{label}</span></td>
+                        <td className="text-xs text-ink-muted">
+                          {r.status === 'error' ? r.error
+                            : r.kind === 'payment_complement' ? 'Complemento de pago (REP)'
+                            : r.supplierMatched === false ? 'Proveedor no encontrado: quedó como genérico'
+                            : ''}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setResult(null)} className="btn-secondary">Importar más</button>
+              <button type="button" onClick={onClose} className="btn-primary">Listo</button>
+            </div>
+          </>
+        )}
+
+        {error && <div className="alert-error text-sm">{error}</div>}
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 export default function Gastos() {
   const qc = useQueryClient()
   const [showModal, setShowModal] = useState(false)
   const [showInbox, setShowInbox] = useState(false)
+  const [showImport, setShowImport] = useState(false)
   const [detailId, setDetailId]   = useState(null)
   const [filterCat, setFilterCat] = useState('')
   const [filterCfdi, setFilterCfdi] = useState('')
@@ -1498,6 +1625,11 @@ export default function Gastos() {
           <Can do="expenses:read">
             <button onClick={() => setShowInbox(true)} className="btn-secondary w-full sm:w-auto">
               📧 Buzón de facturas
+            </button>
+          </Can>
+          <Can do="expenses:create">
+            <button onClick={() => setShowImport(true)} className="btn-secondary w-full sm:w-auto">
+              ⬆️ Importar XML
             </button>
           </Can>
           <Can do="expenses:create">
@@ -1659,6 +1791,15 @@ export default function Gastos() {
           onClose={() => setDetailId(null)} onSaved={handleSaved} />
       )}
       {showInbox && <InboxModal onClose={() => setShowInbox(false)} />}
+      {showImport && (
+        <ImportModal onClose={() => setShowImport(false)} onImported={() => {
+          qc.invalidateQueries({ queryKey: ['expenses'] })
+          qc.invalidateQueries({ queryKey: ['expenses-summary'] })
+          qc.invalidateQueries({ queryKey: ['cxp'] })
+          qc.invalidateQueries({ queryKey: ['complementos'] })
+          qc.invalidateQueries({ queryKey: ['complementos-compliance'] })
+        }} />
+      )}
     </div>
   )
 }

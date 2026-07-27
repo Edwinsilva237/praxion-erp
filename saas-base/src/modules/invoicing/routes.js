@@ -13,6 +13,22 @@ const stampService               = require('./stampService')
 const { enqueueInvoiceStamp, getStampJobStatus } = require('../../queues/invoicingQueue')
 const paymentComplementService   = require('./paymentComplementService')
 const creditNoteService          = require('./creditNoteService')
+const importIssuedService        = require('./importIssuedService')
+
+// Multer para importar CFDI emitidos en otro sistema (XML o .zip con varios).
+const multer = require('multer')
+const uploadImport = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024, files: 50 }, // 25MB c/u, 50 por lote
+  fileFilter: (_req, file, cb) => {
+    const allowed = ['text/xml', 'application/xml', 'application/pdf',
+      'application/zip', 'application/x-zip-compressed', 'application/octet-stream']
+    const extOk = file.originalname.toLowerCase().match(/\.(xml|pdf|zip)$/)
+    allowed.includes(file.mimetype) || extOk
+      ? cb(null, true)
+      : cb(new Error('Solo se permiten archivos XML, PDF o ZIP.'))
+  },
+})
 
 const router = express.Router()
 
@@ -20,6 +36,72 @@ router.use(tenantResolver)
 router.use(authGuard)
 router.use(requireActiveTenant)
 router.use(requireModule('invoicing'))
+
+/**
+ * POST /api/invoicing/import/parse
+ * PASO 1 de la importación de facturas emitidas en OTRO sistema: parsea los
+ * XML (campo 'files', acepta .zip) y devuelve el preview SIN guardar — cliente
+ * emparejado por RFC receptor, duplicados por UUID, errores por archivo.
+ */
+router.post('/import/parse',
+  checkPermission('invoicing', 'create'),
+  uploadImport.array('files', 50),
+  async (req, res, next) => {
+    try {
+      if (!req.files?.length) {
+        return res.status(400).json({ error: 'Se requiere al menos un archivo XML o ZIP (campo files).' })
+      }
+      const result = await importIssuedService.parseBatch({
+        tenantId: req.tenant.id,
+        files: req.files.map(f => ({
+          filename: f.originalname, mimetype: f.mimetype,
+          contentBase64: f.buffer.toString('base64'),
+        })),
+      })
+      res.json(result)
+    } catch (err) {
+      if (err.status) return res.status(err.status).json({ error: err.message })
+      next(err)
+    }
+  }
+)
+
+/**
+ * POST /api/invoicing/import
+ * PASO 2: importa el lote. Además de 'files', acepta el campo de texto
+ * 'adjustments' (JSON: { [uuid]: { balance, installments } }) para indicar el
+ * saldo insoluto real y las parcialidades de REP ya emitidas por factura PPD.
+ * Cada factura queda 'stamped' con source='imported' + su CXC en cartera.
+ */
+router.post('/import',
+  checkPermission('invoicing', 'create'),
+  uploadImport.array('files', 50),
+  async (req, res, next) => {
+    try {
+      if (!req.files?.length) {
+        return res.status(400).json({ error: 'Se requiere al menos un archivo XML o ZIP (campo files).' })
+      }
+      let adjustments = {}
+      if (req.body.adjustments) {
+        try { adjustments = JSON.parse(req.body.adjustments) }
+        catch { return res.status(400).json({ error: 'adjustments debe ser JSON válido.' }) }
+      }
+      const result = await importIssuedService.importBatch({
+        tenantId: req.tenant.id, userId: req.auth.userId,
+        files: req.files.map(f => ({
+          filename: f.originalname, mimetype: f.mimetype,
+          contentBase64: f.buffer.toString('base64'),
+        })),
+        adjustments,
+        ipAddress: req.ip, userAgent: req.get('user-agent'),
+      })
+      res.json(result)
+    } catch (err) {
+      if (err.status) return res.status(err.status).json({ error: err.message })
+      next(err)
+    }
+  }
+)
 
 /**
  * GET /api/invoicing/invoices
@@ -325,13 +407,48 @@ router.post('/invoices/:id/reconcile', checkPermission('invoicing', 'update'), a
  * GET /api/invoicing/invoices/:id/xml-stamped
  * Descarga el XML timbrado oficial desde Facturapi.
  */
+// Para facturas IMPORTADAS (timbradas en otro sistema) no hay Facturapi: se
+// sirve el respaldo XML/PDF guardado al importar. TODO endpoint que sirve
+// archivo al navegador DEBE usar storage.serve con proxy:true (gotcha R2/CORS).
+async function serveImportedBackup(res, { tenantId, invoiceId, docNumber, kind }) {
+  const storage = require('../../utils/storage')
+  const { rows } = await require('../../db').query(
+    `SELECT storage_path, mime_type, filename FROM attachments
+      WHERE tenant_id = $1 AND entity_type = 'invoice' AND entity_id = $2
+        AND category = 'cfdi'
+      ORDER BY created_at`,
+    [tenantId, invoiceId]
+  )
+  const att = rows.find(a => kind === 'xml'
+    ? (a.mime_type || '').includes('xml') || (a.filename || '').toLowerCase().endsWith('.xml')
+    : (a.mime_type || '').includes('pdf') || (a.filename || '').toLowerCase().endsWith('.pdf'))
+  if (!att) {
+    res.status(404).json({ error: kind === 'xml'
+      ? 'Esta factura importada no tiene XML de respaldo guardado.'
+      : 'Esta factura importada no tiene PDF de respaldo (el sistema anterior no lo incluyó al importar).' })
+    return
+  }
+  await storage.serve(res, att.storage_path, {
+    filename: `${docNumber}.${kind}`,
+    mimeType: kind === 'xml' ? 'application/xml' : 'application/pdf',
+    disposition: 'attachment',
+    proxy: true,
+  })
+}
+
 router.get('/invoices/:id/xml-stamped', checkPermission('invoicing', 'read'), async (req, res, next) => {
   try {
     const { rows } = await require('../../db').query(
-      `SELECT document_number FROM invoices WHERE id = $1 AND tenant_id = $2`,
+      `SELECT document_number, source FROM invoices WHERE id = $1 AND tenant_id = $2`,
       [req.params.id, req.tenant.id]
     )
     if (!rows.length) return res.status(404).json({ error: 'Factura no encontrada.' })
+    if (rows[0].source === 'imported') {
+      return serveImportedBackup(res, {
+        tenantId: req.tenant.id, invoiceId: req.params.id,
+        docNumber: rows[0].document_number, kind: 'xml',
+      })
+    }
     const stream = await stampService.downloadXML({ invoiceId: req.params.id, tenantId: req.tenant.id })
     res.setHeader('Content-Type', 'application/xml')
     res.setHeader('Content-Disposition', `attachment; filename="${rows[0].document_number}.xml"`)
@@ -341,15 +458,21 @@ router.get('/invoices/:id/xml-stamped', checkPermission('invoicing', 'read'), as
 
 /**
  * GET /api/invoicing/invoices/:id/pdf-stamped
- * Descarga el PDF oficial desde Facturapi.
+ * Descarga el PDF oficial desde Facturapi (o el respaldo si es importada).
  */
 router.get('/invoices/:id/pdf-stamped', checkPermission('invoicing', 'read'), async (req, res, next) => {
   try {
     const { rows } = await require('../../db').query(
-      `SELECT document_number FROM invoices WHERE id = $1 AND tenant_id = $2`,
+      `SELECT document_number, source FROM invoices WHERE id = $1 AND tenant_id = $2`,
       [req.params.id, req.tenant.id]
     )
     if (!rows.length) return res.status(404).json({ error: 'Factura no encontrada.' })
+    if (rows[0].source === 'imported') {
+      return serveImportedBackup(res, {
+        tenantId: req.tenant.id, invoiceId: req.params.id,
+        docNumber: rows[0].document_number, kind: 'pdf',
+      })
+    }
     const stream = await stampService.downloadPDF({ invoiceId: req.params.id, tenantId: req.tenant.id })
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', `attachment; filename="${rows[0].document_number}.pdf"`)

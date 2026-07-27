@@ -403,7 +403,7 @@ async function syncInvoiceWithSAT({ tenantId, invoiceId, userId, ipAddress, user
   const facturapi = await getFacturapiForTenant(tenantId)
 
   const { rows } = await query(
-    `SELECT id, document_number, status, cfdi_uuid, notes, delivery_note_id, total_mxn
+    `SELECT id, document_number, status, cfdi_uuid, notes, delivery_note_id, total_mxn, source
        FROM invoices WHERE id = $1 AND tenant_id = $2`,
     [invoiceId, tenantId]
   )
@@ -411,6 +411,11 @@ async function syncInvoiceWithSAT({ tenantId, invoiceId, userId, ipAddress, user
   const local = rows[0]
   if (local.status === 'draft') {
     throw createError(400, 'Factura en borrador — no está en SAT todavía.')
+  }
+  if (local.source === 'imported') {
+    throw createError(409,
+      'Factura importada de otro sistema: no se puede sincronizar con Facturapi ' +
+      '(la timbró otro PAC). Verifica su estado directamente en el portal del SAT.')
   }
   const match = (local.notes || '').match(/\[facturapi_id:([^\]]+)\]/)
   if (!match) throw createError(500, 'No se encontró el ID de Facturapi en la factura.')
@@ -655,11 +660,17 @@ async function cancelStampedInvoice({ tenantId, invoiceId, motive, substitution,
  */
 async function getFacturapiId(invoiceId, tenantId) {
   const { rows } = await query(
-    `SELECT notes, cfdi_uuid, status FROM invoices WHERE id = $1 AND tenant_id = $2`,
+    `SELECT notes, cfdi_uuid, status, source FROM invoices WHERE id = $1 AND tenant_id = $2`,
     [invoiceId, tenantId]
   )
   if (!rows.length) throw createError(404, 'Factura no encontrada.')
   if (rows[0].status === 'draft') throw createError(400, 'La factura aún no está timbrada.')
+  if (rows[0].source === 'imported') {
+    throw createError(409,
+      'Esta factura fue timbrada en otro sistema (importada): esta operación depende ' +
+      'del PAC original y no está disponible aquí. El XML importado se puede descargar; ' +
+      'para cancelarla ante el SAT usa el portal del SAT.')
+  }
 
   const match = (rows[0].notes || '').match(/\[facturapi_id:([^\]]+)\]/)
   if (!match) throw createError(500, 'No se encontró el ID de Facturapi en la factura.')

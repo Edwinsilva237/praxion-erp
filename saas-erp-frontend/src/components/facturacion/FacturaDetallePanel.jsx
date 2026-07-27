@@ -1602,18 +1602,22 @@ export function FacturaDetallePanel({ invoiceId, onClose }) {
                       </svg>}
                       onClick={() => handleDownload('xml-stamped')}
                     />
-                    <Btn label="Enviar por correo" action="email"
-                      icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
-                      </svg>}
-                      onClick={() => setShowEmailModal(true)}
-                    />
-                    <Btn label="Nota de crédito" action="credit-note"
-                      icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M9 19l3 3m0 0l3-3m-3 3V10m0-3l3 3M9 7l3-3 3 3"/>
-                      </svg>}
-                      onClick={() => { setError(null); setMsg(null); setShowCreditNoteModal(true) }}
-                    />
+                    {invoice.source !== 'imported' && (
+                      <>
+                        <Btn label="Enviar por correo" action="email"
+                          icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                          </svg>}
+                          onClick={() => setShowEmailModal(true)}
+                        />
+                        <Btn label="Nota de crédito" action="credit-note"
+                          icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M9 19l3 3m0 0l3-3m-3 3V10m0-3l3 3M9 7l3-3 3 3"/>
+                          </svg>}
+                          onClick={() => { setError(null); setMsg(null); setShowCreditNoteModal(true) }}
+                        />
+                      </>
+                    )}
                     {invoice.payment_method === 'PPD' && (
                       <Btn label="Registrar pago" action="complement" variant="primary"
                         icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1622,19 +1626,29 @@ export function FacturaDetallePanel({ invoiceId, onClose }) {
                         onClick={() => { setError(null); setMsg(null); setShowComplementModal(true) }}
                       />
                     )}
-                    <Btn label="Sincronizar SAT" action="sync-sat"
-                      icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                      </svg>}
-                      onClick={() => { setError(null); setMsg(null); syncSatMutation.mutate() }}
-                      disabled={syncSatMutation.isPending}
-                    />
-                    <Btn label="Cancelar SAT" variant="danger" action="cancel-sat"
-                      icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
-                      </svg>}
-                      onClick={() => { setError(null); setMsg(null); setShowCancelSatModal(true) }}
-                    />
+                    {invoice.source !== 'imported' && (
+                      <>
+                        <Btn label="Sincronizar SAT" action="sync-sat"
+                          icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                          </svg>}
+                          onClick={() => { setError(null); setMsg(null); syncSatMutation.mutate() }}
+                          disabled={syncSatMutation.isPending}
+                        />
+                        <Btn label="Cancelar SAT" variant="danger" action="cancel-sat"
+                          icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+                          </svg>}
+                          onClick={() => { setError(null); setMsg(null); setShowCancelSatModal(true) }}
+                        />
+                      </>
+                    )}
+                    {invoice.source === 'imported' && (
+                      <span className="text-xs text-ink-muted italic self-center"
+                        title="Timbrada en otro sistema e importada. El XML/PDF descargable es el respaldo importado; correo, nota de crédito y cancelación SAT se hacen desde el SAT o el sistema original.">
+                        📥 Importada de otro sistema — cancelación/NC vía SAT
+                      </span>
+                    )}
                   </>
                 )}
 

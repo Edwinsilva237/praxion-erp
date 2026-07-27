@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { invoicingApi } from '@/api/invoicing'
 import { useDebounced } from '@/hooks/useDebounced'
 import { useTableSort } from '@/hooks/useTableSort'
@@ -11,6 +11,7 @@ import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
 import CollapsibleFilters from '@/components/ui/CollapsibleFilters'
 import { FacturaFormModal } from '@/components/facturacion/FacturaFormModal'
+import { ImportarFacturasModal } from '@/components/facturacion/ImportarFacturasModal'
 import { FacturaDetallePanel } from '@/components/facturacion/FacturaDetallePanel'
 import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import DocLink from '@/components/ui/DocLink'
@@ -35,6 +36,8 @@ export default function Facturacion() {
   const [page, setPage]                 = useState(1)
 
   const [showForm, setShowForm]         = useState(false)
+  const [showImport, setShowImport]     = useState(false)
+  const qc = useQueryClient()
   const { selectedId, setSelectedId, close: closeDoc, href: docHref } = useDeepLinkDoc('/facturacion')
   const [createdMsg, setCreatedMsg]     = useState(null)
 
@@ -79,14 +82,21 @@ export default function Facturacion() {
           <h1 className="text-xl font-semibold text-ink-primary">Facturación</h1>
           <p className="text-xs text-ink-muted mt-0.5">CFDI 4.0 — genera, timbra y envía facturas a tus clientes</p>
         </div>
-        <Can do="invoicing:create">
-          <button onClick={() => setShowForm(true)} className="btn-primary w-full justify-center sm:w-auto">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/>
-            </svg>
-            Nueva factura
-          </button>
-        </Can>
+        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+          <Can do="invoicing:create">
+            <button onClick={() => setShowImport(true)} className="btn-secondary w-full justify-center sm:w-auto">
+              ⬆️ Importar XML
+            </button>
+          </Can>
+          <Can do="invoicing:create">
+            <button onClick={() => setShowForm(true)} className="btn-primary w-full justify-center sm:w-auto">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/>
+              </svg>
+              Nueva factura
+            </button>
+          </Can>
+        </div>
       </div>
 
       {createdMsg && (
@@ -213,6 +223,10 @@ export default function Facturacion() {
                     <td className="text-xs">
                       {i.remission_number ? (
                         <span className="font-mono text-purple-300">{i.remission_number}</span>
+                      ) : i.source === 'imported' ? (
+                        <span className="badge-purple" title="Timbrada en otro sistema e importada para gestionar su cobranza aquí">
+                          Importada
+                        </span>
                       ) : (
                         <span className="text-ink-muted italic">Directa</span>
                       )}
@@ -279,6 +293,17 @@ export default function Facturacion() {
           onCreated={(inv) => {
             setCreatedMsg(`Factura ${inv.document_number} generada. ${inv.message || 'Recuerda timbrarla para que sea válida.'}`)
             setSelectedId(inv.id)
+          }}
+        />
+      )}
+
+      {showImport && (
+        <ImportarFacturasModal
+          onClose={() => setShowImport(false)}
+          onImported={() => {
+            qc.invalidateQueries({ queryKey: ['invoices'] })
+            qc.invalidateQueries({ queryKey: ['cxc'] })
+            qc.invalidateQueries({ queryKey: ['account-statement'] })
           }}
         />
       )}

@@ -96,9 +96,13 @@ function parseXMLCFDI(buffer) {
   const nombreEmisor  = extractXMLAttr(xml, /Emisor[^>]+Nombre="([^"]+)"/i)
   const regimenEmisor = extractXMLAttr(xml, /Emisor[^>]+RegimenFiscal="([^"]+)"/i)
 
-  // Receptor
-  const rfcReceptor    = extractXMLAttr(xml, /Receptor[^>]+Rfc="([^"]+)"/i)
-  const nombreReceptor = extractXMLAttr(xml, /Receptor[^>]+Nombre="([^"]+)"/i)
+  // Receptor (CFDI 4.0 además trae domicilio fiscal, régimen y UsoCFDI —
+  // necesarios para re-emitir complementos de pago de facturas importadas).
+  const rfcReceptor     = extractXMLAttr(xml, /Receptor[^>]+Rfc="([^"]+)"/i)
+  const nombreReceptor  = extractXMLAttr(xml, /Receptor[^>]+Nombre="([^"]+)"/i)
+  const zipReceptor     = extractXMLAttr(xml, /Receptor[^>]+DomicilioFiscalReceptor="([^"]+)"/i)
+  const regimenReceptor = extractXMLAttr(xml, /Receptor[^>]+RegimenFiscalReceptor="([^"]+)"/i)
+  const usoCfdi         = extractXMLAttr(xml, /Receptor[^>]+UsoCFDI="([^"]+)"/i)
 
   // Conceptos (líneas)
   const lines = extractXMLConceptos(xml)
@@ -123,8 +127,11 @@ function parseXMLCFDI(buffer) {
       regime: regimenEmisor,
     },
     receptor: {
-      rfc:  rfcReceptor,
-      name: nombreReceptor,
+      rfc:     rfcReceptor,
+      name:    nombreReceptor,
+      zip:     zipReceptor || null,
+      regime:  regimenReceptor || null,
+      useCfdi: usoCfdi || null,
     },
     lines,
     method: 'xml',

@@ -147,7 +147,16 @@ async function listCXC({ tenantId, status, partnerId, from, to, search, sortBy, 
               WHEN inv.payment_method = 'PUE'    THEN 'not_required'
               WHEN inv.status <> 'stamped'       THEN 'draft'
               WHEN ar.amount_paid <= 0.01        THEN 'pending'
-              WHEN COALESCE(pc.complement_total, 0) >= ar.amount_paid - 0.01 THEN 'complete'
+              -- Facturas IMPORTADAS: lo cobrado ANTES de importar ya tuvo sus REP
+              -- en el sistema anterior → cuenta como cubierto (solo se vigilan
+              -- los cobros registrados aquí).
+              WHEN COALESCE(pc.complement_total, 0)
+                   + CASE WHEN inv.source = 'imported'
+                          THEN GREATEST(ar.amount_total
+                               - COALESCE(inv.imported_initial_balance, inv.total)
+                                 * COALESCE(inv.exchange_rate_value, 1), 0)
+                          ELSE 0 END
+                   >= ar.amount_paid - 0.01 THEN 'complete'
               ELSE 'partial'
             END AS complement_status,
             CASE WHEN ar.due_date < ${LOCAL_TODAY} AND ar.status NOT IN ('paid','cancelled')

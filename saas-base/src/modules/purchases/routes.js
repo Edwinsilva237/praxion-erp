@@ -36,6 +36,20 @@ const uploadDoc = multer({
   },
 })
 
+// Multer para importación en lote de CFDI (XML, PDF o .zip que los contenga).
+const uploadImport = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024, files: 50 }, // 25MB c/u, 50 archivos por lote
+  fileFilter: (_req, file, cb) => {
+    const allowed = ['application/pdf', 'text/xml', 'application/xml',
+      'application/zip', 'application/x-zip-compressed', 'application/octet-stream']
+    const extOk = file.originalname.toLowerCase().match(/\.(pdf|xml|zip)$/)
+    allowed.includes(file.mimetype) || extOk
+      ? cb(null, true)
+      : cb(new Error('Solo se permiten archivos XML, PDF o ZIP.'))
+  },
+})
+
 // Multer para evidencias de facturas/CXP (PDF, JPG, PNG, WebP).
 const uploadEvidence = multer({
   storage: multer.memoryStorage(),
@@ -797,6 +811,40 @@ router.post('/expenses/parse',
       }
       res.json({ ...result, matchedPartner })
     } catch (err) { next(err) }
+  }
+)
+
+/**
+ * POST /api/purchases/expenses/import
+ * Importación en LOTE de CFDI recibidos (migración desde otro sistema): sube
+ * varios XML/PDF/.zip (campo 'files') y cada CFDI se registra como gasto — o se
+ * desvía a complementos de pago si es tipo P — con los mismos candados del buzón
+ * (RFC receptor del tenant, anti-dup por UUID, respaldo XML/PDF adjunto).
+ * Un archivo malo NO aborta el lote: devuelve resultado por archivo + resumen.
+ * Debe ir ANTES de /expenses/:id.
+ */
+router.post('/expenses/import',
+  checkPermission('expenses', 'create'),
+  uploadImport.array('files', 50),
+  async (req, res, next) => {
+    try {
+      if (!req.files?.length) {
+        return res.status(400).json({ error: 'Se requiere al menos un archivo XML, PDF o ZIP (campo files).' })
+      }
+      const result = await inboundEmailService.importDocuments({
+        tenantId: req.tenant.id,
+        userId: req.auth.userId,
+        files: req.files.map(f => ({
+          filename: f.originalname,
+          mimetype: f.mimetype,
+          contentBase64: f.buffer.toString('base64'),
+        })),
+      })
+      res.json(result)
+    } catch (err) {
+      if (err.status) return res.status(err.status).json({ error: err.message })
+      next(err)
+    }
   }
 )
 

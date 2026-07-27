@@ -87,6 +87,11 @@ export const purchasesApi = {
   // Liquida un gasto de contado en un paso (registra el pago y deja la CXP en "Pagado").
   payExpense: (id, body) => api.post(`${B}/expenses/${id}/pay`, body).then(r => r.data),
   requestExpenseInvoice: (id) => api.post(`${B}/expenses/${id}/request-invoice`).then(r => r.data),
+  // Importación en lote de CFDI (XML/PDF/.zip, campo 'files') — migración desde otro sistema.
+  importExpenseDocuments: (formData) =>
+    api.post(`${B}/expenses/import`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(r => r.data),
   getExpenseInbox:    () => api.get(`${B}/expenses/inbox`).then(r => r.data),
   rotateExpenseInbox: () => api.post(`${B}/expenses/inbox/rotate`).then(r => r.data),
   // body: { receiptId, receiptLineIds } (una sola) o { receipts: [{ receiptId, lineIds? }] } (varias)

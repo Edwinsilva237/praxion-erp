@@ -275,27 +275,27 @@ async function rotateInboxToken(tenantId) {
 }
 
 /**
- * Procesa UN adjunto recibido por correo.
+ * Núcleo de ingesta de UN documento (CFDI XML o PDF) para un tenant ya resuelto.
+ * Lo comparten el buzón de correo (ingestInboundDocument, rutea por token) y la
+ * importación manual en lote (importDocuments, sesión autenticada).
+ *
  * @param {object} p
- * @param {string} p.token         token del buzón (rutea al tenant)
- * @param {string} p.filename      nombre del adjunto (para detectar xml/pdf)
- * @param {string} p.mimetype      mime del adjunto
- * @param {string} p.contentBase64 contenido del adjunto en base64
+ * @param {object} p.tenant        { id, slug } del tenant destino
+ * @param {string} p.filename      nombre del archivo (para detectar xml/pdf)
+ * @param {string} p.mimetype      mime del archivo
+ * @param {string} p.contentBase64 contenido en base64
  * @param {string} [p.from]        remitente del correo (solo para la nota)
  * @param {Array}  [p.siblings]    archivos hermanos a guardar como respaldo junto
  *                                 al mismo gasto (p.ej. el PDF impreso del XML).
+ * @param {string} [p.userId]      usuario a quien se atribuye el alta
+ * @param {string} [p.source]      'email' | 'manual' (origen del documento)
+ * @param {string} [p.note]        nota del gasto (default según origen)
  * @returns {{status:'created'|'duplicate', ...}}
  */
-async function ingestInboundDocument({ token, filename, mimetype, contentBase64, from = null, siblings = [] }) {
-  if (!token) throw err(400, 'token requerido.')
-  if (!contentBase64) throw err(400, 'contenido del adjunto requerido.')
-
-  // 1. Resolver tenant por token.
-  const { rows: t } = await query(
-    `SELECT id, slug, name FROM tenants WHERE inbound_email_token = $1`, [token])
-  if (!t.length) throw err(404, 'Token de buzón no reconocido.')
-  const tenant = t[0]
-
+async function ingestDocumentCore({
+  tenant, filename, mimetype, contentBase64,
+  from = null, siblings = [], userId = null, source = 'email', note = null,
+}) {
   // 2. Parsear el adjunto (reusa el parser de CFDI/PDF).
   const buffer = Buffer.from(contentBase64, 'base64')
   let parsed
@@ -320,12 +320,6 @@ async function ingestInboundDocument({ token, filename, mimetype, contentBase64,
     throw err(403, 'El RFC receptor del CFDI no corresponde a este tenant.')
   }
 
-  // created_by / audit: atribuir al owner del tenant (no hay sesión de usuario).
-  const { rows: ow } = await query(
-    `SELECT user_id FROM tenant_memberships
-      WHERE tenant_id = $1 AND role = 'owner' ORDER BY created_at LIMIT 1`, [tenant.id])
-  const userId = ow[0]?.user_id || null
-
   // 3.5. CFDI tipo P (REP / complemento de pago) → NO es un gasto (Total=0):
   //      se desvía al registro de complementos, que lo liga a las facturas que
   //      liquida (por UUID) y al pago registrado. Crear un gasto aquí generaría
@@ -335,7 +329,7 @@ async function ingestInboundDocument({ token, filename, mimetype, contentBase64,
     let compResult
     try {
       compResult = await supplierComplementService.ingestComplement({
-        tenantId: tenant.id, parsed, source: 'email', from, userId,
+        tenantId: tenant.id, parsed, source, from, userId,
       })
     } catch (e) {
       logger.warn('inbound: REP no procesable', {
@@ -394,7 +388,7 @@ async function ingestInboundDocument({ token, filename, mimetype, contentBase64,
       creditDays: 0,             // → auto: días de crédito del proveedor (si lo hay)
       isExpense: true,
       expenseCategoryId: null,   // sin categoría: el usuario la clasifica al revisar
-      notes: `Recibido por correo${from ? ` de ${from}` : ''}`,
+      notes: note || `Recibido por correo${from ? ` de ${from}` : ''}`,
       userId,
     })
     invoiceId = expense.id
@@ -436,7 +430,84 @@ async function ingestInboundDocument({ token, filename, mimetype, contentBase64,
   return result
 }
 
+/**
+ * Procesa UN adjunto recibido por correo (rutea al tenant por el token del buzón).
+ * @returns {{status:'created'|'duplicate', ...}}
+ */
+async function ingestInboundDocument({ token, filename, mimetype, contentBase64, from = null, siblings = [] }) {
+  if (!token) throw err(400, 'token requerido.')
+  if (!contentBase64) throw err(400, 'contenido del adjunto requerido.')
+
+  // 1. Resolver tenant por token.
+  const { rows: t } = await query(
+    `SELECT id, slug, name FROM tenants WHERE inbound_email_token = $1`, [token])
+  if (!t.length) throw err(404, 'Token de buzón no reconocido.')
+  const tenant = t[0]
+
+  // created_by / audit: atribuir al owner del tenant (no hay sesión de usuario).
+  const { rows: ow } = await query(
+    `SELECT user_id FROM tenant_memberships
+      WHERE tenant_id = $1 AND role = 'owner' ORDER BY created_at LIMIT 1`, [tenant.id])
+  const userId = ow[0]?.user_id || null
+
+  return ingestDocumentCore({
+    tenant, filename, mimetype, contentBase64, from, siblings, userId, source: 'email',
+  })
+}
+
+/**
+ * Importación MANUAL en lote (sesión autenticada): sube varios XML/PDF/.zip y da
+ * de alta cada CFDI como gasto (o lo desvía a complementos si es tipo P), con los
+ * mismos candados del buzón (RFC receptor, anti-dup por UUID, respaldos).
+ *
+ * Pensada para migrar facturas vigentes desde otro sistema. NO aborta el lote por
+ * un archivo malo: cada archivo reporta su resultado (created/duplicate/error).
+ *
+ * @param {object} p
+ * @param {string} p.tenantId  tenant de la sesión
+ * @param {string} p.userId    usuario que importa (auditoría)
+ * @param {Array}  p.files     [{ filename, mimetype, contentBase64 }] (los .zip se expanden)
+ * @returns {{results: Array, summary: {created:number, duplicates:number, complements:number, errors:number}}}
+ */
+async function importDocuments({ tenantId, userId, files }) {
+  const { rows: t } = await query(`SELECT id, slug FROM tenants WHERE id = $1`, [tenantId])
+  if (!t.length) throw err(404, 'Tenant no encontrado.')
+  const tenant = t[0]
+
+  const expanded = expandAttachments(files)
+  if (!expanded.length) {
+    throw err(422, 'Ningún archivo procesable: se aceptan CFDI XML, PDF o .zip que los contenga.')
+  }
+
+  const results = []
+  for (const att of expanded) {
+    try {
+      const r = await ingestDocumentCore({
+        tenant, filename: att.filename, mimetype: att.mimetype,
+        contentBase64: att.contentBase64, siblings: att.siblings || [],
+        userId, source: 'manual', note: 'Importado en lote (migración)',
+      })
+      results.push({ filename: att.filename, ...r })
+    } catch (e) {
+      logger.warn('import: archivo no procesable', {
+        tenant: tenant.slug, filename: att.filename, error: e.message })
+      results.push({ filename: att.filename, status: 'error', error: e.message })
+    }
+  }
+
+  const count = (s) => results.filter(r => r.status === s).length
+  return {
+    results,
+    summary: {
+      created:     count('created'),
+      duplicates:  count('duplicate'),
+      complements: results.filter(r => r.kind === 'payment_complement' && r.status !== 'error').length,
+      errors:      count('error'),
+    },
+  }
+}
+
 module.exports = {
-  ingestInboundDocument, expandAttachments,
+  ingestInboundDocument, importDocuments, expandAttachments,
   addressForToken, getInboxAddress, rotateInboxToken,
 }

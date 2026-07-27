@@ -108,6 +108,17 @@ export const invoicingApi = {
   downloadComplementPdf: (invoiceId, complementFacturapiId) =>
     api.get(`${B}/invoices/${invoiceId}/payment-complement/${complementFacturapiId}/pdf`, { responseType: 'blob' }),
 
+  // Importación de facturas emitidas en OTRO sistema (migración de cartera).
+  // Paso 1: preview sin guardar. Paso 2: importar (adjustments por UUID).
+  importParse: (formData) =>
+    api.post(`${B}/import/parse`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(r => r.data),
+  importConfirm: (formData) =>
+    api.post(`${B}/import`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(r => r.data),
+
   // Descargas — devuelven blob para que el componente cree URL temporal
   downloadXmlStamped: (id) =>
     api.get(`${B}/invoices/${id}/xml-stamped`, { responseType: 'blob' }),
