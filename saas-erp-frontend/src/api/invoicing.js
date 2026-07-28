@@ -99,6 +99,9 @@ export const invoicingApi = {
     api.get(`${B}/invoices/${invoiceId}/credit-note/${cnId}/xml`, { responseType: 'blob' }),
   downloadCreditNotePdf: (invoiceId, cnId) =>
     api.get(`${B}/invoices/${invoiceId}/credit-note/${cnId}/pdf`, { responseType: 'blob' }),
+  // Descarga directa por id de la NC (pantalla Notas de crédito).
+  downloadNcXml: (id) => api.get(`${B}/credit-notes/${id}/xml`, { responseType: 'blob' }),
+  downloadNcPdf: (id) => api.get(`${B}/credit-notes/${id}/pdf`, { responseType: 'blob' }),
 
   // Complemento de pago (CFDI tipo P para facturas PPD)
   paymentComplement: (id, body) =>

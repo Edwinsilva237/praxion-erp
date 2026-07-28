@@ -159,10 +159,10 @@ router.get('/export/zip', checkPermission('invoicing', 'read'), async (req, res,
  */
 router.get('/invoices', checkPermission('invoicing', 'read'), async (req, res, next) => {
   try {
-    const { status, partnerId, from, to, search, sortBy, sortDir, page, limit } = req.query
+    const { status, partnerId, from, to, search, sortBy, sortDir, cfdiType, page, limit } = req.query
     const result = await invoiceService.listInvoices({
       tenantId: req.tenant.id,
-      status, partnerId, from, to, search, sortBy, sortDir,
+      status, partnerId, from, to, search, sortBy, sortDir, cfdiType,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })
@@ -731,6 +731,33 @@ router.post('/invoices/:id/credit-note', checkPermission('invoicing', 'create'),
     res.status(201).json(result)
   } catch (err) { next(err) }
 })
+
+/**
+ * GET /api/invoicing/credit-notes/:id/xml|pdf — descarga directa de una NC
+ * (para la pantalla de Notas de crédito, sin pasar por la factura origen).
+ */
+function downloadCreditNoteFile(kind) {
+  return async (req, res, next) => {
+    try {
+      const { rows } = await require('../../db').query(
+        `SELECT notes, document_number FROM invoices
+          WHERE id = $1 AND tenant_id = $2 AND cfdi_type = 'E'`,
+        [req.params.id, req.tenant.id]
+      )
+      if (!rows.length) return res.status(404).json({ error: 'Nota de crédito no encontrada.' })
+      const match = (rows[0].notes || '').match(/\[facturapi_id:([^\]]+)\]/)
+      if (!match) return res.status(404).json({ error: 'ID de Facturapi no encontrado.' })
+      const fn = kind === 'xml' ? creditNoteService.downloadXML : creditNoteService.downloadPDF
+      const stream = await fn({ tenantId: req.tenant.id, facturApiId: match[1] })
+      res.setHeader('Content-Type', kind === 'xml' ? 'application/xml' : 'application/pdf')
+      res.setHeader('Content-Disposition',
+        `attachment; filename="${rows[0].document_number || 'nota-credito'}.${kind}"`)
+      stream.pipe(res)
+    } catch (err) { next(err) }
+  }
+}
+router.get('/credit-notes/:id/xml', checkPermission('invoicing', 'read'), downloadCreditNoteFile('xml'))
+router.get('/credit-notes/:id/pdf', checkPermission('invoicing', 'read'), downloadCreditNoteFile('pdf'))
 
 /**
  * GET /api/invoicing/invoices/:id/credit-note/:cnId/xml

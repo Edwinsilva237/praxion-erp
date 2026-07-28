@@ -9,6 +9,7 @@ const ROUTE_LABELS = {
   '/cotizaciones':        'Cotizaciones',
   '/remisiones':          'Remisiones',
   '/devoluciones-venta':  'Devoluciones de venta',
+  '/notas-credito':       'Notas de crédito',
   '/compras/ordenes':     'Órdenes de compra',
   '/compras/recepciones': 'Recepciones',
   '/compras/facturas':    'Facturas de proveedor',

@@ -142,12 +142,15 @@ async function createCreditNote({
       throw createError(422, `Error al timbrar nota de crédito: ${err.message}`)
     }
 
-    // Numeración de NC:
-    //   1) Si el tenant tiene una serie configurada con cfdi_type='E' para el
-    //      perfil fiscal de la factura original, se usa esa (consume folio
-    //      atómico). Esto respeta la nomenclatura del tenant ("A-0042" → "E-0001").
-    //   2) Si no hay serie 'E' configurada, fallback al patrón legacy
-    //      `NC-{factura_original}-NN` con sufijo secuencial por factura.
+    // Numeración de NC — SIEMPRE con serie propia, nunca la de facturas:
+    //   1) Si el tenant tiene una serie con cfdi_type='E' para el perfil fiscal,
+    //      se usa esa (consume folio atómico, respeta su nomenclatura).
+    //   2) Si no, se AUTO-CREA una serie "NC" tipo E para el perfil y se usa.
+    //      (Antes esto caía a generateDocumentNumber sin filtro estricto, que
+    //      terminaba consumiendo la serie default de FACTURAS — las NC salían
+    //      "A-0044" mezcladas con la numeración de facturas.)
+    //   3) Fallback legacy `NC-{factura_original}-NN` solo si no hay perfil
+    //      fiscal (tenants muy viejos sin series configurables).
     let docNumber
     let resolvedSeries = null
     let resolvedFolio  = null
@@ -165,17 +168,47 @@ async function createCreditNote({
       fiscalProfileId = fpRows[0]?.id || null
     }
 
-    const seriesResult = fiscalProfileId
-      ? await documentSeriesService.generateDocumentNumber({
-          client, tenantId, entityType: 'invoice',
-          opts: { fiscalProfileId, cfdiType: 'E' },
-        })
-      : null
+    let ncSeries = null
+    if (fiscalProfileId) {
+      const { rows: existing } = await client.query(
+        `SELECT * FROM tenant_document_series
+          WHERE tenant_id = $1 AND entity_type = 'invoice'
+            AND fiscal_profile_id = $2 AND cfdi_type = 'E' AND is_active = TRUE
+          ORDER BY is_default DESC, created_at ASC LIMIT 1`,
+        [tenantId, fiscalProfileId]
+      )
+      ncSeries = existing[0] || null
+      if (!ncSeries) {
+        // Elegir un código libre para no duplicar visualmente uno existente.
+        const { rows: taken } = await client.query(
+          `SELECT serie FROM tenant_document_series
+            WHERE tenant_id = $1 AND entity_type = 'invoice' AND fiscal_profile_id = $2`,
+          [tenantId, fiscalProfileId]
+        )
+        const used = new Set(taken.map(r => r.serie.toUpperCase()))
+        const code = ['NC', 'NCR', 'NCA'].find(c => !used.has(c))
+        if (code) {
+          const { rows: created } = await client.query(
+            `INSERT INTO tenant_document_series
+               (tenant_id, entity_type, fiscal_profile_id, serie, folio_next,
+                cfdi_type, is_default, is_active, notes, created_by)
+             VALUES ($1, 'invoice', $2, $3, 1, 'E', TRUE, TRUE,
+                     'Serie de notas de crédito (creada automáticamente al emitir la primera NC).', $4)
+             RETURNING *`,
+            [tenantId, fiscalProfileId, code, userId || null]
+          )
+          ncSeries = created[0]
+        }
+      }
+    }
 
-    if (seriesResult) {
-      docNumber = seriesResult.docNumber
-      resolvedSeries = seriesResult.serie
-      resolvedFolio  = seriesResult.folio
+    if (ncSeries) {
+      const { folio, serie } = await documentSeriesService.consumeNextFolio({
+        client, seriesId: ncSeries.id,
+      })
+      docNumber = `${serie}-${String(folio).padStart(4, '0')}`
+      resolvedSeries = serie
+      resolvedFolio  = String(folio)
     } else {
       // Legacy: sufijo secuencial por factura para soportar varias NCs sobre
       // la misma factura sin chocar con UNIQUE (tenant_id, document_number).
@@ -192,12 +225,13 @@ async function createCreditNote({
     const { rows: cnRows } = await client.query(
       `INSERT INTO invoices
          (tenant_id, type, cfdi_type, series, folio, document_number, fiscal_profile_id,
+          related_invoice_id,
           partner_id, currency, subtotal, tax_transferred, total, total_mxn,
           payment_form, use_cfdi, exportacion, lugar_expedicion,
           receptor_tax_regime, receptor_zip_code,
           status, cfdi_uuid, stamp_date, issue_date,
           notes, created_by)
-       VALUES ($1,'issued','E',$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$11,$12,'01',$13,$14,$15,'stamped',$16,NOW(),CURRENT_DATE,$17,$18)
+       VALUES ($1,'issued','E',$2,$3,$4,$5,$19,$6,$7,$8,$9,$10,$10,$11,$12,'01',$13,$14,$15,'stamped',$16,NOW(),CURRENT_DATE,$17,$18)
        RETURNING id, document_number, cfdi_uuid`,
       [tenantId, resolvedSeries, resolvedFolio, docNumber, fiscalProfileId,
        inv.partner_id,
@@ -210,7 +244,8 @@ async function createCreditNote({
        inv.receptor_tax_regime, inv.receptor_zip_code,
        creditNote.uuid,
        `Nota de crédito de ${inv.document_number} — ${reasonLabel(reason)}`,
-       userId]
+       userId,
+       invoiceId]
     )
     const cn = cnRows[0]
 

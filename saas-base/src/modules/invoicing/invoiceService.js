@@ -200,12 +200,15 @@ const INVOICE_SORT_COLUMNS = {
 /**
  * Lista facturas con filtros.
  */
-async function listInvoices({ tenantId, status, partnerId, from, to, search, sortBy, sortDir, page = 1, limit = 50 }) {
+async function listInvoices({ tenantId, status, partnerId, from, to, search, sortBy, sortDir, cfdiType, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   const filters = []
   const orderBy = buildOrderBy({ sortBy, sortDir, columns: INVOICE_SORT_COLUMNS, defaultKey: 'fecha', tiebreaker: 'inv.id DESC' })
 
+  // Separa facturas (I) de notas de crédito (E): cada una tiene su pantalla.
+  // Sin el filtro, la lista viene mezclada (comportamiento previo, compatible).
+  if (cfdiType)  { params.push(cfdiType);  filters.push(`inv.cfdi_type = $${params.length}`) }
   if (status)    { params.push(status);    filters.push(`inv.status = $${params.length}`) }
   if (partnerId) { params.push(partnerId); filters.push(`inv.partner_id = $${params.length}`) }
   if (from)      { params.push(from);      filters.push(`inv.issue_date >= $${params.length}`) }
@@ -238,11 +241,14 @@ async function listInvoices({ tenantId, status, partnerId, from, to, search, sor
             inv.email_sent_at, inv.email_sent_auto,
             bp.name AS partner_name, bp.rfc AS partner_rfc,
             dn.document_number AS remission_number,
-            u.full_name AS created_by_name
+            u.full_name AS created_by_name,
+            rel.document_number AS related_invoice_number,
+            inv.related_invoice_id
      FROM invoices inv
      JOIN business_partners bp ON bp.id = inv.partner_id
      LEFT JOIN delivery_notes dn ON dn.id = inv.delivery_note_id
      LEFT JOIN users u ON u.id = inv.created_by
+     LEFT JOIN invoices rel ON rel.id = inv.related_invoice_id
      WHERE inv.tenant_id = $1 AND inv.type = 'issued' ${where}
      ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -303,17 +309,18 @@ async function getInvoice({ tenantId, invoiceId }) {
     [rows[0].partner_id]
   )
 
-  // Notas de crédito asociadas: están guardadas como invoices(cfdi_type='E')
-  // con document_number "NC-{numero_factura}" (legacy, sin sufijo) o
-  // "NC-{numero_factura}-NN" (con sufijo desde la migración 081).
+  // Notas de crédito asociadas: por vínculo explícito (related_invoice_id,
+  // mig 237) o, para NCs previas a la migración que no se pudieron backfillear,
+  // por la convención legacy de folio "NC-{numero_factura}[-NN]".
   const { rows: creditNotes } = await query(
     `SELECT id, document_number, cfdi_uuid, total, stamp_date, status, notes
        FROM invoices
       WHERE tenant_id = $1
         AND cfdi_type = 'E'
-        AND document_number LIKE 'NC-' || $2 || '%'
+        AND ( related_invoice_id = $2
+              OR (related_invoice_id IS NULL AND document_number LIKE 'NC-' || $3 || '%') )
       ORDER BY stamp_date DESC`,
-    [tenantId, rows[0].document_number]
+    [tenantId, invoiceId, rows[0].document_number]
   )
 
   // Complementos de pago (CFDI tipo P) emitidos para esta factura.

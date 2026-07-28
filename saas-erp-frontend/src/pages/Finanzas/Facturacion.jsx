@@ -51,7 +51,9 @@ export default function Facturacion() {
   useEffect(() => { setPage(1) }, [statusFilter, partner, from, to, searchDebounced, sortBy, sortDir])
 
   const queryParams = useMemo(() => {
-    const p = { page, limit: PAGE_SIZE, sortBy, sortDir }
+    // Solo facturas (I): las notas de crédito tienen su propia pantalla
+    // (/notas-credito) — mezcladas aquí confundían y ensuciaban los totales.
+    const p = { page, limit: PAGE_SIZE, sortBy, sortDir, cfdiType: 'I' }
     if (statusFilter)  p.status    = statusFilter
     if (partner?.id)   p.partnerId = partner.id
     if (from)          p.from      = from
