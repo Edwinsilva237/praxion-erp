@@ -123,6 +123,9 @@ export const purchasesApi = {
   createReturnReason: (body) => api.post(`${B}/return-reasons`, body).then(r => r.data),
   updateReturnReason: (id, body) => api.patch(`${B}/return-reasons/${id}`, body).then(r => r.data),
   listReturnableLots: (params) => api.get(`${B}/returnable-lots`, { params }).then(r => r.data),
+  // Últimas recepciones confirmadas del proveedor (opcional: con cierto
+  // artículo) para identificar qué devolver, con devolvible por línea.
+  listReturnCandidates: (params) => api.get(`${B}/returns/candidates`, { params }).then(r => r.data),
   listReturns:   (p) => api.get(`${B}/returns`, { params: p }).then(r => r.data),
   getReturn:     (id) => api.get(`${B}/returns/${id}`).then(r => r.data),
   createReturn:  (body) => api.post(`${B}/returns`, body).then(r => r.data),

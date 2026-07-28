@@ -1,8 +1,11 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { purchasesApi } from '@/api/purchases'
 import { partnersApi } from '@/api/partners'
+import { productsApi } from '@/api/products'
+import { rawMaterialsApi } from '@/api/rawMaterials'
+import Autocomplete from '@/components/ui/Autocomplete'
 import { useTableSort } from '@/hooks/useTableSort'
 import { SortableHeader } from '@/components/ui/SortableHeader'
 import Spinner from '@/components/ui/Spinner'
@@ -27,6 +30,14 @@ const FISCAL = {
   substitution: 'Sustitución de CFDI',
 }
 const money = (n) => `$${Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+// "hace N días" — para reconocer la recepción sin hacer cuentas.
+function daysAgoLabel(d) {
+  if (!d) return ''
+  const n = Math.floor((Date.now() - new Date(d).getTime()) / 86400000)
+  if (n <= 0) return 'hoy'
+  return n === 1 ? 'hace 1 día' : `hace ${n} días`
+}
 
 export default function Devoluciones() {
   const qc = useQueryClient()
@@ -130,7 +141,9 @@ function NewReturnModal({ onClose, onSaved }) {
   const [partnerId, setPartnerId] = useState('')
   const [reasonId, setReasonId] = useState('')
   const [notes, setNotes] = useState('')
-  const [lines, setLines] = useState([])  // { lotId, label, material, warehouseId, itemId, unitCost, remaining, quantity }
+  const [lines, setLines] = useState([])  // { lotId, label, material, warehouseId, itemId, itemType, unitCost, remaining, quantity, receiptLineId }
+  const [item, setItem] = useState(null)  // filtro opcional { id, label, itemType }
+  const [sourceReceiptId, setSourceReceiptId] = useState(null)
   const [error, setError] = useState(null)
 
   const { data: suppliers = [] } = useQuery({
@@ -146,6 +159,42 @@ function NewReturnModal({ onClose, onSaved }) {
     queryFn: () => purchasesApi.listReturnableLots(partnerId ? { partnerId } : {}),
     enabled: !!partnerId,
   })
+
+  // Últimas recepciones confirmadas del proveedor (acotadas al artículo si se
+  // eligió): identifica de qué compra viene lo que se va a devolver.
+  const { data: candidates = [], isFetching: searching } = useQuery({
+    queryKey: ['return-candidate-receipts', partnerId, item?.id],
+    queryFn: () => purchasesApi.listReturnCandidates({
+      partnerId, itemType: item?.itemType || undefined, itemId: item?.id || undefined,
+    }),
+    enabled: !!partnerId && lines.length === 0,
+  })
+
+  // Buscar artículo en materias primas Y productos (una recepción puede traer ambos).
+  const searchItems = useCallback(async (q) => {
+    const [rms, prods] = await Promise.all([
+      rawMaterialsApi.list({ search: q, limit: 10 }).then(r => r.data || r).catch(() => []),
+      productsApi.list({ search: q, limit: 10 }).then(r => r.data || r).catch(() => []),
+    ])
+    return [
+      ...rms.map(m => ({ id: m.id, label: m.name, sub: 'Materia prima', itemType: 'raw_material' })),
+      ...prods.map(p => ({ id: p.id, label: p.name, sub: p.sku ? `Producto · ${p.sku}` : 'Producto', itemType: 'product' })),
+    ]
+  }, [])
+
+  // Precarga las líneas devolvibles de una recepción elegida.
+  const pickReceipt = (c) => {
+    const pre = (c.lines || []).filter(l => l.returnable > 0).map(l => ({
+      lotId: l.lot?.id || null,
+      label: `${l.name} · ${c.receipt_number}${l.lot ? ` · ${l.lot.number}` : ''}`,
+      itemId: l.itemId, itemType: l.itemType, warehouseId: l.warehouseId,
+      unitCost: parseFloat(l.unitCost || 0), remaining: l.returnable,
+      unit: l.unit || 'kg', quantity: '', receiptLineId: l.receiptLineId,
+    }))
+    if (!pre.length) return
+    setSourceReceiptId(c.id)
+    setLines(pre)
+  }
 
   const availableLots = lots.filter(l => !lines.some(ln => ln.lotId === l.id))
 
@@ -165,16 +214,22 @@ function NewReturnModal({ onClose, onSaved }) {
   const mut = useMutation({
     mutationFn: () => purchasesApi.createReturn({
       partnerId, reasonId: reasonId || null, notes: notes || null,
-      lines: lines.map(l => ({
-        itemType: 'raw_material', itemId: l.itemId, warehouseId: l.warehouseId,
+      sourceReceiptId: sourceReceiptId || null,
+      lines: lines.filter(l => parseFloat(l.quantity) > 0).map(l => ({
+        itemType: l.itemType || 'raw_material', itemId: l.itemId, warehouseId: l.warehouseId,
         rawMaterialLotId: l.lotId, quantity: parseFloat(l.quantity), unit: l.unit, unitCost: l.unitCost,
+        sourceReceiptLineId: l.receiptLineId || null,
       })),
     }),
     onSuccess: onSaved,
     onError: (e) => setError(e.response?.data?.error || 'No se pudo crear.'),
   })
 
-  const canSave = partnerId && lines.length > 0 && lines.every(l => parseFloat(l.quantity) > 0 && parseFloat(l.quantity) <= l.remaining + 1e-6)
+  // Con precarga desde recepción puede haber líneas sin cantidad: se ignoran
+  // al guardar; basta UNA con cantidad válida.
+  const canSave = partnerId
+    && lines.some(l => parseFloat(l.quantity) > 0)
+    && lines.every(l => !(parseFloat(l.quantity) > 0) || parseFloat(l.quantity) <= l.remaining + 1e-6)
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
@@ -190,7 +245,8 @@ function NewReturnModal({ onClose, onSaved }) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">Proveedor *</label>
-              <select className="select" value={partnerId} onChange={e => { setPartnerId(e.target.value); setLines([]) }}>
+              <select className="select" value={partnerId}
+                onChange={e => { setPartnerId(e.target.value); setLines([]); setItem(null); setSourceReceiptId(null) }}>
                 <option value="">Seleccionar proveedor…</option>
                 {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
@@ -203,6 +259,70 @@ function NewReturnModal({ onClose, onSaved }) {
               </select>
             </div>
           </div>
+
+          {partnerId && lines.length === 0 && (
+            <>
+              <div>
+                <label className="label">Artículo (opcional)</label>
+                <Autocomplete value={item} onChange={setItem} onSearch={searchItems}
+                  placeholder="Acota por material o producto devuelto..." />
+              </div>
+
+              <div className="border border-line-subtle rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-surface-elevated/40 text-xs font-medium text-ink-secondary border-b border-line-subtle">
+                  Últimas recepciones confirmadas{item ? ` con ${item.label}` : ''}
+                </div>
+                {searching ? (
+                  <div className="flex justify-center py-6"><Spinner size="sm" /></div>
+                ) : candidates.length === 0 ? (
+                  <p className="px-3 py-4 text-sm text-ink-muted">
+                    Sin recepciones confirmadas{item ? ' con ese artículo' : ''} de este proveedor.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-line-subtle max-h-64 overflow-y-auto">
+                    {candidates.map(c => {
+                      const returnableLines = (c.lines || []).filter(l => l.returnable > 0)
+                      const exhausted = returnableLines.length === 0
+                      const itemLine = item ? (c.lines || []).find(l => l.itemId === item.id) : null
+                      return (
+                        <li key={c.id}>
+                          <button type="button" disabled={exhausted} onClick={() => pickReceipt(c)}
+                            className="w-full text-left px-3 py-2.5 hover:bg-surface-elevated/40 disabled:opacity-45 disabled:cursor-not-allowed flex flex-col gap-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-mono text-xs text-brand-300">{c.receipt_number}</span>
+                              <span className="text-[11px] text-ink-muted shrink-0">
+                                {fmtDateOnly(c.received_date)} · {daysAgoLabel(c.received_date)}
+                              </span>
+                            </div>
+                            <span className="text-xs text-ink-secondary truncate">
+                              {(c.lines || []).map(l => `${parseFloat(l.received)} ${l.name}`).join(' · ')}
+                            </span>
+                            <div className="flex items-center gap-2 text-[11px] text-ink-muted">
+                              {exhausted
+                                ? <Badge variant="red" label="Ya devuelto por completo" />
+                                : itemLine
+                                  ? <span>Devolvible: {itemLine.returnable} {itemLine.unit || ''}</span>
+                                  : <span>{returnableLines.length} línea{returnableLines.length === 1 ? '' : 's'} devolvible{returnableLines.length === 1 ? '' : 's'}</span>}
+                            </div>
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </div>
+            </>
+          )}
+
+          {sourceReceiptId && lines.length > 0 && (
+            <div className="flex items-center justify-between gap-2 bg-surface-elevated/40 border border-line-subtle rounded-lg px-3 py-2">
+              <p className="text-sm text-ink-primary">Devolución sobre una recepción — captura las cantidades.</p>
+              <button type="button" className="btn-ghost text-xs"
+                onClick={() => { setLines([]); setSourceReceiptId(null) }}>
+                Cambiar recepción
+              </button>
+            </div>
+          )}
 
           {partnerId && (
             <div>

@@ -133,4 +133,61 @@ describe('Devoluciones a proveedor (Fase 1)', () => {
     const list = await client.get('/api/purchases/return-reasons').expect(200)
     expect(list.body.map(r => r.id)).toContain(created.body.id)
   })
+
+  test('candidates: últimas recepciones con devolvible por línea (topado al lote) y candado de sobre-devolución', async () => {
+    // Recepción confirmada con una línea de 40 kg a $22; su lote solo conserva
+    // 15 kg → devolvible = min(40, 15) = 15.
+    const { receiptId, lineId } = await withBypass(async () => {
+      const r = await query(
+        `INSERT INTO supplier_receipts (tenant_id, receipt_number, partner_id, warehouse_id,
+                                        received_date, status, created_by)
+         VALUES ($1,'REC-CAND-1',$2,$3,CURRENT_DATE,'confirmed',NULL) RETURNING id`,
+        [tenantId, partnerId, warehouseId])
+      const rl = await query(
+        `INSERT INTO supplier_receipt_lines (supplier_receipt_id, item_type, item_id, description,
+                                             quantity_received, unit, unit_price, warehouse_id, line_number)
+         VALUES ($1,'raw_material',$2,'PE Devolución',40,'kg',22,$3,1) RETURNING id`,
+        [r.rows[0].id, rm.id, warehouseId])
+      await query(
+        `INSERT INTO raw_material_lots
+           (tenant_id, raw_material_id, lot_number, warehouse_id, supplier_receipt_id,
+            quantity_received, quantity_remaining, unit_cost, total_cost, status)
+         VALUES ($1,$2,'LOTE-CAND-1',$3,$4,40,15,22,880,'active')`,
+        [tenantId, rm.id, warehouseId, r.rows[0].id])
+      return { receiptId: r.rows[0].id, lineId: rl.rows[0].id }
+    })
+
+    const res = await client.get(`/api/purchases/returns/candidates?partnerId=${partnerId}`).expect(200)
+    const cand = res.body.find(c => c.id === receiptId)
+    expect(cand).toBeTruthy()
+    const line = cand.lines.find(l => l.receiptLineId === lineId)
+    expect(parseFloat(line.unitCost)).toBeCloseTo(22, 2)
+    expect(line.returnable).toBeCloseTo(15, 2)                   // topado al lote
+    expect(line.lot?.number).toBe('LOTE-CAND-1')
+
+    // Filtro por artículo: con un id ajeno no aparece.
+    const none = await client.get(
+      `/api/purchases/returns/candidates?partnerId=${partnerId}&itemType=raw_material&itemId=${warehouseId}`)
+      .expect(200)
+    expect(none.body.map(c => c.id)).not.toContain(receiptId)
+
+    // Sobre-devolución contra lo RECIBIDO pendiente → 409.
+    const over = await client.post('/api/purchases/returns', {
+      partnerId, sourceReceiptId: receiptId,
+      lines: [{ itemType: 'raw_material', itemId: rm.id, warehouseId,
+                quantity: 41, unit: 'kg', sourceReceiptLineId: lineId }],
+    })
+    expect(over.status).toBe(409)
+
+    // Devolución válida ligada a la recepción: baja el devolvible.
+    await client.post('/api/purchases/returns', {
+      partnerId, sourceReceiptId: receiptId,
+      lines: [{ itemType: 'raw_material', itemId: rm.id, warehouseId,
+                quantity: 10, unit: 'kg', sourceReceiptLineId: lineId }],
+    }).expect(201)
+    const after = await client.get(`/api/purchases/returns/candidates?partnerId=${partnerId}`).expect(200)
+    const lineAfter = after.body.find(c => c.id === receiptId).lines.find(l => l.receiptLineId === lineId)
+    expect(parseFloat(lineAfter.returned)).toBeCloseTo(10, 2)
+    expect(lineAfter.returnable).toBeCloseTo(15, 2)              // sigue topado al lote (15 restantes)
+  })
 })

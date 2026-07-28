@@ -194,6 +194,74 @@ async function getReturn({ tenantId, returnId }) {
   return { ...rows[0], lines }
 }
 
+/**
+ * Recepciones CONFIRMADAS candidatas a devolución (espejo del buscador de
+ * devoluciones de venta): últimas recepciones del proveedor — opcionalmente
+ * solo las que incluyen cierto artículo — con sus líneas listas para
+ * precargar: devolvible restante (recibido − ya devuelto, topado al saldo del
+ * lote si existe), costo de la recepción, almacén y lote sugerido.
+ */
+async function listCandidateReceipts({ tenantId, partnerId, itemType, itemId, limit = 15 }) {
+  if (!partnerId) throw badReq('El proveedor (partnerId) es requerido.')
+  const params = [tenantId, partnerId]
+
+  let itemFilter = ''
+  if (itemType && itemId) {
+    params.push(itemType, itemId)
+    itemFilter = `AND EXISTS (SELECT 1 FROM supplier_receipt_lines fl
+                    WHERE fl.supplier_receipt_id = r.id
+                      AND fl.item_type = $3 AND fl.item_id = $4)`
+  }
+  params.push(Math.min(parseInt(limit, 10) || 15, 50))
+
+  const { rows } = await query(
+    `SELECT r.id, r.receipt_number, r.received_date, r.document_number,
+            w.name AS warehouse_name,
+            (SELECT json_agg(json_build_object(
+                      'receiptLineId', rl.id,
+                      'itemType',  rl.item_type,
+                      'itemId',    rl.item_id,
+                      'name',      COALESCE(rm.name, p.name, rl.description),
+                      'unit',      rl.unit,
+                      'unitCost',  rl.unit_price,
+                      'warehouseId', COALESCE(rl.warehouse_id, r.warehouse_id),
+                      'received',  rl.quantity_received,
+                      'returned',  COALESCE((
+                        SELECT SUM(srl.quantity) FROM supplier_return_lines srl
+                          JOIN supplier_returns sr2 ON sr2.id = srl.return_id
+                         WHERE srl.source_receipt_line_id = rl.id
+                           AND sr2.status <> 'cancelled'), 0),
+                      'lot', (SELECT json_build_object('id', lot.id, 'number', lot.lot_number,
+                                                       'remaining', lot.quantity_remaining)
+                                FROM raw_material_lots lot
+                               WHERE lot.supplier_receipt_id = r.id
+                                 AND lot.raw_material_id = rl.item_id
+                                 AND lot.quantity_remaining > 0
+                               ORDER BY lot.created_at ASC LIMIT 1)
+                    ) ORDER BY rl.line_number)
+               FROM supplier_receipt_lines rl
+               LEFT JOIN raw_materials rm ON rl.item_type = 'raw_material' AND rm.id = rl.item_id
+               LEFT JOIN products p       ON rl.item_type = 'product'      AND p.id  = rl.item_id
+              WHERE rl.supplier_receipt_id = r.id) AS lines
+       FROM supplier_receipts r
+       LEFT JOIN warehouses w ON w.id = r.warehouse_id
+      WHERE r.tenant_id = $1 AND r.partner_id = $2 AND r.status = 'confirmed'
+        ${itemFilter}
+      ORDER BY r.received_date DESC, r.receipt_number DESC
+      LIMIT $${params.length}`,
+    params
+  )
+  // Devolvible por línea en JS (mín entre recibido−devuelto y saldo del lote).
+  return rows.map(r => ({
+    ...r,
+    lines: (r.lines || []).map(l => {
+      const pending = Math.max(0, parseFloat(l.received) - parseFloat(l.returned))
+      const lotCap  = l.lot ? parseFloat(l.lot.remaining) : null
+      return { ...l, returnable: lotCap != null ? Math.min(pending, lotCap) : pending }
+    }),
+  }))
+}
+
 // ─── Crear borrador ──────────────────────────────────────────────────────────
 async function createReturn({
   tenantId, partnerId, reasonId, sourceReceiptId, supplierInvoiceId,
@@ -237,6 +305,31 @@ async function createReturn({
           throw badReq(`No hay suficiente en el lote (disponible ${lot[0].quantity_remaining}).`)
         }
         if (unitCost == null) unitCost = parseFloat(lot[0].unit_cost || 0)
+      }
+
+      // Línea ligada a una recepción: validar que no se devuelva más de lo
+      // recibido pendiente (recibido − devoluciones previas no canceladas) y
+      // usar el costo de la recepción como default (costo histórico real).
+      if (ln.sourceReceiptLineId) {
+        const { rows: rcl } = await client.query(
+          `SELECT rl.quantity_received, rl.unit_price,
+                  COALESCE((SELECT SUM(srl.quantity) FROM supplier_return_lines srl
+                              JOIN supplier_returns sr2 ON sr2.id = srl.return_id
+                             WHERE srl.source_receipt_line_id = rl.id
+                               AND sr2.status <> 'cancelled'), 0) AS returned
+             FROM supplier_receipt_lines rl
+             JOIN supplier_receipts r ON r.id = rl.supplier_receipt_id
+            WHERE rl.id = $1 AND r.tenant_id = $2`,
+          [ln.sourceReceiptLineId, tenantId]
+        )
+        if (!rcl[0]) throw badReq('La línea de recepción indicada no existe.')
+        const returnable = parseFloat(rcl[0].quantity_received) - parseFloat(rcl[0].returned)
+        if (qty - returnable > 1e-4) {
+          const err = new Error(`No puedes devolver más de lo recibido pendiente (quedan ${returnable}).`)
+          err.status = 409
+          throw err
+        }
+        if (unitCost == null) unitCost = parseFloat(rcl[0].unit_price || 0)
       }
 
       if (unitCost == null) {
@@ -674,7 +767,7 @@ async function voidInvoiceAndAp(client, { tenantId, invoice, ap }) {
 
 module.exports = {
   listReasons, createReason, updateReason,
-  listReturnableLots,
+  listReturnableLots, listCandidateReceipts,
   listReturns, getReturn, createReturn, confirmReturn, cancelReturn,
   resolveFiscal,
 }

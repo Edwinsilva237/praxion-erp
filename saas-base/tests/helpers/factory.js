@@ -188,6 +188,17 @@ async function cleanupTestTenants() {
       DELETE FROM quotation_lines ql USING quotations q, tenants t
        WHERE ql.quotation_id = q.id AND q.tenant_id = t.id AND t.slug LIKE $1
     `, [slugPattern])
+    // supplier_return_lines.source_receipt_line_id referencia
+    // supplier_receipt_lines → borrar devoluciones ANTES que las líneas de
+    // recepción (el buscador de candidatas liga devolución ↔ recepción).
+    await query(`
+      DELETE FROM supplier_return_lines srl USING supplier_returns sr, tenants t
+       WHERE srl.return_id = sr.id AND sr.tenant_id = t.id AND t.slug LIKE $1
+    `, [slugPattern])
+    await query(`
+      DELETE FROM supplier_returns sr USING tenants t
+       WHERE sr.tenant_id = t.id AND t.slug LIKE $1
+    `, [slugPattern])
     // supplier_receipt_lines.purchase_order_line_id es RESTRICT a
     // purchase_order_lines (y .warehouse_id RESTRICT a warehouses). Si una
     // recepción se ligó a la línea de la OC, hay que borrar las líneas de

@@ -113,6 +113,19 @@ router.get('/returns', checkPermission('purchases', 'read'), async (req, res, ne
     }))
   } catch (err) { retErr(res, next)(err) }
 })
+// Recepciones candidatas a devolución (buscador proveedor + artículo).
+// ANTES de /returns/:id para que "candidates" no se lea como id.
+router.get('/returns/candidates', checkPermission('purchases', 'return'), async (req, res, next) => {
+  try {
+    res.json(await supplierReturnService.listCandidateReceipts({
+      tenantId: req.tenant.id,
+      partnerId: req.query.partnerId,
+      itemType: req.query.itemType || null,
+      itemId: req.query.itemId || null,
+      limit: req.query.limit,
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
 router.get('/returns/:id', checkPermission('purchases', 'read'), async (req, res, next) => {
   try {
     const ret = await supplierReturnService.getReturn({ tenantId: req.tenant.id, returnId: req.params.id })
