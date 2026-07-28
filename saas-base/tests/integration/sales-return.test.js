@@ -242,6 +242,60 @@ test('candidates: últimas ventas del cliente, filtro por producto y devolvible 
   expect(bad.status).toBe(400)
 })
 
+test('el reingreso se valúa al COSTO (no al precio de venta) — NIF C-4', async () => {
+  const p = await createProduct(client, { sku: `RET-${uniq()}` })
+  await seedStock(p.id, 40)                                  // costo 5 (seedStock)
+  const { noteId, lineId } = await makeDeliveredNote(p.id, 40, 12)  // precio venta 12
+
+  const ret = await salesReturnService.createReturn({
+    tenantId, deliveryNoteId: noteId,
+    lines: [{ deliveryNoteLineId: lineId, quantity: 10 }], userId,
+  })
+  await salesReturnService.confirmReturn({ tenantId, returnId: ret.id, userId })
+
+  // El stock disponible reingresó valuado a 5 (avg_cost histórico), NO a 12.
+  const { rows } = await withBypass(() => query(
+    `SELECT quantity, avg_cost FROM inventory_stock
+      WHERE tenant_id = $1 AND item_type='product' AND item_id = $2 AND status='available'`,
+    [tenantId, p.id]))
+  expect(parseFloat(rows[0].quantity)).toBeCloseTo(10, 2)
+  expect(parseFloat(rows[0].avg_cost)).toBeCloseTo(5, 2)
+
+  // Y el movimiento de reingreso registró ese costo.
+  const { rows: mov } = await withBypass(() => query(
+    `SELECT unit_cost FROM inventory_movements
+      WHERE tenant_id = $1 AND reference_type = 'sales_return' AND reference_id = $2`,
+    [tenantId, ret.id]))
+  expect(parseFloat(mov[0].unit_cost)).toBeCloseTo(5, 2)
+})
+
+test('línea dañada reingresa como BLOQUEADO y la cancelación la saca de ahí', async () => {
+  const p = await createProduct(client, { sku: `RET-${uniq()}` })
+  await seedStock(p.id, 30)
+  const { noteId, lineId } = await makeDeliveredNote(p.id, 30, 10)
+
+  const ret = await salesReturnService.createReturn({
+    tenantId, deliveryNoteId: noteId,
+    lines: [{ deliveryNoteLineId: lineId, quantity: 8, isDamaged: true }], userId,
+  })
+  await salesReturnService.confirmReturn({ tenantId, returnId: ret.id, userId })
+
+  const stockBy = async (status) => {
+    const { rows } = await withBypass(() => query(
+      `SELECT COALESCE(SUM(quantity),0) q FROM inventory_stock
+        WHERE tenant_id=$1 AND item_type='product' AND item_id=$2 AND status=$3`,
+      [tenantId, p.id, status]))
+    return parseFloat(rows[0].q)
+  }
+  expect(await stockBy('blocked')).toBeCloseTo(8, 2)     // dañado → bloqueado
+  expect(await stockBy('available')).toBeCloseTo(0, 2)   // NO quedó vendible
+
+  // Cancelar revierte del MISMO estado (bloqueado), no de disponible.
+  await salesReturnService.cancelReturn({ tenantId, returnId: ret.id, userId })
+  expect(await stockBy('blocked')).toBeCloseTo(0, 2)
+  expect(await stockBy('available')).toBeCloseTo(0, 2)
+})
+
 test('motivos: catálogo vía /sales/returns/reasons y reason_name en el detalle', async () => {
   await withBypass(() => query(
     `INSERT INTO tenant_return_reasons (tenant_id, code, name)

@@ -152,6 +152,8 @@ async function createReturn({
         unitPrice: parseFloat(src.unit_price), discountPct: parseFloat(src.discount_pct || 0),
         packFactor, quantityBase: +(qty * packFactor).toFixed(4),
         sourceDeliveryNoteLineId: inp.deliveryNoteLineId,
+        // Dañada / no apta para reventa → reingresa como Bloqueado (mig 238).
+        isDamaged: !!inp.isDamaged,
       })
     }
 
@@ -180,11 +182,12 @@ async function createReturn({
         `INSERT INTO sales_return_lines
            (return_id, tenant_id, product_id, warehouse_id, product_lot_id,
             quantity, unit, unit_price, discount_pct, pack_factor, quantity_base,
-            source_delivery_note_line_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+            source_delivery_note_line_id, is_damaged)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         [ret.id, tenantId, l.productId, l.warehouseId, l.productLotId,
          l.quantity.toFixed(4), l.unit, l.unitPrice.toFixed(4), l.discountPct.toFixed(2),
-         l.packFactor.toFixed(4), l.quantityBase.toFixed(4), l.sourceDeliveryNoteLineId]
+         l.packFactor.toFixed(4), l.quantityBase.toFixed(4), l.sourceDeliveryNoteLineId,
+         l.isDamaged]
       )
     }
 
@@ -197,6 +200,24 @@ async function createReturn({
     return ret.id
   })
   return getReturn({ tenantId, returnId: newId })
+}
+
+/**
+ * Último costo promedio CONOCIDO del producto: la fila de inventory_stock con
+ * avg_cost > 0 tocada más recientemente, en cualquier almacén/estado — el
+ * avg_cost persiste aunque la cantidad llegue a cero, así que cubre el caso
+ * típico de devolución con el stock ya agotado (donde el WAC de stock "vivo"
+ * de updateStock no encuentra nada). Si nunca hubo costo, devuelve 0 y los
+ * paracaídas de updateStock (standard_cost) hacen el último intento.
+ */
+async function lastKnownProductCost(client, tenantId, productId) {
+  const { rows } = await client.query(
+    `SELECT avg_cost FROM inventory_stock
+      WHERE tenant_id = $1 AND item_type = 'product' AND item_id = $2 AND avg_cost > 0
+      ORDER BY updated_at DESC LIMIT 1`,
+    [tenantId, productId]
+  )
+  return parseFloat(rows[0]?.avg_cost || 0)
 }
 
 // ─── Confirmar (reingresa inventario) ────────────────────────────────────────
@@ -217,14 +238,21 @@ async function confirmReturn({ tenantId, returnId, userId, ipAddress, userAgent 
 
     for (const l of lines) {
       const qtyBase = parseFloat(l.quantity_base)
-      // Reingreso: el producto vuelve al almacén de origen. allowNegative da igual
-      // (sumamos); validateStock false (una entrada nunca se bloquea).
+      // Reingreso al COSTO, no al precio de venta (NIF C-4: la mercancía
+      // devuelta se valúa a su costo histórico/promedio; antes entraba con
+      // unit_price y el inventario quedaba inflado con la utilidad). Cascada:
+      // último costo promedio conocido del producto → los paracaídas de
+      // updateStock (standard_cost → WAC de stock vivo) si aquí sale 0.
+      // Dañada / no apta para reventa → entra como 'blocked' (2ª calidad),
+      // con su flujo existente de Liberar o dar de baja.
+      const unitCost = await lastKnownProductCost(client, tenantId, l.product_id)
       await recordMovement(client, {
         tenantId, warehouseId: l.warehouse_id, itemType: 'product', itemId: l.product_id,
         movementType: 'adjustment_in', quantity: qtyBase, unit: l.unit,
-        unitCost: parseFloat(l.unit_price || 0), statusTo: 'available',
+        unitCost, statusTo: l.is_damaged ? 'blocked' : 'available',
         referenceType: 'sales_return', referenceId: returnId,
-        notes: `Devolución de venta ${ret.return_number}`, createdBy: userId,
+        notes: `Devolución de venta ${ret.return_number}${l.is_damaged ? ' (dañada → bloqueado)' : ''}`,
+        createdBy: userId,
         productLotId: l.product_lot_id || null,
       })
       // Restaurar saldo del lote (reactivar si estaba agotado).
@@ -362,11 +390,13 @@ async function cancelReturn({ tenantId, returnId, userId, ipAddress, userAgent }
       )
       for (const l of lines) {
         const qtyBase = parseFloat(l.quantity_base)
-        // Sacar de nuevo lo que se había reingresado.
+        // Sacar de nuevo lo que se había reingresado, del MISMO estado al que
+        // entró (dañada = 'blocked'). El costo en una salida no re-valúa el
+        // promedio; se registra 0 como el resto de las salidas.
         await recordMovement(client, {
           tenantId, warehouseId: l.warehouse_id, itemType: 'product', itemId: l.product_id,
           movementType: 'adjustment_out', quantity: -qtyBase, unit: l.unit,
-          unitCost: parseFloat(l.unit_price || 0), statusTo: 'available',
+          unitCost: 0, statusTo: l.is_damaged ? 'blocked' : 'available',
           referenceType: 'sales_return', referenceId: returnId,
           notes: `Reversa de devolución de venta ${ret.return_number}`, createdBy: userId,
           productLotId: l.product_lot_id || null, allowNegative: true,

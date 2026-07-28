@@ -130,6 +130,7 @@ function NewReturnModal({ onClose, onSaved }) {
   const [reasonId, setReasonId] = useState('')
   const [notes, setNotes] = useState('')
   const [qty, setQty] = useState({})             // { [dnlId]: string }
+  const [damaged, setDamaged] = useState({})     // { [dnlId]: bool } — no apta p/ reventa
   const [error, setError] = useState(null)
 
   const { data: returnable } = useQuery({
@@ -179,7 +180,11 @@ function NewReturnModal({ onClose, onSaved }) {
     mutationFn: () => {
       const payload = lines
         .filter(l => parseFloat(qty[l.delivery_note_line_id]) > 0)
-        .map(l => ({ deliveryNoteLineId: l.delivery_note_line_id, quantity: parseFloat(qty[l.delivery_note_line_id]) }))
+        .map(l => ({
+          deliveryNoteLineId: l.delivery_note_line_id,
+          quantity: parseFloat(qty[l.delivery_note_line_id]),
+          isDamaged: !!damaged[l.delivery_note_line_id],
+        }))
       if (!payload.length) throw new Error('Captura al menos una cantidad a devolver.')
       return salesApi.createReturn({
         deliveryNoteId: note.id, reasonId: reasonId || null,
@@ -306,7 +311,7 @@ function NewReturnModal({ onClose, onSaved }) {
               <div className="border border-line-subtle rounded-lg overflow-hidden">
                 <table className="table">
                   <thead>
-                    <tr><th>Producto</th><th className="text-right">Entregado</th><th className="text-right">Devolvible</th><th className="text-right">A devolver</th></tr>
+                    <tr><th>Producto</th><th className="text-right">Entregado</th><th className="text-right">Devolvible</th><th className="text-right">A devolver</th><th className="text-center">Dañado</th></tr>
                   </thead>
                   <tbody>
                     {lines.map(l => {
@@ -328,6 +333,14 @@ function NewReturnModal({ onClose, onSaved }) {
                               autoFocus={isSearched && l.returnable > 0}
                               value={qty[l.delivery_note_line_id] || ''}
                               onChange={e => setQty(m => ({ ...m, [l.delivery_note_line_id]: e.target.value }))} />
+                          </td>
+                          <td className="text-center">
+                            {/* No apta para reventa: reingresa como Bloqueado, no Disponible. */}
+                            <input type="checkbox" className="accent-brand-500"
+                              disabled={l.returnable <= 0}
+                              title="Mercancía dañada / no apta para reventa: entra al almacén como Bloqueado"
+                              checked={!!damaged[l.delivery_note_line_id]}
+                              onChange={e => setDamaged(m => ({ ...m, [l.delivery_note_line_id]: e.target.checked }))} />
                           </td>
                         </tr>
                       )
@@ -432,7 +445,11 @@ function ReturnDetailModal({ returnId, onClose, onChanged, flash }) {
                   <tbody>
                     {(ret.lines || []).map(l => (
                       <tr key={l.id}>
-                        <td className="text-sm">{l.product_name}<span className="text-[10px] text-ink-muted font-mono block">{l.sku}</span></td>
+                        <td className="text-sm">
+                          {l.product_name}
+                          <span className="text-[10px] text-ink-muted font-mono block">{l.sku}</span>
+                          {l.is_damaged && <Badge variant="amber" label="Dañado → Bloqueado" />}
+                        </td>
                         <td className="text-right font-mono text-sm">{parseFloat(l.quantity)} {l.unit}</td>
                         <td className="text-right font-mono text-sm">{fmtMXN(l.subtotal)}</td>
                       </tr>
