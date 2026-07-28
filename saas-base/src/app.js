@@ -10,6 +10,7 @@ const cors = require('cors')
 const rateLimit = require('express-rate-limit')
 const config = require('./config')
 const logger = require('./config/logger')
+const { query } = require('./db')
 
 const app = express()
 
@@ -90,8 +91,24 @@ app.use((req, _res, next) => {
 // El tagging de Sentry (tenant_id, user_id) se aplica dentro de tenantResolver
 // y authGuard — donde sí está poblado req.tenant / req.auth.
 
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', ts: new Date().toISOString(), sentry: sentryReady() })
+app.get('/health', async (_req, res) => {
+  // Diagnóstico de desconexiones intermitentes: si uptime se resetea sin
+  // deploy, el proceso está muriendo (crash/OOM) y Render lo relevanta; dbMs
+  // alto/null señala que el cuello es Postgres y no el proceso.
+  let dbMs = null
+  try {
+    const t0 = Date.now()
+    await query('SELECT 1')
+    dbMs = Date.now() - t0
+  } catch { /* la BD caída no debe tumbar el health del proceso */ }
+  res.json({
+    status: 'ok',
+    ts: new Date().toISOString(),
+    sentry: sentryReady(),
+    uptime: Math.round(process.uptime()),
+    rssMb: Math.round(process.memoryUsage.rss() / 1024 / 1024),
+    dbMs,
+  })
 })
 
 // Política de privacidad pública (sin auth) — URL ESTABLE para Google Play y
