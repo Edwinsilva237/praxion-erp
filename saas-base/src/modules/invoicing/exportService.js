@@ -11,7 +11,7 @@
  */
 
 const ExcelJS = require('exceljs')
-const { zipSync } = require('fflate')
+const { zip } = require('fflate')
 const { query } = require('../../db')
 const { getFacturapiForTenant } = require('./facturapiClient')
 const storage = require('../../utils/storage')
@@ -288,7 +288,18 @@ async function generateZip({ tenantId, partnerId, dateFrom, dateTo, includeCance
       `Documentos del filtro que no traen archivo:\n\n${missing.join('\n')}\n`, 'utf8'))
   }
 
-  return Buffer.from(zipSync(files, { level: 6 }))
+  // zip() asíncrono (worker threads): zipSync congelaba el event loop varios
+  // segundos con lotes grandes y TODAS las peticiones del servidor se quedaban
+  // colgadas mientras comprimía (los usuarios veían "Conectando con el
+  // servidor…"). Los PDF ya vienen comprimidos → level 0 para ellos.
+  const zipped = await new Promise((resolve, reject) => {
+    const withOpts = {}
+    for (const [path, data] of Object.entries(files)) {
+      withOpts[path] = path.toLowerCase().endsWith('.pdf') ? [data, { level: 0 }] : data
+    }
+    zip(withOpts, { level: 6 }, (err, out) => (err ? reject(err) : resolve(out)))
+  })
+  return Buffer.from(zipped)
 }
 
 module.exports = { generateExcel, generateZip, MAX_ZIP_DOCS }
