@@ -816,6 +816,34 @@ router.get('/returns', checkPermission('sales', 'read'), async (req, res, next) 
   } catch (err) { next(err) }
 })
 
+/**
+ * GET /api/sales/returns/candidates?partnerId=&productId=
+ * Últimas remisiones entregadas de un cliente (opcionalmente con cierto
+ * producto) para identificar la venta a devolver. Debe registrarse ANTES de
+ * /returns/:id para que "candidates" no se interprete como id.
+ */
+router.get('/returns/candidates', checkPermission('sales', 'return'), async (req, res, next) => {
+  try {
+    res.json(await salesReturnService.listCandidateNotes({
+      tenantId: req.tenant.id,
+      partnerId: req.query.partnerId,
+      productId: req.query.productId || null,
+      limit: req.query.limit,
+    }))
+  } catch (err) { next(err) }
+})
+
+/**
+ * GET /api/sales/returns/reasons — catálogo de motivos de devolución
+ * (tenant_return_reasons, compartido con devoluciones a proveedor).
+ */
+router.get('/returns/reasons', checkPermission('sales', 'read'), async (req, res, next) => {
+  try {
+    const supplierReturnService = require('../purchases/supplierReturnService')
+    res.json(await supplierReturnService.listReasons({ tenantId: req.tenant.id }))
+  } catch (err) { next(err) }
+})
+
 /** GET /api/sales/returns/:id — detalle. */
 router.get('/returns/:id', checkPermission('sales', 'read'), async (req, res, next) => {
   try {

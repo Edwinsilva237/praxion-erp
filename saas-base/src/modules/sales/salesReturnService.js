@@ -405,6 +405,76 @@ async function cancelReturn({ tenantId, returnId, userId, ipAddress, userAgent }
 }
 
 // ─── Lecturas ────────────────────────────────────────────────────────────────
+/**
+ * Remisiones entregadas candidatas a devolución, para el buscador del modal
+ * "Nueva devolución": las últimas ventas de un cliente (opcionalmente solo las
+ * que incluyen cierto producto), con lo necesario para identificar la venta de
+ * un vistazo — fecha de entrega, productos, total, si tiene factura y, cuando
+ * se filtra por producto, cuánto queda devolvible de ese producto (0 = todo
+ * ya devuelto, el frontend la muestra deshabilitada).
+ */
+async function listCandidateNotes({ tenantId, partnerId, productId, limit = 15 }) {
+  if (!partnerId) throw createError(400, 'El cliente (partnerId) es requerido.')
+  const params = [tenantId, partnerId]
+
+  let productFilter = ''
+  let productCols = `NULL::numeric AS product_returnable, NULL::text AS product_unit,`
+  if (productId) {
+    params.push(productId)
+    productFilter = `AND EXISTS (SELECT 1 FROM delivery_note_lines pf
+                       WHERE pf.delivery_note_id = dn.id AND pf.product_id = $3)`
+    productCols = `
+      (SELECT COALESCE(SUM(dnl.quantity_delivered - COALESCE((
+                 SELECT SUM(srl.quantity)
+                   FROM sales_return_lines srl
+                   JOIN sales_returns sr ON sr.id = srl.return_id
+                  WHERE srl.source_delivery_note_line_id = dnl.id
+                    AND sr.status <> 'cancelled'), 0)), 0)
+         FROM delivery_note_lines dnl
+        WHERE dnl.delivery_note_id = dn.id AND dnl.product_id = $3) AS product_returnable,
+      (SELECT MAX(dnl.unit) FROM delivery_note_lines dnl
+        WHERE dnl.delivery_note_id = dn.id AND dnl.product_id = $3) AS product_unit,`
+  }
+
+  params.push(Math.min(parseInt(limit, 10) || 15, 50))
+  const { rows } = await query(
+    `SELECT dn.id, dn.document_number, dn.status, dn.currency,
+            COALESCE(dn.delivered_at::date, dn.issue_date) AS sale_date,
+            (SELECT COALESCE(SUM(dnl.quantity_delivered * dnl.unit_price
+                                 * (1 - COALESCE(dnl.discount_pct, 0) / 100)), 0)
+               FROM delivery_note_lines dnl
+              WHERE dnl.delivery_note_id = dn.id) AS total_amount,
+            (SELECT json_agg(json_build_object(
+                      'name', p.name, 'sku', p.sku,
+                      'qty', dnl.quantity_delivered, 'unit', dnl.unit)
+                    ORDER BY dnl.line_number)
+               FROM delivery_note_lines dnl
+               JOIN products p ON p.id = dnl.product_id
+              WHERE dnl.delivery_note_id = dn.id) AS products,
+            ${productCols}
+            EXISTS (SELECT 1 FROM invoices iv
+                     WHERE iv.tenant_id = dn.tenant_id AND iv.status <> 'cancelled'
+                       AND ( iv.delivery_note_id = dn.id
+                             OR EXISTS (SELECT 1 FROM invoice_remissions ir
+                                         WHERE ir.invoice_id = iv.id AND ir.delivery_note_id = dn.id)
+                             OR ( iv.delivery_note_id IS NULL
+                                  AND NOT EXISTS (SELECT 1 FROM invoice_remissions ir2 WHERE ir2.invoice_id = iv.id)
+                                  AND EXISTS (
+                                    SELECT 1 FROM invoice_lines il
+                                      JOIN delivery_note_lines dnl2 ON dnl2.sales_order_line_id = il.sales_order_line_id
+                                     WHERE il.invoice_id = iv.id AND dnl2.delivery_note_id = dn.id) ) )
+            ) AS has_invoice
+       FROM delivery_notes dn
+      WHERE dn.tenant_id = $1 AND dn.partner_id = $2
+        AND dn.status IN ('delivered', 'partially_delivered', 'invoiced')
+        ${productFilter}
+      ORDER BY COALESCE(dn.delivered_at::date, dn.issue_date) DESC, dn.document_number DESC
+      LIMIT $${params.length}`,
+    params
+  )
+  return rows
+}
+
 async function listReturns({ tenantId, status, partnerId, from, to } = {}) {
   const params = [tenantId]
   const filters = []
@@ -465,4 +535,5 @@ async function getReturn({ tenantId, returnId }) {
 module.exports = {
   createReturn, confirmReturn, emitCreditNote, cancelReturn,
   listReturns, getReturn, getReturnableLines, detectInvoiceForNote,
+  listCandidateNotes,
 }

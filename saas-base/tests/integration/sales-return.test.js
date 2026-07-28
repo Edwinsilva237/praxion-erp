@@ -167,3 +167,65 @@ test('CON factura: confirm solo mueve inventario; la NC se emite aparte y resuel
   )
   expect(done.credit_status).toBe('resolved')
 })
+
+test('candidates: últimas ventas del cliente, filtro por producto y devolvible restante', async () => {
+  const pA = await createProduct(client, { sku: `RET-${uniq()}` })
+  const pB = await createProduct(client, { sku: `RET-${uniq()}` })
+  await seedStock(pA.id, 60)
+  await seedStock(pB.id, 30)
+  const a = await makeDeliveredNote(pA.id, 60, 10)   // venta con producto A → $600
+  const b = await makeDeliveredNote(pB.id, 30, 20)   // venta con producto B
+
+  // Por cliente: aparecen ambas ventas con resumen (productos, total, sin factura).
+  const all = await client.get(`/api/sales/returns/candidates?partnerId=${partnerId}`)
+  expect(all.status).toBe(200)
+  expect(all.body.map(c => c.id)).toEqual(expect.arrayContaining([a.noteId, b.noteId]))
+  const rowA = all.body.find(c => c.id === a.noteId)
+  expect(rowA.has_invoice).toBe(false)
+  expect(parseFloat(rowA.total_amount)).toBeCloseTo(600, 2)
+  expect(rowA.products).toEqual([
+    expect.objectContaining({ name: expect.any(String), unit: 'pieza' }),
+  ])
+
+  // Por producto: solo la remisión que lo incluye, con cuánto queda devolvible.
+  const only = await client.get(
+    `/api/sales/returns/candidates?partnerId=${partnerId}&productId=${pA.id}`)
+  expect(only.status).toBe(200)
+  expect(only.body.map(c => c.id)).toContain(a.noteId)
+  expect(only.body.map(c => c.id)).not.toContain(b.noteId)
+  expect(parseFloat(only.body.find(c => c.id === a.noteId).product_returnable)).toBeCloseTo(60, 2)
+
+  // Devolver TODO el producto A (borrador cuenta) → devolvible queda en 0.
+  await salesReturnService.createReturn({
+    tenantId, deliveryNoteId: a.noteId,
+    lines: [{ deliveryNoteLineId: a.lineId, quantity: 60 }], userId,
+  })
+  const after = await client.get(
+    `/api/sales/returns/candidates?partnerId=${partnerId}&productId=${pA.id}`)
+  expect(parseFloat(after.body.find(c => c.id === a.noteId).product_returnable)).toBeCloseTo(0, 2)
+
+  // Sin partnerId → 400.
+  const bad = await client.get('/api/sales/returns/candidates')
+  expect(bad.status).toBe(400)
+})
+
+test('motivos: catálogo vía /sales/returns/reasons y reason_name en el detalle', async () => {
+  await withBypass(() => query(
+    `INSERT INTO tenant_return_reasons (tenant_id, code, name)
+     VALUES ($1, 'damaged-test', 'Dañado en transporte')`, [tenantId]))
+
+  const rs = await client.get('/api/sales/returns/reasons')
+  expect(rs.status).toBe(200)
+  const reason = rs.body.find(r => r.code === 'damaged-test')
+  expect(reason).toBeTruthy()
+
+  const p = await createProduct(client, { sku: `RET-${uniq()}` })
+  await seedStock(p.id, 10)
+  const { noteId, lineId } = await makeDeliveredNote(p.id, 10, 10)
+  const ret = await salesReturnService.createReturn({
+    tenantId, deliveryNoteId: noteId, reasonId: reason.id,
+    lines: [{ deliveryNoteLineId: lineId, quantity: 5 }], userId,
+  })
+  const det = await salesReturnService.getReturn({ tenantId, returnId: ret.id })
+  expect(det.reason_name).toBe('Dañado en transporte')
+})

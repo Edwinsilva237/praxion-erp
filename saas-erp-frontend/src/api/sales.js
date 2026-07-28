@@ -80,6 +80,11 @@ export const salesApi = {
   // Líneas devolvibles de una remisión entregada + si tiene factura.
   getReturnable:   (noteId) =>
     api.get(`${B}/delivery-notes/${noteId}/returnable`).then(r => r.data),
+  // Últimas remisiones entregadas de un cliente (opcional: solo con cierto
+  // producto) para identificar la venta a devolver.
+  listReturnCandidates: (p) => api.get(`${B}/returns/candidates`, { params: p }).then(r => r.data),
+  // Catálogo de motivos de devolución (compartido con devoluciones a proveedor).
+  listReturnReasons: () => api.get(`${B}/returns/reasons`).then(r => r.data),
   listReturns:     (p) => api.get(`${B}/returns`, { params: p }).then(r => r.data),
   getReturn:       (id) => api.get(`${B}/returns/${id}`).then(r => r.data),
   createReturn:    (body) => api.post(`${B}/returns`, body).then(r => r.data),

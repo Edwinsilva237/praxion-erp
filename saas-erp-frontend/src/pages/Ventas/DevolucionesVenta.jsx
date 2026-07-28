@@ -2,6 +2,8 @@ import { useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { salesApi } from '@/api/sales'
+import { partnersApi } from '@/api/partners'
+import { productsApi } from '@/api/products'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
 import Badge from '@/components/ui/Badge'
@@ -18,6 +20,17 @@ const CREDIT = {
   resolved:       { label: 'NC emitida',     variant: 'green' },
   not_applicable: { label: 'Sin factura',    variant: 'gray'  },
 }
+
+// "hace N días" — para reconocer la venta sin hacer cuentas mentales.
+function daysAgoLabel(d) {
+  if (!d) return ''
+  const n = Math.floor((Date.now() - new Date(d).getTime()) / 86400000)
+  if (n <= 0) return 'hoy'
+  return n === 1 ? 'hace 1 día' : `hace ${n} días`
+}
+
+const summarizeProducts = (products) =>
+  (products || []).map(p => `${parseFloat(p.qty)} ${p.name}`).join(' · ')
 
 export default function DevolucionesVenta() {
   const qc = useQueryClient()
@@ -110,9 +123,12 @@ export default function DevolucionesVenta() {
 
 // ── Modal: nueva devolución ──────────────────────────────────────────────────
 function NewReturnModal({ onClose, onSaved }) {
-  const [note, setNote] = useState(null)     // { id, label }
+  const [partner, setPartner] = useState(null)   // { id, label } — cliente
+  const [product, setProduct] = useState(null)   // { id, label } — filtro opcional
+  const [note, setNote] = useState(null)         // { id, label } — remisión elegida
+  const [reasonId, setReasonId] = useState('')
   const [notes, setNotes] = useState('')
-  const [qty, setQty] = useState({})         // { [dnlId]: string }
+  const [qty, setQty] = useState({})             // { [dnlId]: string }
   const [error, setError] = useState(null)
 
   const { data: returnable } = useQuery({
@@ -122,6 +138,33 @@ function NewReturnModal({ onClose, onSaved }) {
   })
   const lines = returnable?.lines || []
   const invoice = returnable?.invoice || null
+
+  // Últimas ventas ENTREGADAS del cliente (acotadas al producto si se eligió):
+  // el caso real es "el cliente X me regresó tal producto, no sé de qué remisión
+  // salió" — la lista identifica la venta sin conocer el folio.
+  const { data: candidates = [], isFetching: searching } = useQuery({
+    queryKey: ['return-candidates', partner?.id, product?.id],
+    queryFn: () => salesApi.listReturnCandidates({
+      partnerId: partner.id, productId: product?.id || undefined,
+    }),
+    enabled: !!partner?.id && !note,
+  })
+
+  const { data: reasons = [] } = useQuery({
+    queryKey: ['return-reasons'],
+    queryFn: () => salesApi.listReturnReasons(),
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const searchPartners = useCallback(async (q) => {
+    const res = await partnersApi.list({ search: q, role: 'customer', limit: 20 })
+    return (res.data || res).map(p => ({ id: p.id, label: p.name, sub: p.rfc || '' }))
+  }, [])
+
+  const searchProducts = useCallback(async (q) => {
+    const res = await productsApi.list({ search: q, limit: 20 })
+    return (res.data || res).map(p => ({ id: p.id, label: p.name, sub: p.sku || '' }))
+  }, [])
 
   // Buscar remisiones ENTREGADAS por folio/cliente.
   const searchNotes = useCallback(async (q) => {
@@ -137,7 +180,10 @@ function NewReturnModal({ onClose, onSaved }) {
         .filter(l => parseFloat(qty[l.delivery_note_line_id]) > 0)
         .map(l => ({ deliveryNoteLineId: l.delivery_note_line_id, quantity: parseFloat(qty[l.delivery_note_line_id]) }))
       if (!payload.length) throw new Error('Captura al menos una cantidad a devolver.')
-      return salesApi.createReturn({ deliveryNoteId: note.id, notes: notes || null, lines: payload })
+      return salesApi.createReturn({
+        deliveryNoteId: note.id, reasonId: reasonId || null,
+        notes: notes || null, lines: payload,
+      })
     },
     onSuccess: onSaved,
     onError: (e) => setError(e.response?.data?.error || e.message || 'No se pudo crear.'),
@@ -159,11 +205,89 @@ function NewReturnModal({ onClose, onSaved }) {
         <div className="p-5 flex flex-col gap-4 overflow-y-auto min-h-0">
           {error && <div className="bg-status-danger/10 border border-status-danger/40 rounded-lg px-3 py-2 text-sm text-status-danger">{error}</div>}
 
-          <div>
-            <label className="label">Remisión entregada</label>
-            <Autocomplete value={note} onChange={setNote} onSearch={searchNotes}
-              placeholder="Busca por folio o cliente..." />
-          </div>
+          {!note ? (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Cliente</label>
+                  <Autocomplete value={partner} onChange={setPartner} onSearch={searchPartners}
+                    placeholder="Busca el cliente..." />
+                </div>
+                <div>
+                  <label className="label">Producto (opcional)</label>
+                  <Autocomplete value={product} onChange={setProduct} onSearch={searchProducts}
+                    placeholder="Acota por producto devuelto..." disabled={!partner} />
+                </div>
+              </div>
+
+              {partner && (
+                <div className="border border-line-subtle rounded-lg overflow-hidden">
+                  <div className="px-3 py-2 bg-surface-elevated/40 text-xs font-medium text-ink-secondary border-b border-line-subtle">
+                    Últimas ventas entregadas de {partner.label}{product ? ` con ${product.label}` : ''}
+                  </div>
+                  {searching ? (
+                    <div className="flex justify-center py-6"><Spinner size="sm" /></div>
+                  ) : candidates.length === 0 ? (
+                    <p className="px-3 py-4 text-sm text-ink-muted">
+                      Este cliente no tiene remisiones entregadas{product ? ' con ese producto' : ''}.
+                    </p>
+                  ) : (
+                    <ul className="divide-y divide-line-subtle max-h-72 overflow-y-auto">
+                      {candidates.map(c => {
+                        const exhausted = !!product && c.product_returnable != null
+                          && parseFloat(c.product_returnable) <= 0
+                        return (
+                          <li key={c.id}>
+                            <button type="button" disabled={exhausted}
+                              onClick={() => setNote({ id: c.id, label: c.document_number })}
+                              className="w-full text-left px-3 py-2.5 hover:bg-surface-elevated/40 disabled:opacity-45 disabled:cursor-not-allowed flex flex-col gap-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-mono text-xs text-brand-300">{c.document_number}</span>
+                                <span className="text-[11px] text-ink-muted shrink-0">
+                                  {fmtDateOnly(c.sale_date)} · {daysAgoLabel(c.sale_date)}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs text-ink-secondary truncate">{summarizeProducts(c.products)}</span>
+                                <span className="font-mono text-xs shrink-0">{fmtMXN(c.total_amount)}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge variant={c.has_invoice ? 'blue' : 'gray'}
+                                  label={c.has_invoice ? 'Con factura' : 'Sin factura'} />
+                                {product && c.product_returnable != null && (
+                                  exhausted
+                                    ? <Badge variant="red" label="Ya devuelto por completo" />
+                                    : <span className="text-[11px] text-ink-muted">
+                                        Devolvible: {parseFloat(c.product_returnable)} {c.product_unit || ''}
+                                      </span>
+                                )}
+                              </div>
+                            </button>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <label className="label">¿Conoces el folio? Búscalo directo</label>
+                <Autocomplete value={note} onChange={setNote} onSearch={searchNotes}
+                  placeholder="Busca por folio o cliente..." />
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center justify-between gap-2 bg-surface-elevated/40 border border-line-subtle rounded-lg px-3 py-2">
+              <p className="text-sm text-ink-primary">
+                Remisión <span className="font-mono text-brand-300">{note.label}</span>
+              </p>
+              <button type="button" className="btn-ghost text-xs"
+                onClick={() => { setNote(null); setQty({}) }}>
+                Cambiar
+              </button>
+            </div>
+          )}
 
           {note && (
             <>
@@ -184,31 +308,46 @@ function NewReturnModal({ onClose, onSaved }) {
                     <tr><th>Producto</th><th className="text-right">Entregado</th><th className="text-right">Devolvible</th><th className="text-right">A devolver</th></tr>
                   </thead>
                   <tbody>
-                    {lines.map(l => (
-                      <tr key={l.delivery_note_line_id}>
-                        <td>
-                          <p className="text-sm text-ink-primary">{l.product_name}</p>
-                          {l.sku && <p className="text-[10px] text-ink-muted font-mono">{l.sku}</p>}
-                        </td>
-                        <td className="text-right font-mono text-xs text-ink-secondary">{parseFloat(l.quantity_delivered)} {l.unit}</td>
-                        <td className="text-right font-mono text-xs">{l.returnable} {l.unit}</td>
-                        <td className="text-right">
-                          <input type="number" min="0" max={l.returnable} step="any"
-                            className="input w-24 text-right text-sm"
-                            disabled={l.returnable <= 0}
-                            value={qty[l.delivery_note_line_id] || ''}
-                            onChange={e => setQty(m => ({ ...m, [l.delivery_note_line_id]: e.target.value }))} />
-                        </td>
-                      </tr>
-                    ))}
+                    {lines.map(l => {
+                      // Si se llegó filtrando por producto, esa línea viene resaltada
+                      // y con el cursor listo para capturar.
+                      const isSearched = !!product && l.product_id === product.id
+                      return (
+                        <tr key={l.delivery_note_line_id} className={isSearched ? 'bg-brand-500/5' : undefined}>
+                          <td>
+                            <p className={`text-sm ${isSearched ? 'text-brand-300 font-medium' : 'text-ink-primary'}`}>{l.product_name}</p>
+                            {l.sku && <p className="text-[10px] text-ink-muted font-mono">{l.sku}</p>}
+                          </td>
+                          <td className="text-right font-mono text-xs text-ink-secondary">{parseFloat(l.quantity_delivered)} {l.unit}</td>
+                          <td className="text-right font-mono text-xs">{l.returnable} {l.unit}</td>
+                          <td className="text-right">
+                            <input type="number" min="0" max={l.returnable} step="any"
+                              className="input w-24 text-right text-sm"
+                              disabled={l.returnable <= 0}
+                              autoFocus={isSearched && l.returnable > 0}
+                              value={qty[l.delivery_note_line_id] || ''}
+                              onChange={e => setQty(m => ({ ...m, [l.delivery_note_line_id]: e.target.value }))} />
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
 
-              <div>
-                <label className="label">Motivo / notas (opcional)</label>
-                <input className="input" value={notes} onChange={e => setNotes(e.target.value)}
-                  placeholder="Ej: producto dañado, no cumple calidad..." />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Motivo</label>
+                  <select className="input" value={reasonId} onChange={e => setReasonId(e.target.value)}>
+                    <option value="">— Sin especificar —</option>
+                    {reasons.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Notas (opcional)</label>
+                  <input className="input" value={notes} onChange={e => setNotes(e.target.value)}
+                    placeholder="Ej: caja dañada en el flete..." />
+                </div>
               </div>
             </>
           )}
@@ -274,6 +413,9 @@ function ReturnDetailModal({ returnId, onClose, onChanged, flash }) {
                 <div><span className="text-ink-muted text-xs">Crédito</span><p><Badge {...(CREDIT[ret.credit_status] || CREDIT.not_applicable)} /></p></div>
                 {ret.credit_note_number && (
                   <div><span className="text-ink-muted text-xs">Nota de crédito</span><p className="font-mono">{ret.credit_note_number}</p></div>
+                )}
+                {ret.reason_name && (
+                  <div><span className="text-ink-muted text-xs">Motivo</span><p>{ret.reason_name}</p></div>
                 )}
               </div>
               {ret.notes && <p className="text-xs text-ink-muted italic">{ret.notes}</p>}
