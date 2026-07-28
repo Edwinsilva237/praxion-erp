@@ -49,18 +49,28 @@ function addResumenSheet(wb, { from, to, tenantName, data, snap, snapPrev }) {
   ws.addRow([])
 
   const c = data.totals_current
-  // VENTAS con el MISMO método que el dashboard: Facturado (con IVA) + Sin factura.
-  const total     = snap.total
-  const prevTotal = snapPrev ? snapPrev.total : 0
+  // VENTAS con el MISMO método que el dashboard: Facturado (con IVA) + Sin
+  // factura, MENOS reversas (NC timbradas + devoluciones sin factura) = neto.
+  const credits   = snap.credits?.total || 0
+  const total     = credits > 0 ? snap.net_total : snap.total
+  const prevTotal = snapPrev ? (snapPrev.net_total ?? snapPrev.total) : 0
   const delta     = total - prevTotal
   const deltaPct  = prevTotal > 0 ? (delta / prevTotal) * 100 : null
 
   row(ws, '— VENTAS DEL PERIODO (mismo método que el dashboard) —', null, null, { bold: true })
-  row(ws, 'Total del periodo',           total,                'currency', { bold: true })
+  row(ws, credits > 0 ? 'Total NETO del periodo' : 'Total del periodo', total, 'currency', { bold: true })
   row(ws, '   · Facturado (con IVA)',    snap.invoiced,        'currency')
   row(ws, '        — Subtotal (sin IVA)', snap.invoiced_subtotal, 'currency')
   row(ws, '        — IVA',               snap.invoiced_iva,    'currency')
   row(ws, '   · Sin factura (remisiones)', snap.uninvoiced,    'currency')
+  if (credits > 0) {
+    row(ws, `   · Notas de crédito timbradas (${snap.credits.credit_notes_count})`,
+        -snap.credits.credit_notes, 'currency', { color: 'FF991B1B' })
+    if (snap.credits.returns_count > 0) {
+      row(ws, `   · Devoluciones sin factura (${snap.credits.returns_count})`,
+          -snap.credits.returns_uninvoiced, 'currency', { color: 'FF991B1B' })
+    }
+  }
   row(ws, 'Total periodo anterior',      prevTotal,            'currency')
   row(ws, 'Diferencia',                  delta,                'currency',
       { color: delta > 0 ? 'FF166534' : delta < 0 ? 'FF991B1B' : 'FF606060' })

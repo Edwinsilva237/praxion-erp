@@ -287,20 +287,32 @@ function ResumenTab({ data }) {
   const cur = data.totals_current
   // Mismo método/total que el dashboard (Facturado con IVA + Sin factura).
   const snap = data.sales_snapshot || { total: cur.revenue, invoiced: 0, invoiced_subtotal: 0, invoiced_iva: 0, uninvoiced: 0 }
-  const prevTotal = data.sales_snapshot_prev?.total || 0
-  const dRev = snap.total - prevTotal
+  // Comparativa neto vs neto (si el backend aún no manda net_total, cae al bruto).
+  const prevTotal = data.sales_snapshot_prev?.net_total ?? (data.sales_snapshot_prev?.total || 0)
+  const dRev = (snap.net_total ?? snap.total) - prevTotal
   const dPct = prevTotal > 0 ? (dRev / prevTotal) * 100 : null
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
       {/* KPI: ventas y comparativa — mismo método que el dashboard */}
       <div className="card md:col-span-2">
-        <p className="eyebrow">VENTAS DEL PERIODO</p>
-        <div className="text-3xl font-bold text-ink-primary mt-1 tabular-nums">{fmtMXNf(snap.total)}</div>
+        <p className="eyebrow">{snap.credits?.total > 0 ? 'VENTAS NETAS DEL PERIODO' : 'VENTAS DEL PERIODO'}</p>
+        <div className="text-3xl font-bold text-ink-primary mt-1 tabular-nums">
+          {fmtMXNf(snap.credits?.total > 0 ? snap.net_total : snap.total)}
+        </div>
         <p className="text-[11px] text-ink-muted mt-1 tabular-nums">
           Facturado {fmtMXN(snap.invoiced)} <span className="opacity-70">(subtotal {fmtMXN(snap.invoiced_subtotal)} · IVA {fmtMXN(snap.invoiced_iva)})</span>
           {' · '}Sin factura {fmtMXN(snap.uninvoiced)}
         </p>
+        {snap.credits?.total > 0 && (
+          <p className="text-[11px] text-ink-muted tabular-nums">
+            Venta bruta {fmtMXN(snap.total)}
+            <span className="text-status-danger"> − {fmtMXN(snap.credits.total)}</span>
+            {' '}({snap.credits.credit_notes_count > 0 && `${snap.credits.credit_notes_count} NC`}
+            {snap.credits.credit_notes_count > 0 && snap.credits.returns_count > 0 && ' + '}
+            {snap.credits.returns_count > 0 && `${snap.credits.returns_count} devolución${snap.credits.returns_count === 1 ? '' : 'es'} sin factura`})
+          </p>
+        )}
         {prevTotal > 0 && (
           <p className={clsx('text-xs mt-1',
             dRev > 0 ? 'text-status-success' : dRev < 0 ? 'text-status-danger' : 'text-ink-muted')}>

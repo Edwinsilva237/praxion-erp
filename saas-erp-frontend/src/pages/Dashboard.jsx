@@ -233,8 +233,19 @@ function SalesMonthCard({ data, loading, month }) {
       </div>
 
       <div className="text-3xl font-bold text-ink-primary tabular-nums">
-        {fmtCurrencyFull(d.total)}
+        {fmtCurrencyFull(d.credits?.total > 0 ? d.net_total : d.total)}
       </div>
+      {/* Reversas del mes: NC timbradas + devoluciones sin factura. Cuando las
+          hay, el número grande es la VENTA NETA y aquí se ve el desglose. */}
+      {d.credits?.total > 0 && (
+        <p className="text-[11px] text-ink-muted tabular-nums -mt-2">
+          Venta bruta {fmtCurrency(d.total)}
+          <span className="text-status-danger"> − {fmtCurrency(d.credits.total)}</span> en
+          {d.credits.credit_notes_count > 0 && ` ${d.credits.credit_notes_count} nota${d.credits.credit_notes_count === 1 ? '' : 's'} de crédito`}
+          {d.credits.credit_notes_count > 0 && d.credits.returns_count > 0 && ' y'}
+          {d.credits.returns_count > 0 && ` ${d.credits.returns_count} devolución${d.credits.returns_count === 1 ? '' : 'es'} sin factura`}
+        </p>
+      )}
 
       {/* Barra de proporción facturado vs no facturado */}
       {d.total > 0 ? (

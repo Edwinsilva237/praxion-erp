@@ -93,11 +93,35 @@ async function getSalesSnapshot(tenantId, from, to) {
       )
   `, [tenantId, from, to])
 
+  // RESTAS del periodo — la venta bruta de arriba no consideraba reversas:
+  //   a) Notas de crédito TIMBRADAS (CFDI E) del periodo. Cubren devoluciones,
+  //      descuentos y correcciones sobre ventas facturadas.
+  //   b) Devoluciones de venta SIN factura confirmadas (reingresan inventario y
+  //      acreditan la CxC de la remisión, pero no generan NC). Las devoluciones
+  //      CON factura NO se cuentan aquí: su resta llega por la NC al timbrarse
+  //      — así ninguna reversa cuenta doble.
+  const { rows: cnRows } = await query(`
+    SELECT COALESCE(SUM(total_mxn), 0)::numeric AS total_cn, COUNT(*)::int AS count_cn
+      FROM invoices
+     WHERE tenant_id = $1 AND type = 'issued' AND cfdi_type = 'E' AND status = 'stamped'
+       AND stamp_date >= $2 AND stamp_date < $3
+  `, [tenantId, from, to])
+  const { rows: srRows } = await query(`
+    SELECT COALESCE(SUM(total_mxn), 0)::numeric AS total_sr, COUNT(*)::int AS count_sr
+      FROM sales_returns
+     WHERE tenant_id = $1 AND status = 'confirmed' AND source_invoice_id IS NULL
+       AND confirmed_at >= $2 AND confirmed_at < $3
+  `, [tenantId, from, to])
+
   const invoiced          = parseFloat(invRows[0].total_invoiced)    || 0
   const invoiced_subtotal = parseFloat(invRows[0].subtotal_invoiced) || 0
   const invoiced_iva      = parseFloat(invRows[0].iva_invoiced)      || 0
   const uninvoiced        = parseFloat(dnRows[0].total_uninvoiced)   || 0
   const total      = invoiced + uninvoiced
+
+  const credit_notes       = parseFloat(cnRows[0].total_cn) || 0
+  const returns_uninvoiced = parseFloat(srRows[0].total_sr) || 0
+  const credits_total      = credit_notes + returns_uninvoiced
 
   return {
     total,
@@ -107,6 +131,15 @@ async function getSalesSnapshot(tenantId, from, to) {
     uninvoiced,
     count_invoiced:   invRows[0].count_invoiced,
     count_uninvoiced: dnRows[0].count_uninvoiced,
+    // Reversas del periodo y venta neta (total − reversas).
+    credits: {
+      credit_notes,                                  // NC timbradas (CON IVA)
+      credit_notes_count: cnRows[0].count_cn,
+      returns_uninvoiced,                            // devoluciones sin factura
+      returns_count:      srRows[0].count_sr,
+      total: credits_total,
+    },
+    net_total: total - credits_total,
     // Porcentajes para visualización (evitar divide-by-zero)
     pct_invoiced:   total > 0 ? (invoiced   / total) * 100 : 0,
     pct_uninvoiced: total > 0 ? (uninvoiced / total) * 100 : 0,

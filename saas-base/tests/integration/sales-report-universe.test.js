@@ -74,7 +74,15 @@ describe('Reporte de ventas — método dashboard (universo sin IVA + margen)', 
   afterAll(async () => { await cleanupTestTenants(); await pool.end() })
 
   test('total = dashboard sin IVA; listas suman; directa incluida; margen presente', async () => {
-    const rep = await getSalesReport({ tenantId, from: '2026-06-01', to: '2026-07-01' })
+    // Periodo = MES EN CURSO (el fixture usa NOW()). Antes estaba hardcodeado
+    // '2026-06-01'..'2026-07-01' y el test solo pasaba corriendo en junio 2026.
+    const now = new Date()
+    const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
+    const rep = await getSalesReport({
+      tenantId,
+      from: ymd(now),
+      to:   ymd(new Date(now.getFullYear(), now.getMonth() + 1, 1)),
+    })
     const snap = rep.sales_snapshot
 
     // Universo sin IVA = facturado_subtotal (3700) + sin factura (300) = 4000.

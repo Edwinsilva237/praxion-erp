@@ -172,20 +172,31 @@ function drawHeader(doc, { tenantName, primary, logoBuffer }) {
 // entregada (sin IVA) — análisis operativo; ver la pestaña Conciliación del Excel.
 function drawKpis(doc, data, primary, secondary, snap, snapPrev) {
   const c = data.totals_current
-  const total     = snap.total
-  const prevTotal = snapPrev ? snapPrev.total : 0
+  // Con reversas (NC timbradas + devoluciones sin factura) el titular es la
+  // VENTA NETA; comparativa neto vs neto.
+  const hasCredits = (snap.credits?.total || 0) > 0
+  const total     = hasCredits ? snap.net_total : snap.total
+  const prevTotal = snapPrev ? (snapPrev.net_total ?? snapPrev.total) : 0
   const delta     = total - prevTotal
   const deltaPct  = prevTotal > 0 ? (delta / prevTotal) * 100 : null
 
   sectionTitle(doc, 'RESUMEN EJECUTIVO', primary)
   doc.fillColor(INK).font('Helvetica-Bold').fontSize(22)
-     .text('Ventas del periodo', MARGIN, doc.y)
+     .text(hasCredits ? 'Ventas netas del periodo' : 'Ventas del periodo', MARGIN, doc.y)
   doc.fillColor(SUB).font('Helvetica').fontSize(8)
      .text('Facturado (con IVA) + por facturar — mismo método que el dashboard', MARGIN, doc.y + 2)
   doc.moveDown(0.6)
 
   doc.fillColor(primary).font('Helvetica-Bold').fontSize(40)
      .text(fmtMXNf(total), MARGIN, doc.y)
+
+  if (hasCredits) {
+    doc.fillColor(SUB).font('Helvetica').fontSize(9)
+       .text(`Venta bruta ${fmtMXNf(snap.total)} − ${fmtMXNf(snap.credits.total)} de reversas `
+         + `(${snap.credits.credit_notes_count} nota(s) de crédito`
+         + (snap.credits.returns_count > 0 ? ` + ${snap.credits.returns_count} devolución(es) sin factura` : '')
+         + ')', MARGIN, doc.y + 2)
+  }
 
   if (prevTotal > 0) {
     const sign  = delta > 0 ? '+' : delta < 0 ? '-' : ''
