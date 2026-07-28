@@ -26,8 +26,20 @@ async function createCreditNote({
   reason, description, amount, paymentForm,
   lines,
   relationship = '01',
+  // Uso CFDI del egreso. G02 = "Devoluciones, descuentos o bonificaciones",
+  // el uso que el SAT marca para notas de crédito (antes quedaba el default
+  // del PAC y en BD se guardaba G01 de compras).
+  useCfdi = 'G02',
+  // Tasa de IVA del concepto en modo POR MONTO (en por-líneas cada línea trae
+  // la suya). Debe coincidir con la tasa de la factura origen.
+  taxRate = 16,
   userId, ipAddress, userAgent,
 }) {
+  const taxRateNum = parseFloat(taxRate)
+  if (![0, 8, 16].includes(taxRateNum)) {
+    throw createError(400, 'taxRate debe ser 0, 8 o 16.')
+  }
+  const taxFactor = taxRateNum / 100
   return withTransaction(async (client) => {
     // Obtener factura original timbrada
     const { rows: invRows } = await client.query(
@@ -106,12 +118,16 @@ async function createCreditNote({
             unit_name:    'Actividad',
             price:        computedAmount,
             tax_included: false,
-            taxes: [{ type: 'IVA', rate: 0.16, factor: 'Tasa' }],
+            taxes: [{ type: 'IVA', rate: taxFactor, factor: 'Tasa' }],
           },
           quantity: 1,
         },
       ]
     }
+
+    // IVA total del documento: en por-monto respeta la tasa elegida; en
+    // por-líneas cada línea ya lleva su tasa (el total en BD usa 16 como antes).
+    const docTaxFactor = byLines ? 0.16 : taxFactor
 
     const facturapi = await getFacturapiForTenant(tenantId)
 
@@ -126,6 +142,7 @@ async function createCreditNote({
       },
       items,
       payment_form: paymentForm || '03',
+      use: useCfdi,
       related_documents: [
         {
           relationship: relationship,
@@ -237,9 +254,9 @@ async function createCreditNote({
        inv.partner_id,
        inv.currency,
        computedAmount,
-       parseFloat((computedAmount * 0.16).toFixed(2)),
-       parseFloat((computedAmount * 1.16).toFixed(2)),
-       paymentForm || '03', 'G01',
+       parseFloat((computedAmount * docTaxFactor).toFixed(2)),
+       parseFloat((computedAmount * (1 + docTaxFactor)).toFixed(2)),
+       paymentForm || '03', useCfdi,
        inv.lugar_expedicion,
        inv.receptor_tax_regime, inv.receptor_zip_code,
        creditNote.uuid,
@@ -266,7 +283,7 @@ async function createCreditNote({
     )
     if (arRows.length > 0) {
       const ar = arRows[0]
-      const reduction       = parseFloat((computedAmount * 1.16).toFixed(2))
+      const reduction       = parseFloat((computedAmount * (1 + docTaxFactor)).toFixed(2))
       const newCredited     = parseFloat(ar.amount_credited || 0) + reduction
       const newPending      = parseFloat(ar.amount_total) - parseFloat(ar.amount_paid || 0) - newCredited
       const newStatus       = newPending <= 0.005
@@ -296,7 +313,7 @@ async function createCreditNote({
       facturapi_id:     creditNote.id,
       uuid:             creditNote.uuid,
       amount:           computedAmount,
-      total:            parseFloat((computedAmount * 1.16).toFixed(2)),
+      total:            parseFloat((computedAmount * (1 + docTaxFactor)).toFixed(2)),
       reason,
       related_invoice:  inv.document_number,
       verification_url: creditNote.verification_url,

@@ -83,10 +83,13 @@ test('la NC auto-crea su serie "NC" tipo E y NO consume la serie de facturas', a
     `SELECT folio_next FROM tenant_document_series WHERE id = $1`, [invoiceSeriesId]))
   expect(invSeries[0].folio_next).toBe(50)
 
-  // Vínculo explícito a la factura origen.
+  // Vínculo explícito a la factura origen + uso CFDI de egreso (G02) por default.
   const { rows: cnRow } = await withBypass(() => query(
-    `SELECT related_invoice_id FROM invoices WHERE id = $1`, [cn.id]))
+    `SELECT related_invoice_id, use_cfdi, tax_transferred, total FROM invoices WHERE id = $1`, [cn.id]))
   expect(cnRow[0].related_invoice_id).toBe(inv.id)
+  expect(cnRow[0].use_cfdi).toBe('G02')
+  expect(parseFloat(cnRow[0].tax_transferred)).toBeCloseTo(16, 2)   // 100 al 16%
+  expect(parseFloat(cnRow[0].total)).toBeCloseTo(116, 2)
 
   // Segunda NC de la MISMA factura: folio consecutivo de la serie NC.
   const cn2 = await creditNoteService.createCreditNote({
@@ -113,6 +116,22 @@ test('si el tenant ya configuró una serie tipo E, se respeta', async () => {
     tenantId, invoiceId: inv.id, reason: 'correction', amount: 10, userId,
   })
   expect(cn.document_number).toBe('DEV-0007')
+})
+
+test('taxRate editado en el formulario: 0% deja total = monto y valida tasas', async () => {
+  const inv = await makeStampedInvoice('A-0051')
+  const cn = await creditNoteService.createCreditNote({
+    tenantId, invoiceId: inv.id, reason: 'return', amount: 200, taxRate: 0, useCfdi: 'S01', userId,
+  })
+  const { rows } = await withBypass(() => query(
+    `SELECT total, tax_transferred, use_cfdi FROM invoices WHERE id = $1`, [cn.id]))
+  expect(parseFloat(rows[0].total)).toBeCloseTo(200, 2)
+  expect(parseFloat(rows[0].tax_transferred)).toBeCloseTo(0, 2)
+  expect(rows[0].use_cfdi).toBe('S01')
+
+  await expect(creditNoteService.createCreditNote({
+    tenantId, invoiceId: inv.id, reason: 'return', amount: 10, taxRate: 11, userId,
+  })).rejects.toMatchObject({ status: 400 })
 })
 
 test('listInvoices separa por cfdi_type: I sin NCs, E solo NCs con factura origen', async () => {

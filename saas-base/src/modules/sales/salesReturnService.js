@@ -285,7 +285,15 @@ async function confirmReturn({ tenantId, returnId, userId, ipAddress, userAgent 
 }
 
 // ─── Emitir nota de crédito (solo CON factura) ───────────────────────────────
-async function emitCreditNote({ tenantId, returnId, paymentForm, userId, ipAddress, userAgent }) {
+// El frontend abre un formulario de validación previa al timbrado: monto,
+// concepto, forma de pago, uso CFDI, tipo de relación y tasa de IVA llegan
+// editados (precargados con los defaults de la devolución). Todo es opcional:
+// sin body se comporta como siempre (total de la devolución, 03, G02, 16%).
+async function emitCreditNote({
+  tenantId, returnId,
+  amount, description, paymentForm, useCfdi, relationship, taxRate,
+  userId, ipAddress, userAgent,
+}) {
   // Lecturas + validaciones fuera de transacción (createCreditNote maneja la suya
   // y llama a Facturapi — no debe sostener locks).
   const { rows: hdr } = await query(
@@ -307,11 +315,18 @@ async function emitCreditNote({ tenantId, returnId, paymentForm, userId, ipAddre
   }
 
   // total_mxn de la devolución es SIN IVA (las remisiones no llevan IVA) → es el
-  // `amount` que createCreditNote espera (le aplica el 16% por dentro).
+  // `amount` default que createCreditNote espera (le aplica el IVA por dentro).
+  const finalAmount = amount != null ? parseFloat(amount) : parseFloat(ret.total_mxn)
+  if (!(finalAmount > 0)) throw createError(400, 'El monto de la nota debe ser mayor a cero.')
+
   const cn = await creditNoteService.createCreditNote({
     tenantId, invoiceId: ret.source_invoice_id,
-    reason: 'return', description: `Devolución de venta ${ret.return_number}`,
-    amount: parseFloat(ret.total_mxn), paymentForm: paymentForm || '03',
+    reason: 'return',
+    description: (description || '').trim() || `Devolución de venta ${ret.return_number}`,
+    amount: finalAmount, paymentForm: paymentForm || '03',
+    useCfdi: useCfdi || undefined,
+    relationship: relationship || undefined,
+    taxRate: taxRate != null ? taxRate : undefined,
     userId, ipAddress, userAgent,
   })
 

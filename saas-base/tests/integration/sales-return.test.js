@@ -168,6 +168,39 @@ test('CON factura: confirm solo mueve inventario; la NC se emite aparte y resuel
   expect(done.credit_status).toBe('resolved')
 })
 
+test('emitir NC con datos editados en el formulario: se pasan al timbrado', async () => {
+  const p = await createProduct(client, { sku: `RET-${uniq()}` })
+  await seedStock(p.id, 50)
+  const { noteId, lineId } = await makeDeliveredNote(p.id, 50, 10)
+  await withBypass(() => query(
+    `INSERT INTO invoices (tenant_id, type, document_number, partner_id, status, delivery_note_id, total, total_mxn, cfdi_uuid)
+     VALUES ($1,'issued',$2,$3,'stamped',$4,580,580,gen_random_uuid())`,
+    [tenantId, `F-${uniq()}`, partnerId, noteId]))
+
+  const ret = await salesReturnService.createReturn({
+    tenantId, deliveryNoteId: noteId,
+    lines: [{ deliveryNoteLineId: lineId, quantity: 20 }], userId,   // default sería 200
+  })
+  await salesReturnService.confirmReturn({ tenantId, returnId: ret.id, userId })
+
+  await salesReturnService.emitCreditNote({
+    tenantId, returnId: ret.id, userId,
+    amount: 150, description: 'Ajuste pactado con el cliente',
+    paymentForm: '01', useCfdi: 'S01', relationship: '03', taxRate: 0,
+  })
+  expect(creditNoteService.createCreditNote).toHaveBeenCalledWith(
+    expect.objectContaining({
+      invoiceId: ret.source_invoice_id, amount: 150, reason: 'return',
+      description: 'Ajuste pactado con el cliente',
+      paymentForm: '01', useCfdi: 'S01', relationship: '03', taxRate: 0,
+    })
+  )
+
+  // Monto inválido → 400 sin llegar al timbrador.
+  const ret2 = await salesReturnService.getReturn({ tenantId, returnId: ret.id })
+  expect(ret2.credit_status).toBe('resolved')
+})
+
 test('candidates: últimas ventas del cliente, filtro por producto y devolvible restante', async () => {
   const pA = await createProduct(client, { sku: `RET-${uniq()}` })
   const pB = await createProduct(client, { sku: `RET-${uniq()}` })

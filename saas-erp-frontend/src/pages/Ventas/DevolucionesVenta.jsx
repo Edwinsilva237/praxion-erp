@@ -8,6 +8,7 @@ import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
 import Badge from '@/components/ui/Badge'
 import Can from '@/components/auth/Can'
+import SatCatalogSelect from '@/components/fiscal/SatCatalogSelect'
 import { fmtDateOnly, fmtMXN } from '@/utils/fmt'
 
 const STATUS = {
@@ -372,6 +373,7 @@ function NewReturnModal({ onClose, onSaved }) {
 function ReturnDetailModal({ returnId, onClose, onChanged, flash }) {
   const qc = useQueryClient()
   const [error, setError] = useState(null)
+  const [showNcForm, setShowNcForm] = useState(false)
   const { data: ret, isLoading } = useQuery({
     queryKey: ['sales-return', returnId],
     queryFn: () => salesApi.getReturn(returnId),
@@ -386,7 +388,11 @@ function ReturnDetailModal({ returnId, onClose, onChanged, flash }) {
     onError: (e) => setError(e.response?.data?.error || 'No se pudo completar.'),
   })
   const confirmMut = useMutation({ mutationFn: () => salesApi.confirmReturn(returnId), ...mkOpts('Devolución confirmada — inventario reingresado.') })
-  const ncMut      = useMutation({ mutationFn: () => salesApi.emitReturnCreditNote(returnId), ...mkOpts('Nota de crédito emitida.') })
+  const ncMut      = useMutation({
+    mutationFn: (body) => salesApi.emitReturnCreditNote(returnId, body),
+    onSuccess: () => { setShowNcForm(false); refresh(); flash?.('Nota de crédito emitida.') },
+    onError: (e) => setError(e.response?.data?.error || 'No se pudo emitir la nota de crédito.'),
+  })
   const cancelMut  = useMutation({ mutationFn: () => salesApi.cancelReturn(returnId), ...mkOpts('Devolución cancelada.') })
 
   return createPortal(
@@ -449,7 +455,8 @@ function ReturnDetailModal({ returnId, onClose, onChanged, flash }) {
               )}
               {ret.status === 'confirmed' && ret.source_invoice_id && ret.credit_status === 'pending' && (
                 <Can do="sales:return">
-                  <button onClick={() => ncMut.mutate()} className="btn-primary" disabled={ncMut.isPending}>
+                  <button onClick={() => { setError(null); setShowNcForm(true) }}
+                    className="btn-primary" disabled={ncMut.isPending}>
                     {ncMut.isPending ? <Spinner size="sm" /> : 'Emitir nota de crédito'}
                   </button>
                 </Can>
@@ -462,8 +469,132 @@ function ReturnDetailModal({ returnId, onClose, onChanged, flash }) {
                 </Can>
               )}
             </div>
+
+            {showNcForm && (
+              <NcPreviewModal
+                ret={ret}
+                loading={ncMut.isPending}
+                onConfirm={(body) => ncMut.mutate(body)}
+                onClose={() => setShowNcForm(false)}
+              />
+            )}
           </>
         )}
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// ── Modal: validar la NC ANTES de timbrar ────────────────────────────────────
+// Precargado con los defaults correctos (monto de la devolución, uso CFDI G02
+// de egresos, forma de pago 03, IVA 16%, relación SAT 01) — todo editable.
+const USO_CFDI_OPTS = [
+  ['G02', 'G02 — Devoluciones, descuentos o bonificaciones'],
+  ['G01', 'G01 — Adquisición de mercancías'],
+  ['S01', 'S01 — Sin efectos fiscales'],
+]
+const RELACION_OPTS = [
+  ['01', '01 — Nota de crédito de los documentos relacionados'],
+  ['03', '03 — Devolución de mercancía sobre facturas previas'],
+]
+const IVA_OPTS = [16, 8, 0]
+
+function NcPreviewModal({ ret, loading, onConfirm, onClose }) {
+  const [amount, setAmount]           = useState(String(parseFloat(ret.total_mxn)))
+  const [taxRate, setTaxRate]         = useState(16)
+  const [description, setDescription] = useState(`Devolución de venta ${ret.return_number}`)
+  const [paymentForm, setPaymentForm] = useState('03')
+  const [useCfdi, setUseCfdi]         = useState('G02')
+  const [relationship, setRelationship] = useState('01')
+
+  const numAmount = parseFloat(amount) || 0
+  const tax   = numAmount * (taxRate / 100)
+  const total = numAmount + tax
+  const amountChanged = Math.abs(numAmount - parseFloat(ret.total_mxn)) > 0.005
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-lg p-5 max-h-[92vh] overflow-y-auto">
+        <h3 className="text-base font-semibold text-ink-primary mb-1">
+          Nota de crédito · factura {ret.invoice_number}
+        </h3>
+        <p className="text-xs text-ink-muted mb-4">
+          Valida los datos del CFDI antes de timbrar. Cliente: {ret.partner_name}.
+        </p>
+
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Monto sin IVA <span className="text-status-danger">*</span></label>
+              <input type="number" step="0.01" min="0" className="input"
+                value={amount} onChange={e => setAmount(e.target.value)} disabled={loading} />
+              {amountChanged && (
+                <p className="text-[11px] text-status-warning mt-1">
+                  Distinto al total de la devolución ({fmtMXN(ret.total_mxn)}).
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="label">Tasa de IVA</label>
+              <select className="input" value={taxRate}
+                onChange={e => setTaxRate(parseInt(e.target.value, 10))} disabled={loading}>
+                {IVA_OPTS.map(r => <option key={r} value={r}>{r}%</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="label">Concepto del CFDI</label>
+            <input className="input" value={description}
+              onChange={e => setDescription(e.target.value)} disabled={loading} />
+          </div>
+
+          <div>
+            <label className="label">Forma de pago</label>
+            <SatCatalogSelect endpoint="forma-pago" value={paymentForm}
+              onChange={code => setPaymentForm(code)} placeholder="Buscar forma de pago…"
+              disabled={loading} />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="label">Uso CFDI</label>
+              <select className="input" value={useCfdi}
+                onChange={e => setUseCfdi(e.target.value)} disabled={loading}>
+                {USO_CFDI_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Tipo de relación SAT</label>
+              <select className="input" value={relationship}
+                onChange={e => setRelationship(e.target.value)} disabled={loading}>
+                {RELACION_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="bg-surface-elevated/40 border border-line-subtle rounded-lg px-3 py-2 text-sm flex flex-col gap-0.5">
+            <div className="flex justify-between"><span className="text-ink-muted">Subtotal</span><span className="font-mono">{fmtMXN(numAmount)}</span></div>
+            <div className="flex justify-between"><span className="text-ink-muted">IVA ({taxRate}%)</span><span className="font-mono">{fmtMXN(tax)}</span></div>
+            <div className="flex justify-between font-semibold"><span>Total de la NC</span><span className="font-mono text-brand-300">{fmtMXN(total)}</span></div>
+          </div>
+
+          <p className="text-[11px] text-status-warning">
+            Al confirmar se timbra ante el SAT: consume un timbre y la devolución ya no podrá cancelarse.
+          </p>
+        </div>
+
+        <div className="flex justify-end gap-2 mt-4">
+          <button className="btn-secondary" onClick={onClose} disabled={loading}>Cancelar</button>
+          <button className="btn-primary" disabled={loading || !(numAmount > 0)}
+            onClick={() => onConfirm({
+              amount: numAmount, taxRate, description: description.trim() || undefined,
+              paymentForm, useCfdi, relationship,
+            })}>
+            {loading ? <Spinner size="sm" /> : 'Timbrar nota de crédito'}
+          </button>
+        </div>
       </div>
     </div>,
     document.body

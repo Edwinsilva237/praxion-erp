@@ -897,8 +897,10 @@ router.post('/returns/:id/confirm', checkPermission('sales', 'return'), async (r
 /** POST /api/sales/returns/:id/credit-note — emite la nota de crédito (con factura). */
 router.post('/returns/:id/credit-note', checkPermission('sales', 'return'), async (req, res, next) => {
   try {
+    const { amount, description, paymentForm, useCfdi, relationship, taxRate } = req.body || {}
     res.json(await salesReturnService.emitCreditNote({
-      tenantId: req.tenant.id, returnId: req.params.id, paymentForm: req.body?.paymentForm,
+      tenantId: req.tenant.id, returnId: req.params.id,
+      amount, description, paymentForm, useCfdi, relationship, taxRate,
       userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
     }))
   } catch (err) { next(err) }
