@@ -25,10 +25,15 @@ const mkDN = async (num, deliveredAt, subtotal) => {
      VALUES ($1,$2,1,1,$3,1)`, [dn, prod, subtotal]))
   return dn
 }
+// ⚠️ stamp_date EXPLÍCITO dentro del periodo consultado, nunca NOW(): el
+// dashboard filtra las facturas por stamp_date >= from AND < to, así que con
+// NOW() la prueba pasaba solo mientras el reloj real estuviera dentro de la
+// ventana junio-2026 y empezó a fallar sola el 1-jul-2026 (invoiced = 0).
+const STAMP_DATE = '2026-06-25'
 const mkInv = async (num, sub, dnId) => (await withBypass(() => query(
   `INSERT INTO invoices (tenant_id,type,cfdi_type,document_number,partner_id,status,stamp_date,subtotal,tax_transferred,total,total_mxn,delivery_note_id)
-   VALUES ($1,'issued','I',$2,$3,'stamped',NOW(),$4,$5,$6,$6,$7) RETURNING id`,
-  [tenantId, num, cust, sub, sub * 0.16, sub * 1.16, dnId || null]))).rows[0].id
+   VALUES ($1,'issued','I',$2,$3,'stamped',$8::timestamptz,$4,$5,$6,$6,$7) RETURNING id`,
+  [tenantId, num, cust, sub, sub * 0.16, sub * 1.16, dnId || null, STAMP_DATE]))).rows[0].id
 
 describe('getSalesReconciliation', () => {
   beforeAll(async () => {

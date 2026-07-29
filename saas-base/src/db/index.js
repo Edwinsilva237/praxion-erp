@@ -21,8 +21,25 @@ const pool = new Pool({
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
   ssl: sslConfig,
+  // Incidente prod 2026-07-29: Render Postgres cortó TODAS las conexiones de
+  // golpe y las queries en vuelo se quedaron colgadas contra sockets muertos
+  // (timeouts de 15s en el frontend, riesgo de agotar el pool). keepAlive
+  // detecta el socket muerto a nivel TCP y los timeouts convierten un cuelgue
+  // indefinido en un error rápido que el pool puede reciclar. 60s es holgado
+  // para la query más pesada legítima (exports, PDFs) y muy por encima del
+  // timeout de 15s del frontend. Las MIGRACIONES sí pueden tardar más, así que
+  // `migrate.js` levanta el techo en su propia conexión (ver `liftTimeouts`).
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10000,
+  query_timeout: 60000,       // cliente: deja de esperar la respuesta
+  statement_timeout: 60000,   // servidor: PG mata la query que exceda
 })
 
+// OJO: este handler SOLO cubre clientes IDLE (en reposo dentro del pool).
+// pg-pool adjunta su `idleListener` al cliente al liberarlo y lo QUITA al
+// prestarlo (`_acquireClient` → `client.removeListener('error', idleListener)`),
+// así que un cliente prestado queda SIN listener de 'error'. Ver
+// `attachCheckoutErrorGuard` abajo para ese caso.
 pool.on('error', (err) => {
   logger.error('Unexpected error on idle DB client', { error: err.message })
 })
@@ -94,9 +111,39 @@ async function applyRlsContext(client) {
   )
 }
 
+/**
+ * Blinda un cliente PRESTADO contra la muerte de su conexión.
+ *
+ * Mientras un cliente está prestado, pg-pool le quita su `idleListener`, así
+ * que el cliente se queda SIN ningún listener de 'error'. Si la conexión muere
+ * justo entonces, `pg` hace `client.emit('error', err)` (client.js
+ * `_handleErrorEvent`) y un EventEmitter sin listener de 'error' hace que Node
+ * LANCE la excepción → muere el proceso entero.
+ *
+ * Fue exactamente la caída de producción del 2026-07-29: Render Postgres cortó
+ * todas las conexiones de golpe ("Connection terminated unexpectedly") con
+ * queries en vuelo y praxion-api salió con status 1, dejando a TODOS los
+ * tenants con timeouts mientras Render lo reiniciaba.
+ *
+ * El listener temporal absorbe ese 'error': la query en vuelo igual falla (su
+ * promesa se rechaza y el caller responde 500, comportamiento correcto), pero
+ * el proceso sobrevive. Se retira al liberar el cliente para no acumular
+ * listeners en los clientes que el pool recicla.
+ */
+function attachCheckoutErrorGuard(client) {
+  const guard = (err) => {
+    logger.error('DB client error mientras estaba prestado (proceso a salvo)', {
+      error: err.message,
+    })
+  }
+  client.on('error', guard)
+  return () => client.removeListener('error', guard)
+}
+
 async function query(text, params) {
   const start = Date.now()
   const client = await pool.connect()
+  const detachGuard = attachCheckoutErrorGuard(client)
   try {
     await applyRlsContext(client)
     const result = await client.query(text, params)
@@ -104,6 +151,7 @@ async function query(text, params) {
     logger.debug('Query executed', { text, duration, rows: result.rowCount })
     return result
   } finally {
+    detachGuard()
     client.release()
   }
 }
@@ -111,18 +159,29 @@ async function query(text, params) {
 async function getClient() {
   const client = await pool.connect()
   const originalRelease = client.release.bind(client)
+  const detachGuard = attachCheckoutErrorGuard(client)
 
   const timeout = setTimeout(() => {
     logger.warn('DB client has been checked out for more than 30s')
     client.release()
   }, 30000)
 
-  // Aplicamos contexto RLS antes de devolver el client al caller.
-  await applyRlsContext(client)
-
   client.release = () => {
     clearTimeout(timeout)
+    detachGuard()
     originalRelease()
+  }
+
+  // Aplicamos contexto RLS antes de devolver el client al caller. Va DESPUÉS de
+  // envolver `release` a propósito: `applyRlsContext` ejecuta una query y si la
+  // conexión acaba de morir (justo el escenario del incidente 2026-07-29) lanza
+  // — sin este catch el cliente quedaba prestado para siempre, fugando una
+  // conexión del pool en cada intento hasta agotarlo.
+  try {
+    await applyRlsContext(client)
+  } catch (err) {
+    client.release()
+    throw err
   }
 
   return client
