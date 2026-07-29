@@ -550,6 +550,47 @@ async function cancelOrder({ tenantId, orderId, reason, userId, ipAddress, userA
 }
 
 /**
+ * Cierra MANUALMENTE un pedido parcialmente entregado: lo da por CONCLUIDO
+ * aunque no se haya entregado el 100%. Pensado para cuando el cliente decide
+ * quedarse con la parcialidad y ya no quiere el resto — sin esto el pedido
+ * quedaría "vivo" en la ventana de pendientes para siempre.
+ *
+ * NO mueve inventario ni toca remisiones/facturas/CxC ya generadas — solo
+ * declara que ya no se entregará más contra este pedido (status → 'closed').
+ * Reservado a pedidos en 'partially_delivered' (si se entregó todo, ya está
+ * en 'delivered'; si no se entregó nada, lo correcto es cancelarlo).
+ * Espejo de closeOrderReception en compras ("Dar por completa").
+ */
+async function closeOrder({ tenantId, orderId, reason, userId, ipAddress, userAgent }) {
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `UPDATE sales_orders SET status = 'closed'
+       WHERE id = $1 AND tenant_id = $2 AND status = 'partially_delivered'
+       RETURNING id, order_number, status`,
+      [orderId, tenantId]
+    )
+    if (rows.length === 0) {
+      throw createError(404, 'Pedido no encontrado o no está en entrega parcial.')
+    }
+
+    await client.query(
+      `INSERT INTO document_status_log
+         (tenant_id, entity_type, entity_id, from_status, to_status, changed_by, notes)
+       VALUES ($1, 'sales_order', $2, 'partially_delivered', 'closed', $3, $4)`,
+      [tenantId, orderId, userId, reason || null]
+    )
+
+    await audit({
+      tenantId, userId, action: 'sales_order.closed',
+      resource: 'sales_orders', resourceId: orderId,
+      payload: { reason }, ipAddress, userAgent,
+    })
+
+    return rows[0]
+  })
+}
+
+/**
  * Elimina de raíz un pedido SIN documentos asociados (hard delete). Solo admin
  * (permiso sales:delete). Bloquea si tiene remisiones (incluidas las
  * consolidadas, vía delivery_note_lines.sales_order_id) o facturas que lo
@@ -1066,7 +1107,9 @@ async function recalcOrderStatusFromDeliveries(client, { tenantId, orderId }) {
   if (orderRows.length === 0) return null
   const currentStatus = orderRows[0].status
 
-  // No tocar estados terminales o pre-flujo. Incluimos 'invoiced' porque
+  // No tocar estados terminales o pre-flujo ('closed' incluido: un pedido
+  // cerrado manualmente con entrega parcial NO revive aunque después se
+  // cancele o entregue una remisión rezagada). Incluimos 'invoiced' porque
   // con facturación anticipada el pedido puede entrar a este recálculo:
   //   - Si el pedido ya está 'invoiced' pero cancelan remisiones → vuelve a 'confirmed'.
   //   - Si el pedido está 'confirmed' (con factura adelantada) y cubren todo → 'invoiced'.
@@ -1204,7 +1247,7 @@ async function getItemStockByWarehouse({ tenantId, itemType = 'product', itemId 
 
 module.exports = {
   listOrders, getOrder, createOrder, updateOrder,
-  confirmOrder, cancelOrder, deleteOrder, getSuggestedPrice,
+  confirmOrder, cancelOrder, closeOrder, deleteOrder, getSuggestedPrice,
   assignDriver,
   addOrderLine, updateOrderLine, deleteOrderLine,
   addBundleToOrder, removeBundleGroup,

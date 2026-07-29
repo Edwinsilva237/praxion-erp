@@ -196,6 +196,27 @@ router.post('/orders/:id/cancel', checkPermission('sales', 'update'), async (req
   } catch (err) { next(err) }
 })
 
+/**
+ * POST /api/sales/orders/:id/close
+ * Cierra un pedido parcialmente entregado: el cliente se queda con la
+ * parcialidad y ya no quiere el resto → 'closed'. No mueve inventario ni toca
+ * lo ya entregado/facturado. Body: { reason? }. Misma puerta que cancelar
+ * (sales:update).
+ */
+router.post('/orders/:id/close', checkPermission('sales', 'update'), async (req, res, next) => {
+  try {
+    const order = await orderService.closeOrder({
+      tenantId: req.tenant.id, orderId: req.params.id,
+      reason: req.body?.reason,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(order)
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+
 // Eliminar de raíz un pedido sin documentos asociados (solo admin).
 router.delete('/orders/:id', checkPermission('sales', 'delete'), async (req, res, next) => {
   try {

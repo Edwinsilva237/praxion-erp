@@ -70,12 +70,14 @@ function isOrderLate(order) {
 }
 
 const STATUS_OPTS = [
-  ['',            'Todos los estados'],
-  ['draft',       'Borrador'],
-  ['confirmed',   'Confirmado'],
-  ['in_delivery', 'En reparto'],
-  ['delivered',   'Entregado'],
-  ['cancelled',   'Cancelado'],
+  ['',                    'Todos los estados'],
+  ['draft',               'Borrador'],
+  ['confirmed',           'Confirmado'],
+  ['in_delivery',         'En reparto'],
+  ['partially_delivered', 'Entrega parcial'],
+  ['delivered',           'Entregado'],
+  ['closed',              'Cerrado'],
+  ['cancelled',           'Cancelado'],
 ]
 
 const PAGE_SIZE = 25
@@ -421,7 +423,7 @@ export default function VentasPedidos() {
                         )}
                       </td>
                       <td>
-                        <Badge status={o.status} />
+                        <Badge status={o.status} label={o.status === 'closed' ? 'Cerrado' : undefined} />
                         {(o.status === 'in_delivery' || o.status === 'partially_delivered') && (
                           <DeliveryProgress
                             delivered={o.delivered_total_mxn}
@@ -483,7 +485,7 @@ export default function VentasPedidos() {
                         )}
                       </td>
                       <td>
-                        <Badge status={o.status} />
+                        <Badge status={o.status} label={o.status === 'closed' ? 'Cerrado' : undefined} />
                       </td>
                       <td className="text-right font-mono tabular-nums font-medium"
                         title="Total del pedido sin IVA. El IVA se calcula al facturar.">

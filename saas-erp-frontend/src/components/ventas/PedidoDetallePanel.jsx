@@ -330,6 +330,14 @@ function AccionesPedido({ order, onAction, loadingAction, editing, onToggleEdit,
         </svg>
         {status === 'confirmed' ? 'Crear remisión' : 'Crear otra remisión'}
       </button>
+      {status === 'partially_delivered' && (
+        <Btn label="Cerrar pedido" action="close" variant="secondary"
+          title="El cliente concluye con lo ya entregado; no se entregará el resto"
+          icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>}
+        />
+      )}
       {status === 'confirmed' && (
         <>
           <Btn label="Cancelar pedido" action="cancel" variant="danger"
@@ -349,11 +357,12 @@ function AccionesPedido({ order, onAction, loadingAction, editing, onToggleEdit,
     </div>
   )
 
-  if (status === 'delivered' || status === 'cancelled') return (
+  if (status === 'delivered' || status === 'cancelled' || status === 'closed') return (
     <div className="border-t border-line-subtle pt-4 mt-2 flex flex-col gap-2">
       <p className="text-xs text-ink-muted italic">
         {status === 'delivered'   && 'Pedido entregado — el pago pendiente del cliente se generó automáticamente.'}
         {status === 'cancelled'   && 'Este pedido fue cancelado.'}
+        {status === 'closed'      && 'Pedido cerrado con entrega parcial — el cliente concluyó sin llevarse el resto. Las remisiones, facturas y cuentas por cobrar de lo entregado siguen vigentes.'}
       </p>
       {status === 'cancelled' && (
         <Can do="sales:delete">
@@ -368,6 +377,37 @@ function AccionesPedido({ order, onAction, loadingAction, editing, onToggleEdit,
   )
 
   return null
+}
+
+// ── Modal de cierre manual (entrega parcial) con motivo opcional ────────────
+function CloseReasonModal({ onConfirm, onClose, loading }) {
+  const [reason, setReason] = useState('')
+  return createPortal(
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-md p-5">
+        <h3 className="text-base font-semibold text-ink-primary mb-1">Cerrar pedido con entrega parcial</h3>
+        <p className="text-xs text-ink-muted mb-4">
+          El pedido se dará por concluido con lo YA entregado: no se podrán crear más remisiones
+          contra él. Lo entregado conserva sus remisiones, facturas y cuentas por cobrar.
+          Captura el motivo (opcional pero recomendado).
+        </p>
+        <textarea
+          rows={3}
+          className="input w-full"
+          placeholder="Motivo del cierre (ej. el cliente ya no quiso el resto)..."
+          value={reason}
+          onChange={e => setReason(e.target.value)}
+        />
+        <div className="flex gap-2 mt-4">
+          <button onClick={onClose} className="btn-secondary flex-1" disabled={loading}>No, conservar</button>
+          <button onClick={() => onConfirm(reason)} className="btn-primary flex-1" disabled={loading}>
+            {loading ? <Spinner size="sm" /> : 'Sí, cerrar pedido'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
 }
 
 // ── Modal de cancelación con captura de razón ───────────────────────────────
@@ -536,6 +576,7 @@ export function PedidoDetallePanel({ orderId, onClose }) {
   const [loadingAction, setLoading] = useState(null)
   const [actionError, setError]     = useState(null)
   const [showCancelModal, setShowCancelModal] = useState(false)
+  const [showCloseModal, setShowCloseModal]   = useState(false)
   const [editingDatos, setEditingDatos] = useState(false)
   const [lineModal, setLineModal]   = useState(null)   // null | { mode: 'new'|'edit', line? }
   const [deletingLineId, setDeletingLineId] = useState(null)
@@ -591,6 +632,19 @@ export function PedidoDetallePanel({ orderId, onClose }) {
       setShowCancelModal(false)
     },
     onError: (e) => setError(e.response?.data?.error || e.message || 'Error al cancelar'),
+    onSettled: () => setLoading(null),
+  })
+
+  // Cierre manual con entrega parcial: el cliente se queda con lo entregado y
+  // ya no quiere el resto. No toca remisiones/facturas/CxC ya generadas.
+  const closeMutation = useMutation({
+    mutationFn: (reason) => salesApi.closeOrder(orderId, { reason }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sales-order', orderId] })
+      qc.invalidateQueries({ queryKey: ['sales-orders'] })
+      setShowCloseModal(false)
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al cerrar el pedido'),
     onSettled: () => setLoading(null),
   })
 
@@ -665,12 +719,18 @@ export function PedidoDetallePanel({ orderId, onClose }) {
     setLoading(action)
     if (action === 'confirm')      confirmMutation.mutate()
     else if (action === 'cancel')  { setShowCancelModal(true); setLoading(null) }
+    else if (action === 'close')   { setShowCloseModal(true); setLoading(null) }
     else if (action === 'delete')  { setLoading(null); handleDeleteOrder() }
   }
 
   function handleCancelConfirm(reason) {
     setLoading('cancel')
     cancelMutation.mutate(reason)
+  }
+
+  function handleCloseConfirm(reason) {
+    setLoading('close')
+    closeMutation.mutate(reason)
   }
 
   const isDraft = order?.status === 'draft'
@@ -695,7 +755,8 @@ export function PedidoDetallePanel({ orderId, onClose }) {
               <>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-mono text-base font-bold text-ink-primary">{order.order_number}</span>
-                  <Badge status={order.status} />
+                  {/* 'closed' comparte label "Cerrada" (OC) en el Badge; aquí es pedido → masculino */}
+                  <Badge status={order.status} label={order.status === 'closed' ? 'Cerrado' : undefined} />
                   {order.direct_invoice && (
                     <span className="badge-blue">Factura directa</span>
                   )}
@@ -927,6 +988,14 @@ export function PedidoDetallePanel({ orderId, onClose }) {
           onConfirm={handleCancelConfirm}
           onClose={() => setShowCancelModal(false)}
           loading={cancelMutation.isPending}
+        />
+      )}
+
+      {showCloseModal && (
+        <CloseReasonModal
+          onConfirm={handleCloseConfirm}
+          onClose={() => setShowCloseModal(false)}
+          loading={closeMutation.isPending}
         />
       )}
 

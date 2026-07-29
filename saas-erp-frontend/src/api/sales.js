@@ -10,6 +10,7 @@ export const salesApi = {
   updateOrder:     (id, body) => api.patch(`${B}/orders/${id}`, body).then(r => r.data),
   confirmOrder:    (id) => api.post(`${B}/orders/${id}/confirm`).then(r => r.data),
   cancelOrder:     (id, body) => api.post(`${B}/orders/${id}/cancel`, body).then(r => r.data),
+  closeOrder:      (id, body) => api.post(`${B}/orders/${id}/close`, body).then(r => r.data),
   deleteOrder:     (id) => api.delete(`${B}/orders/${id}`).then(r => r.data),
   assignDriver:    (id, body) => api.post(`${B}/orders/${id}/assign-driver`, body).then(r => r.data),
   suggestedPrice:  (partnerId, productId, orderCurrency = 'MXN') =>
