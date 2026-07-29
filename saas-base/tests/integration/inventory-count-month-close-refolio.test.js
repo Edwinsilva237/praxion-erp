@@ -20,6 +20,18 @@ const countService = require('../../src/modules/inventory/inventoryCountService'
 
 let tenantId, userId
 
+// El folio del cierre se arma con el mes de HOY (`nextCountNumber` usa
+// `new Date()`), NO con `countDate`. Por eso el mes esperado se DERIVA aquí en
+// vez de escribirse fijo: antes decía 'CONT-202606-CM' y empezó a fallar solo
+// el 1-jul-2026, cuando el folio pasó a ser de julio aunque el conteo siguiera
+// fechado el 30-jun. Lo que esta prueba verifica es el folio INCREMENTAL
+// (CM-2, CM-3) al recrear, no de qué mes es el folio.
+// ⚠️ Que un cierre de JUNIO capturado en JULIO reciba folio de julio es una
+// decisión de negocio pendiente de revisar con el usuario (lo normal es cerrar
+// el mes ya empezado el siguiente), no algo que esta prueba deba fijar.
+const YYYYMM = new Date().toISOString().slice(0, 7).replace('-', '')
+const CM_BASE = `CONT-${YYYYMM}-CM`
+
 describe('Cierre de mes — folio único al recrear', () => {
   beforeAll(async () => {
     const t = await createTenant({ label: 'cmrefolio', planSlug: 'owner' })
@@ -44,7 +56,7 @@ describe('Cierre de mes — folio único al recrear', () => {
     const c1 = await countService.createCount({
       tenantId, countType: 'month_close', userId, countDate: '2026-06-30',
     })
-    expect(c1.count_number).toBe('CONT-202606-CM')
+    expect(c1.count_number).toBe(CM_BASE)
 
     await countService.cancelCount({ tenantId, countId: c1.id, reason: 'prueba', userId })
 
@@ -52,7 +64,7 @@ describe('Cierre de mes — folio único al recrear', () => {
     const c2 = await countService.createCount({
       tenantId, countType: 'month_close', userId, countDate: '2026-06-30',
     })
-    expect(c2.count_number).toBe('CONT-202606-CM-2')
+    expect(c2.count_number).toBe(`${CM_BASE}-2`)
     expect(c2.status).toBe('in_capture')
 
     // Un tercero (tras cancelar el segundo) sigue incrementando.
@@ -60,7 +72,7 @@ describe('Cierre de mes — folio único al recrear', () => {
     const c3 = await countService.createCount({
       tenantId, countType: 'month_close', userId, countDate: '2026-06-30',
     })
-    expect(c3.count_number).toBe('CONT-202606-CM-3')
+    expect(c3.count_number).toBe(`${CM_BASE}-3`)
   })
 
   test('sigue bloqueando un SEGUNDO cierre ACTIVO en el mismo mes', async () => {

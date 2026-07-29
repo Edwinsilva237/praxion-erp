@@ -67,6 +67,69 @@ test('la conexión MUERE con el cliente prestado: el proceso sobrevive y el pool
   expect(rows[0].ok).toBe(1)
 })
 
+// ── Reintento cuando la BD está reiniciando ────────────────────────────────
+// Render reinició el Postgres el 2026-07-29 20:29 UTC y el servidor rechazó
+// conexiones unos segundos con 57P03 ("the database system is in recovery
+// mode") → TODA petición murió con 500 aunque el proceso estaba sano. El
+// reintento vive en la ADQUISICIÓN de la conexión (la query no se ejecutó, así
+// que no hay riesgo de duplicar escrituras).
+function recoveryModeError() {
+  const err = new Error('the database system is in recovery mode')
+  err.code = '57P03'
+  return err
+}
+
+afterEach(() => { jest.restoreAllMocks() })
+
+test('BD en recovery mode: reintenta y la query termina bien', async () => {
+  const real = pool.connect.bind(pool)
+  let intentos = 0
+  jest.spyOn(pool, 'connect').mockImplementation(() => {
+    intentos++
+    // Los 2 primeros intentos fallan como lo hizo Render; el 3º conecta.
+    return intentos <= 2 ? Promise.reject(recoveryModeError()) : real()
+  })
+
+  const { rows } = await query('SELECT 1 AS ok')
+  expect(rows[0].ok).toBe(1)
+  expect(intentos).toBe(3)
+})
+
+test('un error NO transitorio no se reintenta (falla de inmediato)', async () => {
+  const err = new Error('password authentication failed')
+  err.code = '28P01'
+  const spy = jest.spyOn(pool, 'connect').mockRejectedValue(err)
+
+  await expect(query('SELECT 1')).rejects.toMatchObject({ code: '28P01' })
+  expect(spy).toHaveBeenCalledTimes(1)   // sin reintentos inútiles
+})
+
+test('si la BD sigue caída, se rinde dentro del presupuesto (no cuelga)', async () => {
+  jest.spyOn(pool, 'connect').mockRejectedValue(recoveryModeError())
+
+  const t0 = Date.now()
+  await expect(query('SELECT 1')).rejects.toMatchObject({ code: '57P03' })
+  const elapsed = Date.now() - t0
+
+  // Presupuesto de 3s con backoff creciente (250+500+1000): se rinde solo,
+  // muy por debajo del timeout de 15s del frontend, en vez de insistir para
+  // siempre.
+  expect(elapsed).toBeLessThan(3000)
+})
+
+test('getClient/withTransaction también reintentan al adquirir', async () => {
+  const real = pool.connect.bind(pool)
+  let intentos = 0
+  jest.spyOn(pool, 'connect').mockImplementation(() => {
+    intentos++
+    return intentos === 1 ? Promise.reject(recoveryModeError()) : real()
+  })
+
+  const r = await withTransaction((client) => client.query('SELECT 1 AS ok'))
+  expect(r.rows[0].ok).toBe(1)
+  expect(intentos).toBe(2)
+})
+
 test('caídas repetidas no fugan conexiones del pool', async () => {
   // Si un cliente roto se quedara "prestado para siempre", cada ciclo comería
   // un slot del pool hasta agotarlo (y el siguiente checkout colgaría).

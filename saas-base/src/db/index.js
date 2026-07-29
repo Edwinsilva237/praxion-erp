@@ -111,6 +111,61 @@ async function applyRlsContext(client) {
   )
 }
 
+// ── Reintento de fallos TRANSITORIOS al adquirir conexión ──────────────────
+// Cuando Render reinicia el Postgres, el servidor rechaza conexiones unos
+// segundos con "the database system is in recovery mode" (SQLSTATE 57P03). El
+// 2026-07-29 a las 20:29 UTC eso hizo que TODA petición muriera con 500 aunque
+// el proceso estaba sano: el fallo ocurre en `pool.connect()`, es decir ANTES
+// de mandar la query. Como la query no llegó a ejecutarse, reintentar es
+// seguro — no hay riesgo de aplicar dos veces una escritura (por eso el
+// reintento vive SOLO aquí y nunca alrededor de `client.query`).
+const TRANSIENT_CONNECT_CODES = new Set([
+  '57P03',        // cannot_connect_now — "database system is in recovery mode"
+  '57P01',        // admin_shutdown — el servidor se está apagando
+  '08006',        // connection_failure
+  '08003',        // connection_does_not_exist
+  '08001',        // no se pudo establecer la conexión
+  '53300',        // too_many_connections (pico pasajero)
+  'ECONNREFUSED', // el puerto aún no acepta conexiones
+  'ECONNRESET',
+  'ETIMEDOUT',
+])
+
+function isTransientConnectError(err) {
+  if (!err) return false
+  if (TRANSIENT_CONNECT_CODES.has(err.code)) return true
+  return /Connection terminated unexpectedly|in recovery mode|starting up|shutting down/i
+    .test(err.message || '')
+}
+
+// Presupuesto de TIEMPO, no de intentos: si la BD responde rápido con "en
+// recuperación" alcanzan varios reintentos, y si de plano no contesta (cada
+// intento agota `connectionTimeoutMillis`) NO insistimos. Así el peor caso
+// añade ~2s, muy por debajo del timeout de 15s del frontend. El backoff crece
+// (250→500→1000) para no inundar los logs: durante una caída real cada
+// petición deja 3 avisos, no 11.
+const CONNECT_RETRY_BUDGET_MS = 3000
+const CONNECT_BACKOFF_BASE_MS = 250
+
+async function connectWithRetry() {
+  const startedAt = Date.now()
+  let backoff = CONNECT_BACKOFF_BASE_MS
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await pool.connect()
+    } catch (err) {
+      const elapsed = Date.now() - startedAt
+      const agotado = elapsed + backoff >= CONNECT_RETRY_BUDGET_MS
+      if (agotado || !isTransientConnectError(err)) throw err
+      logger.warn('Fallo transitorio al conectar a la BD — reintentando', {
+        error: err.message, code: err.code, attempt, elapsedMs: elapsed,
+      })
+      await new Promise((resolve) => setTimeout(resolve, backoff))
+      backoff *= 2
+    }
+  }
+}
+
 /**
  * Blinda un cliente PRESTADO contra la muerte de su conexión.
  *
@@ -142,7 +197,7 @@ function attachCheckoutErrorGuard(client) {
 
 async function query(text, params) {
   const start = Date.now()
-  const client = await pool.connect()
+  const client = await connectWithRetry()
   const detachGuard = attachCheckoutErrorGuard(client)
   try {
     await applyRlsContext(client)
@@ -157,7 +212,7 @@ async function query(text, params) {
 }
 
 async function getClient() {
-  const client = await pool.connect()
+  const client = await connectWithRetry()
   const originalRelease = client.release.bind(client)
   const detachGuard = attachCheckoutErrorGuard(client)
 

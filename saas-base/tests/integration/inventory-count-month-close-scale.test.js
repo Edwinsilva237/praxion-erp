@@ -57,7 +57,12 @@ describe('Cierre de mes a escala (> tope de bind-params)', () => {
       tenantId, countType: 'month_close', userId, countDate: '2026-06-30',
     })
 
-    expect(res.count_number).toBe('CONT-202606-CM')
+    // El folio se arma con el mes de HOY (`nextCountNumber` usa `new Date()`),
+    // no con `countDate` → derivarlo en vez de fijarlo. Estaba fijo en
+    // 'CONT-202606-CM' y empezó a fallar solo el 1-jul-2026. Lo que esta
+    // prueba verifica es que 10k líneas no revienten el tope de bind-params.
+    const yyyymm = new Date().toISOString().slice(0, 7).replace('-', '')
+    expect(res.count_number).toBe(`CONT-${yyyymm}-CM`)
     expect(res.lines.length).toBe(N)
     expect(parseInt(res.total_lines)).toBe(N)
   }, 120000)

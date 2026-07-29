@@ -181,18 +181,29 @@ describe('SaaS v2: lotSelector — FIFO', () => {
 describe('SaaS v2: lotSelector — FEFO', () => {
   let ctx, lotEarlyExpiry, lotLateExpiry, lotNoExpiry
 
+  // ⚠️ Fechas de expiración RELATIVAS a hoy, nunca fijas: FEFO excluye los
+  // lotes ya caducados (ver la prueba 'FEFO excluye lotes ya caducados'), así
+  // que un `expiry_date` fijo deja de ser futuro con el paso del tiempo y la
+  // prueba se rompe sola. Pasó: estaba en '2026-06-30' y empezó a fallar el
+  // 1-jul-2026, porque el lote "que expira pronto" ya salía filtrado.
+  const daysFromNow = (n) => {
+    const d = new Date()
+    d.setDate(d.getDate() + n)
+    return d.toISOString().slice(0, 10)
+  }
+
   beforeAll(async () => {
     ctx = await setup('ls-fefo')
     // Lote más viejo pero expira más tarde
     lotLateExpiry = await insertLot(ctx, {
       received_at: new Date('2026-01-01'),
-      expiry_date: '2027-12-31',
+      expiry_date: daysFromNow(600),
       quantity_remaining: 40,
     })
-    // Lote más nuevo pero expira pronto
+    // Lote más nuevo pero expira pronto (aún vigente: FEFO lo pone primero)
     lotEarlyExpiry = await insertLot(ctx, {
       received_at: new Date('2026-03-01'),
-      expiry_date: '2026-06-30',
+      expiry_date: daysFromNow(30),
       quantity_remaining: 30,
     })
     // Lote sin expiry (queda al final por NULLS LAST)
