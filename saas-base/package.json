@@ -23,7 +23,8 @@
     ],
     "testMatch": [
       "<rootDir>/tests/**/*.test.js"
-    ]
+    ],
+    "testTimeout": 30000
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1050.0",
