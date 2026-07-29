@@ -12,6 +12,35 @@ const config = require('./config')
 const logger = require('./config/logger')
 const { query } = require('./db')
 
+// ── Blindaje a nivel proceso ────────────────────────────────────────────────
+// Sin esto, una promesa rechazada sin catch en una tarea de FONDO (crons,
+// pg-boss, push FCM, correos best-effort) o una excepción síncrona no
+// capturada matan el proceso completo ("Exited with status 1" en Render) →
+// 1-2 min de timeouts para TODOS los tenants mientras reinicia (visto en prod
+// 2026-07-29). Los errores del ciclo request/response NO pasan por aquí (los
+// atrapa el error handler de Express); esto cubre todo lo demás.
+if (config.env !== 'test') {
+  process.on('unhandledRejection', (reason) => {
+    const err = reason instanceof Error ? reason : new Error(String(reason))
+    // El proceso SIGUE VIVO: un job de fondo fallido no debe tumbar el API.
+    logger.error('UNHANDLED REJECTION (proceso blindado, sigue vivo)', {
+      message: err.message, stack: err.stack,
+    })
+    try { if (sentryReady()) Sentry.captureException(err) } catch { /* noop */ }
+  })
+  process.on('uncaughtException', (err) => {
+    // Excepción síncrona no capturada: el estado del proceso ya no es
+    // confiable → loguear el stack COMPLETO (visible en logs de Render),
+    // reportar a Sentry y salir; Render reinicia limpio. El setTimeout da
+    // margen a que logger/Sentry flusheen antes de morir.
+    logger.error('UNCAUGHT EXCEPTION — el proceso se reiniciará', {
+      message: err.message, stack: err.stack,
+    })
+    try { if (sentryReady()) Sentry.captureException(err) } catch { /* noop */ }
+    setTimeout(() => process.exit(1), 1500).unref()
+  })
+}
+
 const app = express()
 
 // Render (y cualquier reverse proxy) inyecta X-Forwarded-* headers. Sin este
