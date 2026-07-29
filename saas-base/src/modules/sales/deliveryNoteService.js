@@ -428,7 +428,8 @@ async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, 
             dn.receiver_name, dn.delivered_at, dn.synced_at,
             dn.no_invoice, dn.partner_id,
             EXISTS(SELECT 1 FROM document_status_log dsl
-                    WHERE dsl.entity_type='delivery_note' AND dsl.entity_id = dn.id
+                    WHERE dsl.tenant_id = dn.tenant_id
+                      AND dsl.entity_type='delivery_note' AND dsl.entity_id = dn.id
                       AND dsl.metadata->>'action'='price_adjusted') AS price_adjusted,
             bp.name AS partner_name, bp.tax_name AS partner_tax_name,
             bp.rfc AS partner_rfc,
@@ -448,19 +449,39 @@ async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, 
      -- cubre las líneas vía sales_order_line_id porque se facturó ANTES de entregar).
      -- Sin la 3ª rama, las remisiones de una venta anticipada se veían "Listo para
      -- facturar" y se podían re-facturar (la factura ya existe en el pedido).
+     --
+     -- ⚡ UNION ALL de 3 ramas INDEXADAS, no un OR: el OR obligaba a barrer TODAS
+     -- las facturas del tenant por CADA fila de la página (50×). Tras la
+     -- importación masiva de facturas (mig 236) el listado tardaba ~3.3s; con las
+     -- ramas separadas cada una entra por su índice (idx_inv_delivery /
+     -- idx_invoice_remissions_dn / idx_dnl_note_id→idx_il_sales_order_line) y baja
+     -- a ~58ms (medido con 2k remisiones + 4k facturas). Resultado idéntico: el
+     -- mismo "más reciente por created_at" aunque una factura aparezca en dos ramas.
      LEFT JOIN LATERAL (
        SELECT iv.id, iv.document_number, iv.status
-         FROM invoices iv
-        WHERE iv.status <> 'cancelled'
-          AND ( iv.delivery_note_id = dn.id
-                OR EXISTS (SELECT 1 FROM invoice_remissions ir
-                            WHERE ir.invoice_id = iv.id AND ir.delivery_note_id = dn.id)
-                OR ( iv.delivery_note_id IS NULL
-                     AND NOT EXISTS (SELECT 1 FROM invoice_remissions ir2 WHERE ir2.invoice_id = iv.id)
-                     AND EXISTS (
-                       SELECT 1 FROM invoice_lines il
-                         JOIN delivery_note_lines dnl ON dnl.sales_order_line_id = il.sales_order_line_id
-                        WHERE il.invoice_id = iv.id AND dnl.delivery_note_id = dn.id) ) )
+         FROM (
+           SELECT iv2.id, iv2.document_number, iv2.status, iv2.created_at
+             FROM invoices iv2
+            WHERE iv2.delivery_note_id = dn.id AND iv2.status <> 'cancelled'
+           UNION ALL
+           SELECT iv2.id, iv2.document_number, iv2.status, iv2.created_at
+             FROM invoice_remissions ir
+             JOIN invoices iv2 ON iv2.id = ir.invoice_id
+            WHERE ir.delivery_note_id = dn.id AND iv2.status <> 'cancelled'
+           UNION ALL
+           -- DISTINCT: varias líneas de la remisión pueden apuntar a la misma
+           -- factura anticipada; sin él saldría repetida (inofensivo para el
+           -- LIMIT 1 pero pagaría el orden de más filas).
+           SELECT DISTINCT iv2.id, iv2.document_number, iv2.status, iv2.created_at
+             FROM delivery_note_lines dnl
+             JOIN invoice_lines il ON il.sales_order_line_id = dnl.sales_order_line_id
+             JOIN invoices iv2     ON iv2.id = il.invoice_id
+            WHERE dnl.delivery_note_id = dn.id
+              AND dnl.sales_order_line_id IS NOT NULL
+              AND iv2.status <> 'cancelled'
+              AND iv2.delivery_note_id IS NULL
+              AND NOT EXISTS (SELECT 1 FROM invoice_remissions ir2 WHERE ir2.invoice_id = iv2.id)
+         ) iv
         ORDER BY iv.created_at DESC
         LIMIT 1
      ) inv ON true
