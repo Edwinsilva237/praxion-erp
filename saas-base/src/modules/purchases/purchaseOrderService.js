@@ -7,6 +7,10 @@ const { getRateForDate } = require('../exchange-rates/exchangeRateService')
 const documentSeriesService = require('../document-series/documentSeriesService')
 const supplierPriceService = require('./supplierPriceService')
 const { buildOrderBy } = require('../../utils/sortOrder')
+const { enqueueEmail } = require('../../queues/emailQueue')
+const { purchaseOrderEmail } = require('../email/templates/sales')
+const { generatePurchaseOrderPDF } = require('./purchaseOrderPdfService')
+const { normalizeManualEmails, resolveIssuerName } = require('../../utils/emailBroadcast')
 
 const PO_SORT_COLUMNS = {
   folio:     'po.order_number',
@@ -562,8 +566,119 @@ function createError(status, message) {
   return err
 }
 
+/**
+ * Contactos del proveedor de la OC (para el modal "Enviar correo").
+ * Devuelve null si la OC no existe; para OC genérica (sin proveedor del
+ * catálogo) devuelve listas vacías — el operador captura correos manuales.
+ */
+async function listSupplierContacts({ tenantId, orderId }) {
+  const { rows: o } = await query(
+    `SELECT partner_id FROM purchase_orders WHERE id = $1 AND tenant_id = $2`,
+    [orderId, tenantId]
+  )
+  if (!o[0]) return null
+  if (!o[0].partner_id) return { contacts: [], defaultRecipients: [] }
+
+  const { rows: contacts } = await query(
+    `SELECT bpc.id, bpc.name, bpc.position, bpc.email, bpc.phone, bpc.is_primary
+       FROM business_partner_contacts bpc
+       JOIN business_partners bp ON bp.id = bpc.business_partner_id
+      WHERE bpc.business_partner_id = $1 AND bp.tenant_id = $2
+      ORDER BY bpc.is_primary DESC NULLS LAST, bpc.created_at ASC`,
+    [o[0].partner_id, tenantId]
+  )
+  return { contacts, defaultRecipients: contacts.filter(c => c.email).map(c => c.email) }
+}
+
+/**
+ * Envía la OC por correo al proveedor con el PDF adjunto.
+ *
+ * - `emails`: destinatarios elegidos por el operador. Si viene vacío, se usan
+ *   todos los contactos con correo del proveedor.
+ * - Una OC en BORRADOR se confirma antes de enviarse (mismo criterio que
+ *   cotizaciones: lo que el proveedor ya recibió no debe seguir editable).
+ *   Si después el correo falla, la confirmación se queda — el operador ve el
+ *   error accionable y puede reenviar sin recapturar nada.
+ * - BCC/reply-to al correo institucional del tenant (o del usuario) para que
+ *   la respuesta del proveedor llegue a una bandeja real.
+ */
+async function sendOrderEmail({ tenantId, orderId, emails, userId, ipAddress, userAgent }) {
+  const order = await getOrder({ tenantId, orderId })
+  if (!order) throw createError(404, 'OC no encontrada.')
+  if (order.status === 'cancelled') {
+    throw createError(409, 'No se puede enviar por correo una OC cancelada.')
+  }
+
+  let recipients = normalizeManualEmails(emails)
+  if (recipients.length === 0 && order.partner_id) {
+    const res = await listSupplierContacts({ tenantId, orderId })
+    recipients = res?.defaultRecipients || []
+  }
+  if (recipients.length === 0) {
+    throw createError(400, 'No hay destinatarios: el proveedor no tiene contactos con correo. Escribe al menos un correo válido.')
+  }
+
+  if (order.status === 'draft') {
+    await confirmOrder({ tenantId, orderId, userId, ipAddress, userAgent })
+  }
+
+  // BCC/reply-to: correo institucional del tenant, o el del usuario logueado.
+  const { rows: trows } = await query(
+    `SELECT notification_email, brand_color_primary FROM tenants WHERE id = $1`,
+    [tenantId]
+  )
+  let senderEmail = trows[0]?.notification_email || null
+  if (!senderEmail && userId) {
+    const { rows: u } = await query(
+      `SELECT email FROM users WHERE id = $1 AND tenant_id = $2`,
+      [userId, tenantId]
+    )
+    senderEmail = u[0]?.email || null
+  }
+  if (senderEmail && recipients.includes(senderEmail.toLowerCase())) senderEmail = null
+
+  const tenantName = await resolveIssuerName(tenantId)
+  const pdfBuffer  = await generatePurchaseOrderPDF({ tenantId, orderId })
+  const html = purchaseOrderEmail({
+    tenantName,
+    brandColor:   trows[0]?.brand_color_primary || null,
+    supplierName: order.partner_name || order.generic_supplier || 'proveedor',
+    docNumber:    order.order_number,
+    total:        order.total_mxn,
+    currency:     order.currency,
+    issueDate:    order.created_at,
+    expectedDate: order.expected_date,
+    notes:        order.notes,
+  })
+
+  await enqueueEmail({
+    tenantId, // habilita la alerta email_delivery_failed si rebota definitivo
+    to:       recipients,
+    bcc:      senderEmail || undefined,
+    replyTo:  senderEmail || undefined,
+    subject:  `Orden de compra ${order.order_number} — ${tenantName}`,
+    html,
+    fromName: tenantName,
+    attachments: [{
+      filename:    `${order.order_number}.pdf`,
+      content:     pdfBuffer,
+      contentType: 'application/pdf',
+    }],
+  })
+
+  await audit({
+    tenantId, userId, ipAddress, userAgent,
+    action: 'purchase_order.emailed', resource: 'purchase_orders', resourceId: orderId,
+    payload: { recipients, bcc: senderEmail || null },
+  })
+
+  const refreshed = await getOrder({ tenantId, orderId })
+  return { ...refreshed, email: { sent: true, recipients, bcc: senderEmail } }
+}
+
 module.exports = {
   listOrders, getOrder,
   createOrder, updateOrder, confirmOrder, cancelOrder, closeOrderReception,
   addOrderLine, updateOrderLine, deleteOrderLine,
+  listSupplierContacts, sendOrderEmail,
 }

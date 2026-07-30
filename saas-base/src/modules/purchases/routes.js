@@ -292,6 +292,37 @@ router.get('/orders/:id/pdf', checkPermission('purchases', 'read'),
   })
 
 /**
+ * GET /api/purchases/orders/:id/contacts
+ * Contactos del proveedor de la OC (para el modal "Enviar correo").
+ */
+router.get('/orders/:id/contacts', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    const result = await purchaseOrderService.listSupplierContacts({
+      tenantId: req.tenant.id, orderId: req.params.id,
+    })
+    if (!result) return res.status(404).json({ error: 'OC no encontrada.' })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
+ * POST /api/purchases/orders/:id/send-email
+ * Body: { emails?: string[] }
+ * Envía el PDF de la OC por correo al proveedor. Una OC en borrador se
+ * confirma al enviarla (por eso el permiso es create, igual que /confirm).
+ */
+router.post('/orders/:id/send-email', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    const result = await purchaseOrderService.sendOrderEmail({
+      tenantId: req.tenant.id, orderId: req.params.id,
+      emails: req.body.emails,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
  * POST /api/purchases/orders
  * Body: {
  *   partnerId?, isGeneric?, genericSupplier?,

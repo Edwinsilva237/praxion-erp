@@ -176,6 +176,43 @@ function quotationEmail({ tenantName, brandColor, partnerName, docNumber, total,
 }
 
 /**
+ * Email para enviar una ORDEN DE COMPRA a un proveedor (módulo Compras).
+ */
+function purchaseOrderEmail({ tenantName, brandColor, supplierName, docNumber, total, currency, issueDate, expectedDate, notes }) {
+  const summaryRows = [
+    ['Orden de compra', docNumber],
+    ['Emitida', fmtDate(issueDate)],
+  ]
+  if (expectedDate) summaryRows.push(['Entrega esperada', fmtDate(expectedDate)])
+
+  const rowsHTML = summaryRows.map(([k, v]) =>
+    `<div class="row"><span>${k}</span><strong>${escapeHTML(v)}</strong></div>`
+  ).join('')
+
+  const notesBlock = notes
+    ? `<p style="font-size:13px;color:#374151;border-left:3px solid ${brandColor || '#1a3a5c'};padding-left:12px;margin:18px 0;">${escapeHTML(notes)}</p>`
+    : ''
+
+  return shellHTML({
+    headerName: tenantName,
+    brandColor,
+    title:      `Orden de compra ${docNumber}`,
+    preheader:  `Adjuntamos la orden de compra ${docNumber} por ${fmtCurrency(total, currency)}`,
+    body: `
+      <h2>Orden de compra ${escapeHTML(docNumber)}</h2>
+      <p>Estimados <strong>${escapeHTML(supplierName)}</strong>:</p>
+      <p>Adjuntamos nuestra orden de compra con el detalle de los artículos solicitados. Agradeceremos confirmar de recibido y la fecha estimada de entrega respondiendo a este correo.</p>
+      ${notesBlock}
+      <div class="summary">
+        ${rowsHTML}
+        <div class="row total"><span>Total</span><span>${fmtCurrency(total, currency)}</span></div>
+      </div>
+      <p style="font-size:13px;color:#6b7280;">Cualquier duda sobre esta orden, no duden en responder a este correo.</p>
+    `,
+  })
+}
+
+/**
  * Email para SOLICITAR la factura (CFDI) a un proveedor por un gasto registrado
  * sin comprobante. Lo manda el módulo de Gastos.
  */
@@ -207,4 +244,4 @@ function expenseInvoiceRequestEmail({ tenantName, brandColor, supplierName, conc
   })
 }
 
-module.exports = { remisionEmail, invoiceEmail, quotationEmail, expenseInvoiceRequestEmail }
+module.exports = { remisionEmail, invoiceEmail, quotationEmail, purchaseOrderEmail, expenseInvoiceRequestEmail }

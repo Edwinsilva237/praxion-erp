@@ -25,6 +25,10 @@ export const purchasesApi = {
   downloadOrderPdf: (id) =>
     api.get(`${B}/orders/${id}/pdf`, { responseType: 'blob' }).then(r => r.data),
 
+  // Envío de la OC por correo al proveedor (PDF adjunto)
+  orderContacts:  (id) => api.get(`${B}/orders/${id}/contacts`).then(r => r.data),
+  sendOrderEmail: (id, body) => api.post(`${B}/orders/${id}/send-email`, body).then(r => r.data),
+
   // PDF de la recepción con branding del tenant (incluye firma/evidencia)
   downloadReceiptPdf: (id) =>
     api.get(`${B}/receipts/${id}/pdf`, { responseType: 'blob' }).then(r => r.data),
