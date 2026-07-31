@@ -11,6 +11,7 @@ import Autocomplete from '@/components/ui/Autocomplete'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
+import { isZipFile, expandCfdiZip } from '@/utils/cfdiZip'
 import clsx from 'clsx'
 
 const fmtMXN  = (n) => n == null ? '—' : `$${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`
@@ -141,8 +142,8 @@ function StepChooseMethod({ onPick, onClose }) {
           </svg>
         </div>
         <div className="flex-1">
-          <p className="text-sm font-semibold text-ink-primary">Cargar XML (CFDI) o PDF</p>
-          <p className="text-xs text-ink-muted mt-0.5">Auto-llenado desde el CFDI 4.0 (XML) o extracción de datos de una factura en PDF</p>
+          <p className="text-sm font-semibold text-ink-primary">Cargar XML (CFDI), PDF o ZIP</p>
+          <p className="text-xs text-ink-muted mt-0.5">Auto-llenado desde el CFDI 4.0 (XML), extracción de datos de una factura en PDF, o el .zip del proveedor con ambos</p>
         </div>
         <svg className="w-4 h-4 text-ink-muted group-hover:text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/>
@@ -339,19 +340,26 @@ function StepUploadXML({ onParsed, onBack, onClose }) {
   async function parseFile(file) {
     if (!file) return
     const lower = file.name.toLowerCase()
-    if (!lower.endsWith('.xml') && !lower.endsWith('.pdf')) {
-      setError('Solo se aceptan archivos XML (CFDI) o PDF (factura).'); return
+    if (!lower.endsWith('.xml') && !lower.endsWith('.pdf') && !lower.endsWith('.zip')) {
+      setError('Solo se aceptan archivos XML (CFDI), PDF (factura) o ZIP con el par XML+PDF.'); return
     }
     setLoading(true); setError(null)
     try {
+      // ZIP del proveedor (par XML+PDF): se abre aquí mismo, se parsea el XML y
+      // todo el contenido útil se conserva como respaldo.
+      let parseTarget = file
+      let backups     = [file]
+      if (isZipFile(file)) {
+        ({ parseTarget, backups } = await expandCfdiZip(file))
+      }
       // Vía axios (purchasesApi) — NO fetch nativo con URL relativa (rompía en prod).
       // /parse-document acepta XML (CFDI) y PDF (factura escaneada → extracción por
       // IA, igual que el CSF). Devuelve los datos + el proveedor por RFC.
       const form = new FormData()
-      form.append('file', file)
+      form.append('file', parseTarget)
       const data = await purchasesApi.parseDocument(form)
-      // Pasamos también el archivo original para guardarlo como respaldo al crear.
-      onParsed(data, file)
+      // Pasamos también los archivos originales para guardarlos como respaldo al crear.
+      onParsed(data, backups)
     } catch (e) {
       setError(e.response?.data?.error || e.message || 'Error al procesar el documento')
     } finally { setLoading(false) }
@@ -375,7 +383,7 @@ function StepUploadXML({ onParsed, onBack, onClose }) {
         )}
         onClick={() => document.getElementById('xml-input').click()}
       >
-        <input id="xml-input" type="file" accept=".xml,.pdf" className="hidden"
+        <input id="xml-input" type="file" accept=".xml,.pdf,.zip" className="hidden"
           onChange={e => parseFile(e.target.files[0])} />
         {loading ? (
           <div className="flex flex-col items-center gap-2">
@@ -387,8 +395,8 @@ function StepUploadXML({ onParsed, onBack, onClose }) {
             <svg className="w-10 h-10 text-ink-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
-            <p className="text-sm font-medium text-ink-secondary">Arrastra el XML o PDF aquí o haz clic para seleccionar</p>
-            <p className="text-xs text-ink-muted">CFDI 4.0 (.xml) o factura en PDF (.pdf) — del PDF extraemos los datos automáticamente</p>
+            <p className="text-sm font-medium text-ink-secondary">Arrastra el XML, PDF o ZIP aquí o haz clic para seleccionar</p>
+            <p className="text-xs text-ink-muted">CFDI 4.0 (.xml), factura en PDF, o .zip con el par XML+PDF del proveedor — del PDF extraemos los datos automáticamente</p>
           </div>
         )}
       </div>
@@ -402,7 +410,7 @@ function StepUploadXML({ onParsed, onBack, onClose }) {
 }
 
 // ── Paso 2: Conciliación ──────────────────────────────────────────────────────
-function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
+function StepReconcile({ parsed, originalFiles, onClose, onSaved }) {
   const qc = useQueryClient()
   const [partner, setPartner]         = useState(parsed.matchedPartner
     ? { id: parsed.matchedPartner.id, label: parsed.matchedPartner.name, sub: parsed.matchedPartner.rfc }
@@ -590,14 +598,17 @@ function StepReconcile({ parsed, originalFile, onClose, onSaved }) {
       notes:         notes || null,
     }),
     onSuccess: async (invoice) => {
-      // Guardar el XML/PDF original como respaldo adjunto de la factura. Best-effort:
-      // si falla, la factura ya quedó creada (se puede adjuntar luego desde el detalle).
-      if (originalFile && invoice?.id) {
-        try {
-          const fd = new FormData()
-          fd.append('file', originalFile)
-          await purchasesApi.addInvoiceAttachment(invoice.id, fd)
-        } catch { /* el respaldo es opcional; no bloquea el alta */ }
+      // Guardar el XML/PDF original (o el par extraído del zip) como respaldo
+      // adjunto de la factura. Best-effort: si falla, la factura ya quedó creada
+      // (se puede adjuntar luego desde el detalle).
+      if (originalFiles?.length && invoice?.id) {
+        for (const f of originalFiles) {
+          try {
+            const fd = new FormData()
+            fd.append('file', f)
+            await purchasesApi.addInvoiceAttachment(invoice.id, fd)
+          } catch { /* el respaldo es opcional; no bloquea el alta */ }
+        }
       }
       qc.invalidateQueries({ queryKey: ['purchase-invoices'] })
       qc.invalidateQueries({ queryKey: ['purchase-receipts'] })
@@ -1052,11 +1063,11 @@ function NuevaFacturaModal({ onClose, onSaved }) {
   const [step, setStep]     = useState(0)
   const [method, setMethod] = useState(null)   // 'xml' | 'manual'
   const [parsed, setParsed] = useState(null)
-  const [originalFile, setOriginalFile] = useState(null)  // XML/PDF de respaldo
+  const [originalFiles, setOriginalFiles] = useState([])  // XML/PDF de respaldo (del zip pueden ser varios)
 
   const titleByStep = {
     0: 'Nueva factura de proveedor',
-    1: method === 'xml' ? 'Cargar XML o PDF del proveedor' : 'Captura manual',
+    1: method === 'xml' ? 'Cargar XML, PDF o ZIP del proveedor' : 'Captura manual',
     2: 'Conciliar con recepciones',
   }
 
@@ -1096,7 +1107,7 @@ function NuevaFacturaModal({ onClose, onSaved }) {
         )}
         {step === 1 && method === 'xml' && (
           <StepUploadXML
-            onParsed={(data, file) => { setParsed(data); setOriginalFile(file || null); setStep(2) }}
+            onParsed={(data, files) => { setParsed(data); setOriginalFiles(files || []); setStep(2) }}
             onBack={() => setStep(0)}
             onClose={onClose}
           />
@@ -1111,7 +1122,7 @@ function NuevaFacturaModal({ onClose, onSaved }) {
         {step === 2 && parsed && (
           <StepReconcile
             parsed={parsed}
-            originalFile={originalFile}
+            originalFiles={originalFiles}
             onClose={onClose}
             onSaved={onSaved}
           />

@@ -9,6 +9,7 @@ import { partnersApi } from '@/api/partners'
 import { bankAccountsApi } from '@/api/bankAccounts'
 import { creditCardsApi } from '@/api/creditCards'
 import { fmtMXN, fmtDateOnly } from '@/utils/fmt'
+import { isZipFile, expandCfdiZip } from '@/utils/cfdiZip'
 import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
 import clsx from 'clsx'
@@ -74,16 +75,23 @@ function GastoModal({ categories, onClose, onSaved }) {
   const [parsing, setParsing]         = useState(false)
   const [parsedFrom, setParsedFrom]   = useState(null)   // { name, rfc, matched, method }
   const [xmlContent, setXmlContent]   = useState(null)
-  const [sourceFile, setSourceFile]   = useState(null)   // archivo original → respaldo descargable
+  const [sourceFiles, setSourceFiles] = useState([])     // archivos originales → respaldo descargable (del zip pueden ser XML+PDF)
   const [currency, setCurrency]       = useState('MXN')
   const fileRef = useRef(null)
 
   async function handleFile(file) {
     if (!file) return
-    setSourceFile(file)
     setParsing(true); setError(null)
     try {
-      const fd = new FormData(); fd.append('file', file)
+      // ZIP del proveedor (par XML+PDF): se abre aquí mismo, se parsea el XML y
+      // ambos archivos quedan como respaldo del gasto.
+      let parseTarget = file
+      let backups     = [file]
+      if (isZipFile(file)) {
+        ({ parseTarget, backups } = await expandCfdiZip(file))
+      }
+      setSourceFiles(backups)
+      const fd = new FormData(); fd.append('file', parseTarget)
       const r = await purchasesApi.parseExpenseDocument(fd)
       if (r.subtotal != null) setSubtotal(String(r.subtotal))
       if (r.tax != null)      setTax(String(r.tax))
@@ -94,10 +102,10 @@ function GastoModal({ categories, onClose, onSaved }) {
       if (r.currency)         setCurrency(r.currency)
       if (r.matchedPartner)   setSupplierId(r.matchedPartner.id)
       setParsedFrom({ name: r.emisor?.name, rfc: r.emisor?.rfc, matched: !!r.matchedPartner, method: r.method })
-      // Respaldo del XML (solo si el archivo es XML)
-      setXmlContent((file.name || '').toLowerCase().endsWith('.xml') ? await file.text() : null)
+      // Respaldo del XML (solo si el archivo parseado es XML)
+      setXmlContent((parseTarget.name || '').toLowerCase().endsWith('.xml') ? await parseTarget.text() : null)
     } catch (e) {
-      setError(e.response?.data?.error || 'No se pudo leer el archivo. Captura los datos a mano.')
+      setError(e.response?.data?.error || e.message || 'No se pudo leer el archivo. Captura los datos a mano.')
     } finally {
       setParsing(false)
       if (fileRef.current) fileRef.current.value = ''
@@ -151,13 +159,16 @@ function GastoModal({ categories, onClose, onSaved }) {
         paymentCreditCardId:  markPaid && paymentMethod === 'credit_card' ? (paymentCreditCardId  || undefined) : undefined,
         notes: notes.trim() || undefined,
       })
-      // Guarda el archivo original (XML/PDF) como respaldo descargable del gasto.
-      // Best-effort: si la subida del respaldo falla, el gasto YA quedó creado.
-      if (sourceFile && created?.id) {
-        try {
-          const fd = new FormData(); fd.append('file', sourceFile)
-          await purchasesApi.addExpenseAttachment(created.id, fd)
-        } catch { /* respaldo opcional: no bloquea el alta del gasto */ }
+      // Guarda los archivos originales (XML/PDF, o el par extraído del zip) como
+      // respaldo descargable del gasto. Best-effort: si la subida falla, el
+      // gasto YA quedó creado.
+      if (sourceFiles.length && created?.id) {
+        for (const f of sourceFiles) {
+          try {
+            const fd = new FormData(); fd.append('file', f)
+            await purchasesApi.addExpenseAttachment(created.id, fd)
+          } catch { /* respaldo opcional: no bloquea el alta del gasto */ }
+        }
       }
       return created
     },
@@ -184,9 +195,10 @@ function GastoModal({ categories, onClose, onSaved }) {
             <span className="text-xs text-ink-muted">¿Tienes el CFDI? Cárgalo y se llena solo.</span>
             <button type="button" onClick={() => fileRef.current?.click()} disabled={parsing}
               className="btn-secondary text-xs whitespace-nowrap">
-              {parsing ? <Spinner size="sm" /> : 'Cargar XML / PDF'}
+              {parsing ? <Spinner size="sm" /> : 'Cargar XML / PDF / ZIP'}
             </button>
-            <input ref={fileRef} type="file" accept=".xml,application/xml,text/xml,application/pdf"
+            <input ref={fileRef} type="file"
+              accept=".xml,application/xml,text/xml,application/pdf,.zip,application/zip,application/x-zip-compressed"
               className="hidden" onChange={e => handleFile(e.target.files?.[0])} />
           </div>
           {parsedFrom && (
