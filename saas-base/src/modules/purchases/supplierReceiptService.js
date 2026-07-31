@@ -63,7 +63,9 @@ async function listReceipts({
       JOIN supplier_invoices ci2 ON ci2.id = srl2.invoiced_by_invoice_id
      WHERE srl2.supplier_receipt_id = sr.id
        AND ci2.status <> 'cancelled' AND ci2.type = 'invoice')`
-  if (invoiceStatus === 'pending')  filters.push(`sr.invoiced_at IS NULL AND NOT ${REAL_INVOICED_LINE}`)
+  // Las reposiciones de devolución no esperan factura (la vigente es la
+  // original) → no cuentan como "sin factura".
+  if (invoiceStatus === 'pending')  filters.push(`sr.invoiced_at IS NULL AND sr.replacement_return_id IS NULL AND NOT ${REAL_INVOICED_LINE}`)
   if (invoiceStatus === 'partial')  filters.push(`sr.status = 'confirmed' AND sr.invoiced_at IS NULL AND ${REAL_INVOICED_LINE}`)
   if (invoiceStatus === 'invoiced') filters.push(`sr.invoiced_at IS NOT NULL`)
   if (search) {
@@ -98,6 +100,8 @@ async function listReceipts({
               ORDER BY si.created_at DESC LIMIT 1) AS invoice_type,
             CASE WHEN sr.evidence_path IS NOT NULL THEN sr.evidence_filename ELSE NULL END AS evidence_filename,
             po.order_number  AS purchase_order_number,
+            sr.replacement_return_id,
+            rret.return_number AS replacement_return_number,
             bp.name          AS partner_name,
             w.name           AS warehouse_name,
             u.full_name      AS created_by_name,
@@ -113,6 +117,7 @@ async function listReceipts({
             COALESCE(SUM(srl.subtotal), 0) AS total_mxn
      FROM supplier_receipts sr
      LEFT JOIN purchase_orders    po  ON po.id  = sr.purchase_order_id
+     LEFT JOIN supplier_returns   rret ON rret.id = sr.replacement_return_id
      LEFT JOIN business_partners  bp  ON bp.id  = sr.partner_id
      LEFT JOIN warehouses         w   ON w.id   = sr.warehouse_id
      LEFT JOIN users              u   ON u.id   = sr.created_by
@@ -120,7 +125,7 @@ async function listReceipts({
      LEFT JOIN supplier_receipt_lines srl ON srl.supplier_receipt_id = sr.id
      LEFT JOIN supplier_invoices    cil ON cil.id = srl.invoiced_by_invoice_id
      WHERE sr.tenant_id = $1 ${where}
-     GROUP BY sr.id, po.id, bp.id, w.id, u.id, cb.id
+     GROUP BY sr.id, po.id, rret.id, bp.id, w.id, u.id, cb.id
      ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
@@ -147,6 +152,11 @@ async function getReceipt({ tenantId, receiptId }) {
   const { rows } = await query(
     `SELECT sr.*,
             po.order_number  AS purchase_order_number,
+            -- Reposición: devolución ligada + su traza de origen (auditoría).
+            rret.return_number AS replacement_return_number,
+            rret.total_mxn     AS replacement_return_total,
+            rrr.name           AS replacement_return_reason,
+            rorig.invoice_number AS replacement_source_invoice_number,
             bp.name AS partner_name, bp.rfc,
             w.name  AS warehouse_name,
             -- Cobertura por MONTO: subtotal total de la recepción vs lo ya cubierto por
@@ -162,6 +172,9 @@ async function getReceipt({ tenantId, receiptId }) {
             cb.full_name AS confirmed_by_name
      FROM supplier_receipts sr
      LEFT JOIN purchase_orders    po ON po.id  = sr.purchase_order_id
+     LEFT JOIN supplier_returns   rret ON rret.id = sr.replacement_return_id
+     LEFT JOIN tenant_return_reasons rrr ON rrr.id = rret.reason_id
+     LEFT JOIN supplier_invoices  rorig ON rorig.id = rret.supplier_invoice_id
      LEFT JOIN business_partners  bp ON bp.id  = sr.partner_id
      LEFT JOIN warehouses         w  ON w.id   = sr.warehouse_id
      LEFT JOIN users              u  ON u.id   = sr.created_by
@@ -170,6 +183,28 @@ async function getReceipt({ tenantId, receiptId }) {
     [receiptId, tenantId]
   )
   if (rows.length === 0) return null
+
+  // Reposición: recepciones/lotes ORIGINALES de la devolución (cadena de
+  // auditoría: esta recepción → DEV → lo devuelto y de dónde venía).
+  let replacementOrigin = null
+  if (rows[0].replacement_return_id) {
+    const { rows: origin } = await query(
+      `SELECT l.id, l.quantity, l.unit, l.unit_cost,
+              CASE WHEN l.item_type = 'raw_material'
+                   THEN (SELECT name FROM raw_materials WHERE id = l.item_id)
+                   ELSE (SELECT name FROM products WHERE id = l.item_id) END AS item_name,
+              lot.lot_number AS original_lot,
+              srcr.receipt_number AS source_receipt_number
+         FROM supplier_return_lines l
+         LEFT JOIN raw_material_lots lot ON lot.id = l.raw_material_lot_id
+         LEFT JOIN supplier_receipt_lines srcl ON srcl.id = l.source_receipt_line_id
+         LEFT JOIN supplier_receipts srcr ON srcr.id = srcl.supplier_receipt_id
+        WHERE l.return_id = $1
+        ORDER BY l.created_at`,
+      [rows[0].replacement_return_id]
+    )
+    replacementOrigin = origin
+  }
 
   const { rows: lines } = await query(
     `SELECT srl.*,
@@ -203,7 +238,7 @@ async function getReceipt({ tenantId, receiptId }) {
     [receiptId]
   )
 
-  return { ...rows[0], lines }
+  return { ...rows[0], lines, replacement_origin: replacementOrigin }
 }
 
 // Inserta las líneas de una recepción y, si el tenant usa lotes, crea un
@@ -313,13 +348,16 @@ async function assertReceiptLotsUntouched(client, tenantId, receiptId) {
 }
 
 async function createReceipt({
-  tenantId, purchaseOrderId, partnerId, genericSupplier,
+  tenantId, purchaseOrderId, replacementReturnId, partnerId, genericSupplier,
   warehouseId, receivedDate, documentType, documentNumber,
   lines = [], notes, userId, ipAddress, userAgent,
 }) {
   const receipt = await withTransaction(async (client) => {
     if (!warehouseId) throw createError(400, 'warehouseId es requerido.')
     if (lines.length === 0) throw createError(400, 'Se requiere al menos una linea.')
+    if (purchaseOrderId && replacementReturnId) {
+      throw createError(400, 'Una recepción es contra una OC o contra una devolución (reposición), no ambas.')
+    }
 
     // SaaS v2: si el tenant usa lotes, se creará un raw_material_lot por cada
     // línea de tipo raw_material. Se lee la config aquí para no hacer N queries.
@@ -347,15 +385,38 @@ async function createReceipt({
       }
     }
 
+    // Reposición en especie (mig 240): la recepción se registra CONTRA una
+    // devolución confirmada que espera reposición. El proveedor es el de la
+    // devolución; la recepción NO espera factura (la vigente es la original).
+    if (replacementReturnId) {
+      const { rows: ret } = await client.query(
+        `SELECT id, return_number, partner_id, status, replacement_expected, replacement_completed_at
+           FROM supplier_returns WHERE id = $1 AND tenant_id = $2`,
+        [replacementReturnId, tenantId]
+      )
+      if (!ret[0]) throw createError(404, 'Devolución no encontrada.')
+      if (ret[0].status !== 'confirmed') {
+        throw createError(400, 'Solo se puede recibir la reposición de una devolución CONFIRMADA.')
+      }
+      if (!ret[0].replacement_expected) {
+        throw createError(400, `La devolución ${ret[0].return_number} no está marcada como "espera reposición".`)
+      }
+      if (ret[0].replacement_completed_at) {
+        throw createError(409, `La reposición de ${ret[0].return_number} ya fue recibida por completo.`)
+      }
+      resolvedPartnerId = ret[0].partner_id
+    }
+
     const receiptNumber = await nextReceiptNumber(client, tenantId)
 
     const { rows } = await client.query(
       `INSERT INTO supplier_receipts
-         (tenant_id, receipt_number, purchase_order_id, partner_id, generic_supplier,
+         (tenant_id, receipt_number, purchase_order_id, replacement_return_id,
+          partner_id, generic_supplier,
           warehouse_id, received_date, document_type, document_number, notes, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        RETURNING *`,
-      [tenantId, receiptNumber, purchaseOrderId || null,
+      [tenantId, receiptNumber, purchaseOrderId || null, replacementReturnId || null,
        resolvedPartnerId || null, resolvedGenericSupplier || null,
        warehouseId,
        receivedDate || new Date().toISOString().split('T')[0],
@@ -559,7 +620,11 @@ async function confirmReceipt({ tenantId, receiptId, userId, ipAddress, userAgen
         createdBy:     userId,
       })
 
-      if (line.unit_price > 0 && line.item_type === 'raw_material' && receipt.partner_id) {
+      // En una REPOSICIÓN el costo capturado es el histórico de la compra
+      // original (para no distorsionar inventario) — NO es un precio de mercado
+      // nuevo, así que no debe pisar el precio vigente del proveedor.
+      if (line.unit_price > 0 && line.item_type === 'raw_material' && receipt.partner_id
+          && !receipt.replacement_return_id) {
         try {
           await client.query('SAVEPOINT sp_supplier_materials')
           await client.query(
@@ -577,7 +642,8 @@ async function confirmReceipt({ tenantId, receiptId, userId, ipAddress, userAgen
     // Aprender el precio REAL recibido (source='receipt') → corrige el precio
     // aprendido de la OC con lo que de verdad llegó. La línea de la recepción ya
     // trae item_type/item_id/unit_price. Best-effort, dentro de la transacción.
-    if (receipt.partner_id) {
+    // (Reposiciones excluidas: entran al costo original, no a precio nuevo.)
+    if (receipt.partner_id && !receipt.replacement_return_id) {
       await supplierPriceService.learnFromLines(client, {
         tenantId, supplierId: receipt.partner_id,
         currency: receipt.currency || 'MXN', source: 'receipt', userId,
@@ -599,10 +665,20 @@ async function confirmReceipt({ tenantId, receiptId, userId, ipAddress, userAgen
       await updatePurchaseOrderStatus(client, tenantId, receipt.purchase_order_id)
     }
 
+    // Reposición en especie: abonar lo recibido a la cobertura de la devolución
+    // y, si quedó cubierta por completo, resolverla como 'replacement'.
+    if (receipt.replacement_return_id) {
+      await applyReplacementCoverage(client, {
+        tenantId, returnId: receipt.replacement_return_id,
+        receipt, lines, userId,
+      })
+    }
+
     await audit({
       tenantId, userId, action: 'supplier_receipt.confirmed',
       resource: 'supplier_receipts', resourceId: receiptId,
-      payload: { receiptNumber: receipt.receipt_number, linesCount: lines.length },
+      payload: { receiptNumber: receipt.receipt_number, linesCount: lines.length,
+                 replacementReturnId: receipt.replacement_return_id || undefined },
       ipAddress, userAgent,
     })
 
@@ -650,6 +726,75 @@ async function cancelReceipt({ tenantId, receiptId, reason, userId, ipAddress, u
 
     return rows[0]
   })
+}
+
+/**
+ * Reposición en especie (mig 240): al confirmar una recepción ligada a una
+ * devolución, abona lo recibido a quantity_replaced de las líneas de la
+ * devolución (emparejadas por artículo, en orden, topadas a su pendiente).
+ * Si todas las líneas quedan cubiertas → la devolución se resuelve como
+ * 'replacement' (sin tocar CxP: la factura vigente sigue siendo la original).
+ */
+async function applyReplacementCoverage(client, { tenantId, returnId, receipt, lines, userId }) {
+  const { rows: retRows } = await client.query(
+    `SELECT id, return_number, credit_status, replacement_completed_at
+       FROM supplier_returns WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+    [returnId, tenantId]
+  )
+  const ret = retRows[0]
+  if (!ret) throw createError(404, 'La devolución de esta reposición ya no existe.')
+
+  const { rows: retLines } = await client.query(
+    `SELECT id, item_type, item_id, quantity, quantity_replaced
+       FROM supplier_return_lines WHERE return_id = $1
+       ORDER BY created_at`,
+    [returnId]
+  )
+
+  // Distribuir lo recibido entre las líneas de la devolución del mismo artículo.
+  for (const line of lines) {
+    if (!line.item_id || !line.item_type) continue
+    let remaining = parseFloat(line.quantity_received)
+    for (const rl of retLines) {
+      if (remaining <= 1e-6) break
+      if (rl.item_type !== line.item_type || rl.item_id !== line.item_id) continue
+      const pending = parseFloat(rl.quantity) - parseFloat(rl.quantity_replaced)
+      if (pending <= 1e-6) continue
+      const applied = Math.min(remaining, pending)
+      rl.quantity_replaced = (parseFloat(rl.quantity_replaced) + applied).toFixed(4)
+      remaining -= applied
+      await client.query(
+        `UPDATE supplier_return_lines SET quantity_replaced = quantity_replaced + $1
+          WHERE id = $2`,
+        [applied.toFixed(4), rl.id]
+      )
+    }
+  }
+
+  const fullyCovered = retLines.every(rl =>
+    parseFloat(rl.quantity_replaced) >= parseFloat(rl.quantity) - 1e-4)
+
+  if (fullyCovered && !ret.replacement_completed_at) {
+    // Si la devolución seguía con crédito pendiente, la reposición ES la
+    // resolución (no hay NC/cancelación: la CxP original no cambia). Si ya
+    // tenía otra resolución fiscal registrada, solo se marca la cobertura.
+    await client.query(
+      `UPDATE supplier_returns
+          SET replacement_completed_at = NOW(),
+              fiscal_resolution = CASE WHEN credit_status = 'pending'
+                                       THEN 'replacement'::supplier_return_fiscal_resolution
+                                       ELSE fiscal_resolution END,
+              credit_status = CASE WHEN credit_status = 'pending'
+                                   THEN 'resolved' ELSE credit_status END
+        WHERE id = $1`,
+      [returnId]
+    )
+    await audit({
+      tenantId, userId, action: 'supplier_return.replacement_completed',
+      resource: 'supplier_returns', resourceId: returnId,
+      payload: { returnNumber: ret.return_number, receiptNumber: receipt.receipt_number },
+    })
+  }
 }
 
 async function updatePurchaseOrderStatus(client, tenantId, purchaseOrderId) {

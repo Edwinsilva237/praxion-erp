@@ -195,6 +195,15 @@ async function cleanupTestTenants() {
       DELETE FROM supplier_return_lines srl USING supplier_returns sr, tenants t
        WHERE srl.return_id = sr.id AND sr.tenant_id = t.id AND t.slug LIKE $1
     `, [slugPattern])
+    // supplier_receipts.replacement_return_id (mig 240, reposición en especie)
+    // referencia supplier_returns — pero returns debe borrarse ANTES que
+    // receipts (FK de arriba) → romper el ciclo anulando la referencia.
+    await query(`
+      UPDATE supplier_receipts sr SET replacement_return_id = NULL
+        FROM tenants t
+       WHERE sr.tenant_id = t.id AND t.slug LIKE $1
+         AND sr.replacement_return_id IS NOT NULL
+    `, [slugPattern])
     await query(`
       DELETE FROM supplier_returns sr USING tenants t
        WHERE sr.tenant_id = t.id AND t.slug LIKE $1

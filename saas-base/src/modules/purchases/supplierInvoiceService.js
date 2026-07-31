@@ -373,6 +373,7 @@ async function generateReceiptRemission({ tenantId, receiptId, notes, userId, ip
   return withTransaction(async (client) => {
     const { rows: rcptRows } = await client.query(
       `SELECT sr.id, sr.receipt_number, sr.partner_id, sr.purchase_order_id,
+              sr.replacement_return_id,
               sr.status, sr.invoiced_at,
               COALESCE(po.currency, 'MXN') AS currency,
               COALESCE((SELECT SUM(srl.subtotal) FROM supplier_receipt_lines srl
@@ -388,6 +389,11 @@ async function generateReceiptRemission({ tenantId, receiptId, notes, userId, ip
 
     if (rcpt.status !== 'confirmed') {
       throw createError(409, 'Solo se puede generar la CXP de una recepción CONFIRMADA.')
+    }
+    // Una reposición de devolución no genera deuda: ya pagas (o pagaste) la
+    // factura original del material devuelto. Generar CxP aquí la duplicaría.
+    if (rcpt.replacement_return_id) {
+      throw createError(409, 'Esta recepción es una REPOSICIÓN de una devolución: no genera cuenta por pagar (la factura vigente es la original).')
     }
     if (rcpt.invoiced_at) {
       throw createError(409, 'Esta recepción ya tiene un documento (factura o remisión).')
@@ -1749,6 +1755,8 @@ async function suggestReceiptForExpense({ tenantId, expenseId }) {
       WHERE sr.tenant_id = $1
         AND sr.partner_id = $2
         AND sr.status = 'confirmed'
+        -- Las reposiciones de devolución no se facturan (la factura es la original).
+        AND sr.replacement_return_id IS NULL
         AND COALESCE(po.currency, 'MXN') = 'MXN'
         AND sr.received_date >= (COALESCE($3::date, CURRENT_DATE) - INTERVAL '90 days')
         AND sr.received_date <= (COALESCE($3::date, CURRENT_DATE) + INTERVAL '7 days')

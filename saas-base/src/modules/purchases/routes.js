@@ -126,6 +126,15 @@ router.get('/returns/candidates', checkPermission('purchases', 'return'), async 
     }))
   } catch (err) { retErr(res, next)(err) }
 })
+// Devoluciones confirmadas que ESPERAN REPOSICIÓN del proveedor — el selector
+// del modal de Recepciones ("recibir contra devolución"). ANTES de /returns/:id.
+router.get('/returns/pending-replacement', checkPermission('purchases', 'read'), async (req, res, next) => {
+  try {
+    res.json(await supplierReturnService.listPendingReplacements({
+      tenantId: req.tenant.id, partnerId: req.query.partnerId || undefined,
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
 router.get('/returns/:id', checkPermission('purchases', 'read'), async (req, res, next) => {
   try {
     const ret = await supplierReturnService.getReturn({ tenantId: req.tenant.id, returnId: req.params.id })
@@ -153,6 +162,17 @@ router.post('/returns/:id/cancel', checkPermission('purchases', 'return'), async
   try {
     res.json(await supplierReturnService.cancelReturn({
       tenantId: req.tenant.id, returnId: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    }))
+  } catch (err) { retErr(res, next)(err) }
+})
+// Marca/desmarca "el proveedor repondrá el material" (reposición en especie).
+// Body: { expected: boolean }
+router.post('/returns/:id/replacement-expected', checkPermission('purchases', 'return'), async (req, res, next) => {
+  try {
+    res.json(await supplierReturnService.setReplacementExpected({
+      tenantId: req.tenant.id, returnId: req.params.id,
+      expected: req.body?.expected,
       userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
     }))
   } catch (err) { retErr(res, next)(err) }
@@ -557,6 +577,8 @@ router.get('/receipts/pending-invoice', checkPermission('purchases', 'read'), as
        LEFT JOIN business_partners bp ON bp.id = sr.partner_id
        WHERE sr.tenant_id = $1
          AND sr.status = 'confirmed'
+         -- Las reposiciones de devolución no esperan factura (la vigente es la original).
+         AND sr.replacement_return_id IS NULL
          -- "Pendiente de facturar" (nivel LÍNEA): aparece si tiene AL MENOS UNA línea
          -- sin factura REAL activa (NULL / cancelada / cubierta por remisión). Así una
          -- recepción parcialmente facturada SIGUE apareciendo por sus líneas pendientes,

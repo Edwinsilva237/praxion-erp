@@ -473,7 +473,9 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
               {/* Datos generales */}
               <div className="grid grid-cols-2 gap-2">
                 {[
-                  ['OC referencia',   receipt.purchase_order_number || '—'],
+                  receipt.replacement_return_number
+                    ? ['Reposición de', `↩ ${receipt.replacement_return_number}`]
+                    : ['OC referencia', receipt.purchase_order_number || '—'],
                   ['Folio proveedor', receipt.document_type
                     ? `${receipt.document_type} ${receipt.document_number || ''}`.trim() : '—'],
                   ['Almacén',         receipt.warehouse_name || '—'],
@@ -487,6 +489,34 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
                   </div>
                 ))}
               </div>
+
+              {/* Reposición: cadena de auditoría hacia los documentos originales */}
+              {receipt.replacement_return_number && (
+                <div className="bg-status-warning/10 border border-status-warning/40 rounded-xl px-4 py-3 flex flex-col gap-1.5">
+                  <p className="text-xs font-bold text-status-warning uppercase tracking-wide">
+                    ↩ Reposición en especie — devolución {receipt.replacement_return_number}
+                  </p>
+                  {receipt.replacement_return_reason && (
+                    <p className="text-xs text-ink-secondary">Motivo de la devolución: <strong>{receipt.replacement_return_reason}</strong></p>
+                  )}
+                  {(receipt.replacement_origin || []).map((o, i) => (
+                    <p key={i} className="text-xs text-ink-secondary">
+                      • {o.item_name}: se devolvieron <strong>{fmtNum(o.quantity, 3)} {o.unit}</strong>
+                      {o.original_lot ? <> del lote <span className="font-mono">{o.original_lot}</span></> : null}
+                      {o.source_receipt_number ? <> (recibido en <span className="font-mono">{o.source_receipt_number}</span>)</> : null}
+                    </p>
+                  ))}
+                  {receipt.replacement_source_invoice_number && (
+                    <p className="text-xs text-ink-secondary">
+                      Factura original vigente: <span className="font-mono">{receipt.replacement_source_invoice_number}</span>
+                    </p>
+                  )}
+                  <p className="text-[11px] text-ink-muted">
+                    Esta recepción no genera cuenta por pagar ni espera factura: repone material ya
+                    facturado/pagado en la compra original.
+                  </p>
+                </div>
+              )}
 
               {/* Líneas */}
               {(receipt.lines || []).length > 0 && (
@@ -665,8 +695,9 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
                 </button>
               </>
             )}
-            {/* Fase 2: recepción confirmada SIN documento → generar CXP sin factura */}
-            {receipt.status === 'confirmed' && !receipt.invoiced_at && (
+            {/* Fase 2: recepción confirmada SIN documento → generar CXP sin factura.
+                Las reposiciones de devolución NO generan CxP (factura vigente = la original). */}
+            {receipt.status === 'confirmed' && !receipt.invoiced_at && !receipt.replacement_return_id && (
               <Can do="purchases:create">
                 <button onClick={() => { setActErr(null); setRemit(true) }}
                   className="btn-secondary btn-sm text-status-info hover:bg-status-info/10"
@@ -770,6 +801,11 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
   const [ocId, setOcId]           = useState(editReceipt?.purchase_order_id || preselectedOcId || '')
   const [ocData, setOcData]       = useState(null)
   const [ocLoading, setOcLoading] = useState(false)
+  // Fuente de la recepción: contra una OC (flujo normal) o contra una
+  // DEVOLUCIÓN que espera reposición del proveedor (reposición en especie).
+  const [source, setSource]       = useState(editReceipt?.replacement_return_id ? 'return' : 'oc')
+  const [returnId, setReturnId]   = useState(editReceipt?.replacement_return_id || '')
+  const [returnData, setReturnData] = useState(null)
   const [warehouseId, setWH]      = useState(editReceipt?.warehouse_id || '')
   const [docType, setDocType]     = useState(editReceipt?.document_type || 'remision')
   const [docNumber, setDocNumber] = useState(editReceipt?.document_number || '')
@@ -795,6 +831,13 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
     queryFn: () => purchasesApi.listOrders({ limit: 100 }).then(r =>
       (r.data || r).filter(o => ['sent', 'partially_received'].includes(o.status))
     ),
+  })
+
+  // Devoluciones confirmadas que esperan reposición del proveedor.
+  const { data: pendingReplacements = [] } = useQuery({
+    queryKey: ['returns-pending-replacement'],
+    queryFn: () => purchasesApi.listPendingReplacements(),
+    enabled: !isEdit,
   })
 
   const { data: tenantConfig } = useQuery({
@@ -837,6 +880,43 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
 
   useEffect(() => { if (preselectedOcId) loadOC(preselectedOcId) }, [preselectedOcId])
 
+  // Precarga las líneas PENDIENTES DE REPONER de la devolución elegida, al
+  // costo original (el inventario recupera el valor que salió; la CxP no cambia).
+  function loadReturn(id) {
+    setReturnId(id); setReturnData(null); setLines([]); setError(null)
+    if (!id) return
+    const ret = pendingReplacements.find(r => r.id === id)
+    if (!ret) return
+    setReturnData(ret)
+    const pend = (ret.lines || []).filter(l => parseFloat(l.pending) > 0)
+    setLines(pend.map(l => ({
+      oc_line_id:      null,
+      oc_qty_original: parseFloat(l.quantity || 0),
+      item_type:       l.itemType || 'raw_material',
+      item:            { id: l.itemId, label: l.name || '—' },
+      unit:            l.unit || 'kg',
+      unit_price:      l.unitCost != null ? String(parseFloat(l.unitCost)) : '',
+      qty_ordered:     String(parseFloat(l.pending)),
+      qty_received:    '',
+      lot_number:      '',
+      manufacturer_lot: '',
+      expiry_date:     '',
+      // Traza de origen (solo informativa en el form)
+      origin_lot:      l.originalLot || null,
+      origin_receipt:  l.sourceReceipt || null,
+    })))
+    if (pend[0]?.warehouseId) setWH(w => w || pend[0].warehouseId)
+  }
+
+  // Cambiar de fuente limpia la selección contraria.
+  function switchSource(s) {
+    if (s === source) return
+    setSource(s)
+    setOcId(''); setOcData(null)
+    setReturnId(''); setReturnData(null)
+    setLines([]); setError(null); setExcess(null)
+  }
+
   // En edición: las líneas ya vienen precargadas del borrador; solo cargamos la
   // OC para la tarjeta de referencia y el partner (NO re-derivamos las líneas).
   useEffect(() => {
@@ -863,14 +943,15 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
 
   const mutation = useMutation({
     mutationFn: async () => {
-      if (!ocId && !isEdit) throw new Error('Selecciona una OC.')
+      if (!ocId && !returnId && !isEdit) throw new Error('Selecciona una OC o una devolución.')
       if (!warehouseId) throw new Error('Selecciona el almacén de destino.')
       const validLines = lines.filter(l => l.item?.id && (l.qty_received || l.qty_ordered))
       if (!validLines.length) throw new Error('Sin líneas con cantidad.')
 
       const body = {
-        partnerId:       ocData?.partner_id || null,
-        purchaseOrderId: ocId || null,
+        partnerId:       (source === 'return' ? returnData?.partner_id : ocData?.partner_id) || null,
+        purchaseOrderId: source === 'oc' ? (ocId || null) : null,
+        replacementReturnId: source === 'return' ? (returnId || null) : null,
         warehouseId,
         receivedDate:    receiptDate,
         documentType:    docType,
@@ -920,6 +1001,10 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
       // "Recibir otra OC del mismo embarque": no cerrar. Limpiamos solo la OC y
       // sus líneas; se conservan almacén, fecha, tipo/folio de documento, notas y
       // evidencia (la evidencia se re-sube a cada recepción, una copia por OC).
+      if (source === 'return') {
+        qc.invalidateQueries({ queryKey: ['returns-pending-replacement'] })
+        qc.invalidateQueries({ queryKey: ['supplier-returns'] })
+      }
       if (!isEdit && continueAfterRef.current) {
         continueAfterRef.current = false
         setSavedBanner(data?.receipt_number || 'Recepción')
@@ -936,7 +1021,7 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
   // OC del mismo embarque (conserva almacén/fecha/folio/evidencia).
   function doSubmit(continueAfter) {
     setError(null)
-    if (!ocId && !isEdit) { setError('Selecciona una OC.'); return }
+    if (!ocId && !returnId && !isEdit) { setError(source === 'return' ? 'Selecciona una devolución.' : 'Selecciona una OC.'); return }
     if (!warehouseId) { setError('Selecciona el almacén.'); return }
     continueAfterRef.current = continueAfter
     const excess = getExcess()
@@ -973,7 +1058,9 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
                 </svg>
               </div>
               <div className="flex-1">
-                <p className="text-sm font-semibold text-status-warning mb-2">⚠️ Cantidad mayor a lo pendiente en OC</p>
+                <p className="text-sm font-semibold text-status-warning mb-2">
+                  ⚠️ Cantidad mayor a lo pendiente {source === 'return' ? 'de reponer' : 'en OC'}
+                </p>
                 <div className="flex flex-col gap-1.5">
                   {excessWarning.map((l, i) => {
                     const r = parseFloat(l.qty_received || l.qty_ordered || 0)
@@ -1022,11 +1109,34 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
             </div>
           )}
 
-          {/* OC obligatoria */}
+          {/* Documento de origen: OC (flujo normal) o devolución (reposición) */}
           <div className="bg-surface-elevated/60 border border-line-subtle rounded-xl p-4 flex flex-col gap-3">
-            <p className="text-xs font-bold text-brand-300 uppercase tracking-wider">
-              Orden de compra <span className="text-status-danger">*</span>
-            </p>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <p className="text-xs font-bold text-brand-300 uppercase tracking-wider">
+                {source === 'return' ? 'Reposición de devolución' : 'Orden de compra'} <span className="text-status-danger">*</span>
+              </p>
+              {!isEdit && (
+                <div className="flex rounded-lg border border-line-subtle overflow-hidden text-xs">
+                  <button type="button" onClick={() => switchSource('oc')}
+                    className={clsx('px-3 py-1.5 font-medium transition-colors',
+                      source === 'oc' ? 'bg-brand-500/15 text-brand-300' : 'text-ink-muted hover:text-ink-secondary')}>
+                    Contra OC
+                  </button>
+                  <button type="button" onClick={() => switchSource('return')}
+                    className={clsx('px-3 py-1.5 font-medium transition-colors border-l border-line-subtle',
+                      source === 'return' ? 'bg-brand-500/15 text-brand-300' : 'text-ink-muted hover:text-ink-secondary')}>
+                    Reposición de devolución
+                    {pendingReplacements.length > 0 && (
+                      <span className="ml-1.5 bg-status-warning/20 text-status-warning font-bold px-1.5 py-0.5 rounded-full">
+                        {pendingReplacements.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {source === 'oc' ? (
             <div>
               <label className="label">{isEdit ? 'OC de la recepción' : 'Selecciona la OC a recibir'}</label>
               {isEdit ? (
@@ -1050,12 +1160,46 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
                 </select>
               )}
             </div>
+            ) : (
+            <div className="flex flex-col gap-2">
+              <label className="label">Devolución que el proveedor está reponiendo</label>
+              {pendingReplacements.length === 0 ? (
+                <div className="input bg-status-warning/10 border-status-warning/40 text-status-warning text-sm">
+                  No hay devoluciones esperando reposición. Márcalo en la devolución
+                  (&quot;El proveedor repondrá el material&quot;).
+                </div>
+              ) : (
+                <select className={clsx('select', !returnId && 'border-status-danger/40 bg-status-danger/10')}
+                  value={returnId} onChange={e => loadReturn(e.target.value)}>
+                  <option value="">— Selecciona la devolución —</option>
+                  {pendingReplacements.map(r => (
+                    <option key={r.id} value={r.id}>
+                      {r.return_number} · {r.partner_name} · {(r.lines || []).filter(l => parseFloat(l.pending) > 0).length} línea(s) por reponer
+                    </option>
+                  ))}
+                </select>
+              )}
+              {returnData && (
+                <div className="bg-status-warning/10 border border-status-warning/40 rounded-lg px-3 py-2 text-xs flex flex-col gap-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-mono font-semibold text-status-warning">{returnData.return_number}</span>
+                    <span className="text-ink-secondary">{returnData.partner_name}</span>
+                    {returnData.reason_name && <span className="text-ink-muted">· Motivo: {returnData.reason_name}</span>}
+                  </div>
+                  <p className="text-ink-muted">
+                    La reposición entra al <strong>costo original</strong> y NO genera cuenta por pagar ni
+                    espera factura — la factura vigente sigue siendo la de la compra original.
+                  </p>
+                </div>
+              )}
+            </div>
+            )}
             {ocLoading && (
               <div className="flex items-center gap-2 text-xs text-ink-muted">
                 <Spinner size="sm" /> Cargando líneas...
               </div>
             )}
-            {ocData && !ocLoading && (
+            {source === 'oc' && ocData && !ocLoading && (
               <div className="bg-brand-500/10 border border-brand-100 rounded-lg px-3 py-2 flex items-center gap-3">
                 <svg className="w-4 h-4 text-brand-500 shrink-0" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
@@ -1071,8 +1215,8 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
             )}
           </div>
 
-          {/* Solo si hay OC cargada (o estamos editando un borrador) */}
-          {(ocId || isEdit) && lines.length > 0 && (
+          {/* Solo si hay OC/devolución cargada (o estamos editando un borrador) */}
+          {(ocId || returnId || isEdit) && lines.length > 0 && (
             <>
               {/* Documento */}
               <div className="bg-surface-elevated/60 border border-line-subtle rounded-xl p-4 flex flex-col gap-3">
@@ -1124,9 +1268,16 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
                         <p className="text-sm font-semibold text-ink-primary flex-1">{line.item?.label}</p>
                         {hayExceso && <span className="text-[10px] font-bold text-status-warning bg-status-warning/15 px-2 py-0.5 rounded-full">⚠ exceso</span>}
                       </div>
+                      {/* Traza de origen de la reposición (lote/recepción devueltos) */}
+                      {source === 'return' && (line.origin_lot || line.origin_receipt) && (
+                        <p className="text-[11px] text-ink-muted -mt-1">
+                          Repone{line.origin_lot ? <> el lote <span className="font-mono">{line.origin_lot}</span></> : ' material'}
+                          {line.origin_receipt ? <> recibido en <span className="font-mono">{line.origin_receipt}</span></> : null}.
+                        </p>
+                      )}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
-                          <label className="label text-status-warning">Pendiente OC</label>
+                          <label className="label text-status-warning">{source === 'return' ? 'Por reponer' : 'Pendiente OC'}</label>
                           <div className="input bg-status-warning/10 border-status-warning/40 text-status-warning font-mono text-sm cursor-default">
                             {fmtNum(pendiente, 3)} {line.unit}
                           </div>
@@ -1253,7 +1404,7 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
             {/* Un embarque puede traer material de varias OC (una completa y otra
                 parcial, o varias completas). Guarda esta OC y sigue con la próxima
                 sin recapturar almacén/fecha/folio/evidencia. */}
-            {!isEdit && (
+            {!isEdit && source === 'oc' && (
               <button type="button" onClick={() => doSubmit(true)}
                 disabled={mutation.isPending || !ocId || lines.length === 0 || !!excessWarning}
                 className="btn-secondary justify-center">
@@ -1268,7 +1419,7 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
                 {savedBanner && !isEdit ? 'Terminar' : 'Cancelar'}
               </button>
               <button type="submit"
-                disabled={mutation.isPending || (!ocId && !isEdit) || lines.length === 0 || !!excessWarning}
+                disabled={mutation.isPending || (!ocId && !returnId && !isEdit) || lines.length === 0 || !!excessWarning}
                 className="btn-primary flex-1">
                 {mutation.isPending ? <Spinner size="sm" /> : (isEdit ? 'Guardar cambios' : 'Guardar recepción')}
               </button>
@@ -1483,7 +1634,12 @@ export default function ComprasRecepciones() {
                         )}
                       </div>
                     </td>
-                    <td className="font-mono text-xs text-ink-muted">{r.purchase_order_number || '—'}</td>
+                    <td className="font-mono text-xs text-ink-muted">
+                      {r.purchase_order_number
+                        || (r.replacement_return_number
+                            ? <span className="text-status-warning" title="Reposición de devolución">↩ {r.replacement_return_number}</span>
+                            : '—')}
+                    </td>
                     <td className="text-sm text-ink-secondary">
                       {r.document_type && r.document_number
                         ? <span className="font-medium">{r.document_type} <span className="font-mono">{r.document_number}</span></span>
@@ -1498,7 +1654,13 @@ export default function ComprasRecepciones() {
                     <td className="text-sm text-ink-muted">{r.confirmed_by_name || <span className="text-ink-muted">—</span>}</td>
                     <td><Badge status={r.status} /></td>
                     <td>
-                      {r.status !== 'confirmed' ? (
+                      {r.replacement_return_id ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-status-warning/15 text-status-warning"
+                          title={`Reposición de la devolución ${r.replacement_return_number || ''} — no se factura (la factura vigente es la original)`}>
+                          <span className="w-1.5 h-1.5 rounded-full bg-status-warning shrink-0" />
+                          Reposición{r.replacement_return_number ? ` · ${r.replacement_return_number}` : ''}
+                        </span>
+                      ) : r.status !== 'confirmed' ? (
                         <span className="text-ink-muted text-xs">—</span>
                       ) : r.invoiced_at && r.invoice_type === 'remission' ? (
                         <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-status-info/15 text-status-info"

@@ -147,6 +147,7 @@ async function listReturns({ tenantId, status, partnerId, from, to, sortBy, sort
     `SELECT r.id, r.return_number, r.partner_id, bp.name AS partner_name,
             r.status, r.return_date, r.total_mxn,
             r.fiscal_resolution, r.credit_status,
+            r.replacement_expected, r.replacement_completed_at,
             rr.name AS reason_name,
             r.created_at
        FROM supplier_returns r
@@ -166,7 +167,8 @@ async function getReturn({ tenantId, returnId }) {
             orig.invoice_number AS source_invoice_number,
             cn.invoice_number   AS credit_note_number,   cn.uuid_sat AS credit_note_uuid,
             xn.invoice_number   AS cancelled_invoice_number,
-            sub.invoice_number  AS substitute_invoice_number
+            sub.invoice_number  AS substitute_invoice_number,
+            srcrec.receipt_number AS source_receipt_number
        FROM supplier_returns r
        JOIN business_partners bp ON bp.id = r.partner_id
        LEFT JOIN tenant_return_reasons rr ON rr.id = r.reason_id
@@ -174,6 +176,7 @@ async function getReturn({ tenantId, returnId }) {
        LEFT JOIN supplier_invoices cn   ON cn.id   = r.credit_note_invoice_id
        LEFT JOIN supplier_invoices xn   ON xn.id   = r.cancelled_invoice_id
        LEFT JOIN supplier_invoices sub  ON sub.id  = r.substitute_invoice_id
+       LEFT JOIN supplier_receipts srcrec ON srcrec.id = r.source_receipt_id
       WHERE r.id = $1 AND r.tenant_id = $2`,
     [returnId, tenantId]
   )
@@ -183,15 +186,106 @@ async function getReturn({ tenantId, returnId }) {
             CASE WHEN l.item_type = 'raw_material'
                  THEN (SELECT name FROM raw_materials WHERE id = l.item_id)
                  ELSE (SELECT name FROM products WHERE id = l.item_id) END AS item_name,
-            lot.lot_number, w.name AS warehouse_name
+            lot.lot_number, w.name AS warehouse_name,
+            -- Recepción original de la línea (auditoría de la cadena completa).
+            srcr.receipt_number AS source_receipt_number
        FROM supplier_return_lines l
        LEFT JOIN raw_material_lots lot ON lot.id = l.raw_material_lot_id
        LEFT JOIN warehouses w ON w.id = l.warehouse_id
+       LEFT JOIN supplier_receipt_lines srcl ON srcl.id = l.source_receipt_line_id
+       LEFT JOIN supplier_receipts srcr ON srcr.id = srcl.supplier_receipt_id
       WHERE l.return_id = $1
       ORDER BY l.created_at`,
     [returnId]
   )
-  return { ...rows[0], lines }
+  // Recepciones de REPOSICIÓN ligadas a esta devolución (mig 240).
+  const { rows: replacementReceipts } = await query(
+    `SELECT sr.id, sr.receipt_number, sr.received_date, sr.status,
+            sr.document_type, sr.document_number
+       FROM supplier_receipts sr
+      WHERE sr.tenant_id = $1 AND sr.replacement_return_id = $2
+        AND sr.status <> 'cancelled'
+      ORDER BY sr.received_date, sr.receipt_number`,
+    [tenantId, returnId]
+  )
+  return { ...rows[0], lines, replacement_receipts: replacementReceipts }
+}
+
+/**
+ * Devoluciones CONFIRMADAS que esperan reposición del proveedor y aún no están
+ * cubiertas — el "documento pendiente" contra el que Recepciones registra la
+ * entrada de la reposición. Incluye por línea lo pendiente de reponer, el costo
+ * original (para que la reposición entre al mismo costo) y la traza de origen.
+ */
+async function listPendingReplacements({ tenantId, partnerId }) {
+  const params = [tenantId]
+  let partnerFilter = ''
+  if (partnerId) { params.push(partnerId); partnerFilter = `AND r.partner_id = $${params.length}` }
+  const { rows } = await query(
+    `SELECT r.id, r.return_number, r.return_date, r.partner_id,
+            bp.name AS partner_name, rr.name AS reason_name, r.total_mxn,
+            (SELECT json_agg(json_build_object(
+                      'lineId',        l.id,
+                      'itemType',      l.item_type,
+                      'itemId',        l.item_id,
+                      'name',          CASE WHEN l.item_type = 'raw_material'
+                                            THEN (SELECT name FROM raw_materials WHERE id = l.item_id)
+                                            ELSE (SELECT name FROM products WHERE id = l.item_id) END,
+                      'unit',          l.unit,
+                      'unitCost',      l.unit_cost,
+                      'warehouseId',   l.warehouse_id,
+                      'quantity',      l.quantity,
+                      'replaced',      l.quantity_replaced,
+                      'pending',       GREATEST(0, l.quantity - l.quantity_replaced),
+                      'originalLot',   lot.lot_number,
+                      'sourceReceipt', srcr.receipt_number
+                    ) ORDER BY l.created_at)
+               FROM supplier_return_lines l
+               LEFT JOIN raw_material_lots lot ON lot.id = l.raw_material_lot_id
+               LEFT JOIN supplier_receipt_lines srcl ON srcl.id = l.source_receipt_line_id
+               LEFT JOIN supplier_receipts srcr ON srcr.id = srcl.supplier_receipt_id
+              WHERE l.return_id = r.id) AS lines
+       FROM supplier_returns r
+       JOIN business_partners bp ON bp.id = r.partner_id
+       LEFT JOIN tenant_return_reasons rr ON rr.id = r.reason_id
+      WHERE r.tenant_id = $1
+        AND r.status = 'confirmed'
+        AND r.replacement_expected = TRUE
+        AND r.replacement_completed_at IS NULL
+        ${partnerFilter}
+      ORDER BY r.return_date, r.return_number`,
+    params
+  )
+  return rows
+}
+
+/**
+ * Marca/desmarca que el proveedor repondrá el material de una devolución.
+ * Válido en borrador o confirmada mientras no esté resuelta ni cubierta.
+ */
+async function setReplacementExpected({ tenantId, returnId, expected, userId, ipAddress, userAgent }) {
+  const { rows } = await query(
+    `SELECT id, return_number, status, credit_status, replacement_completed_at
+       FROM supplier_returns WHERE id = $1 AND tenant_id = $2`,
+    [returnId, tenantId]
+  )
+  const ret = rows[0]
+  if (!ret) throw notFound('Devolución no encontrada.')
+  if (ret.status === 'cancelled') throw badReq('La devolución está cancelada.')
+  if (ret.credit_status === 'resolved') throw badReq('La devolución ya está resuelta.')
+  if (ret.replacement_completed_at) throw badReq('La reposición ya fue recibida por completo.')
+
+  await query(
+    `UPDATE supplier_returns SET replacement_expected = $1 WHERE id = $2 AND tenant_id = $3`,
+    [!!expected, returnId, tenantId]
+  )
+  await audit({
+    tenantId, userId, action: 'supplier_return.replacement_expected',
+    resource: 'supplier_returns', resourceId: returnId,
+    payload: { returnNumber: ret.return_number, expected: !!expected },
+    ipAddress, userAgent,
+  })
+  return getReturn({ tenantId, returnId })
 }
 
 /**
@@ -265,7 +359,7 @@ async function listCandidateReceipts({ tenantId, partnerId, itemType, itemId, li
 // ─── Crear borrador ──────────────────────────────────────────────────────────
 async function createReturn({
   tenantId, partnerId, reasonId, sourceReceiptId, supplierInvoiceId,
-  returnDate, notes, lines, userId, ipAddress, userAgent,
+  returnDate, notes, lines, replacementExpected = false, userId, ipAddress, userAgent,
 }) {
   if (!partnerId) throw badReq('El proveedor es requerido.')
   if (!Array.isArray(lines) || lines.length === 0) throw badReq('Agrega al menos una línea a devolver.')
@@ -354,11 +448,13 @@ async function createReturn({
     const { rows: hdr } = await client.query(
       `INSERT INTO supplier_returns
          (tenant_id, return_number, partner_id, reason_id, source_receipt_id,
-          supplier_invoice_id, status, return_date, notes, total_mxn, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,'draft',COALESCE($7,CURRENT_DATE),$8,$9,$10)
+          supplier_invoice_id, status, return_date, notes, total_mxn,
+          replacement_expected, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,'draft',COALESCE($7,CURRENT_DATE),$8,$9,$10,$11)
        RETURNING *`,
       [tenantId, returnNumber, partnerId, reasonId || null, sourceReceiptId || null,
-       supplierInvoiceId || null, returnDate || null, notes || null, total.toFixed(2), userId]
+       supplierInvoiceId || null, returnDate || null, notes || null, total.toFixed(2),
+       !!replacementExpected, userId]
     )
     const ret = hdr[0]
 
@@ -450,6 +546,19 @@ async function cancelReturn({ tenantId, returnId, userId, ipAddress, userAgent }
     const ret = hdr[0]
     if (!ret) throw notFound('Devolución no encontrada.')
     if (ret.status === 'cancelled') throw badReq('La devolución ya está cancelada.')
+
+    // Si ya se recibió (total o parcialmente) la reposición, cancelar la
+    // devolución duplicaría inventario (la reversa re-entra lo devuelto y la
+    // reposición ya entró). Primero cancela/ajusta las recepciones ligadas.
+    const { rows: repl } = await client.query(
+      `SELECT receipt_number FROM supplier_receipts
+        WHERE tenant_id = $1 AND replacement_return_id = $2 AND status <> 'cancelled'
+        LIMIT 1`,
+      [tenantId, returnId]
+    )
+    if (repl[0]) {
+      throw badReq(`No se puede cancelar: ya existe la recepción de reposición ${repl[0].receipt_number} ligada a esta devolución.`)
+    }
 
     if (ret.status === 'confirmed') {
       // Revertir inventario: re-entra el stock y re-incrementa el lote.
@@ -770,4 +879,5 @@ module.exports = {
   listReturnableLots, listCandidateReceipts,
   listReturns, getReturn, createReturn, confirmReturn, cancelReturn,
   resolveFiscal,
+  listPendingReplacements, setReplacementExpected,
 }

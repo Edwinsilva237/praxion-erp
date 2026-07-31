@@ -137,4 +137,8 @@ export const purchasesApi = {
   cancelReturn:  (id) => api.post(`${B}/returns/${id}/cancel`).then(r => r.data),
   // Fase 2: resolución fiscal del CFDI (nota de crédito / cancelación / sustitución).
   resolveReturn: (id, body) => api.post(`${B}/returns/${id}/resolve`, body).then(r => r.data),
+  // Reposición en especie: devoluciones que esperan material del proveedor
+  // (selector del modal de Recepciones) + marcar/desmarcar la espera.
+  listPendingReplacements: (params) => api.get(`${B}/returns/pending-replacement`, { params }).then(r => r.data),
+  setReplacementExpected:  (id, body) => api.post(`${B}/returns/${id}/replacement-expected`, body).then(r => r.data),
 }

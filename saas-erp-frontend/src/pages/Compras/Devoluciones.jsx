@@ -28,6 +28,7 @@ const FISCAL = {
   credit_note:  'Nota de crédito',
   cancellation: 'Cancelación de CFDI',
   substitution: 'Sustitución de CFDI',
+  replacement:  'Reposición en especie',
 }
 const money = (n) => `$${Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
@@ -107,7 +108,11 @@ export default function Devoluciones() {
                   <td className="text-right font-mono text-sm">{money(r.total_mxn)}</td>
                   <td><Badge {...(STATUS[r.status] || STATUS.draft)} /></td>
                   <td>
-                    <Badge {...(CREDIT[r.credit_status] || CREDIT.pending)} />
+                    {r.replacement_expected && !r.replacement_completed_at && r.status === 'confirmed' ? (
+                      <Badge variant="amber" label="↩ Reposición pendiente" />
+                    ) : (
+                      <Badge {...(CREDIT[r.credit_status] || CREDIT.pending)} />
+                    )}
                     {r.credit_status === 'resolved' && r.fiscal_resolution !== 'none' && (
                       <div className="text-[11px] text-ink-muted mt-0.5">{FISCAL[r.fiscal_resolution]}</div>
                     )}
@@ -141,6 +146,7 @@ function NewReturnModal({ onClose, onSaved }) {
   const [partnerId, setPartnerId] = useState('')
   const [reasonId, setReasonId] = useState('')
   const [notes, setNotes] = useState('')
+  const [replacementExpected, setReplacementExpected] = useState(false)
   const [lines, setLines] = useState([])  // { lotId, label, material, warehouseId, itemId, itemType, unitCost, remaining, quantity, receiptLineId }
   const [item, setItem] = useState(null)  // filtro opcional { id, label, itemType }
   const [sourceReceiptId, setSourceReceiptId] = useState(null)
@@ -214,6 +220,7 @@ function NewReturnModal({ onClose, onSaved }) {
   const mut = useMutation({
     mutationFn: () => purchasesApi.createReturn({
       partnerId, reasonId: reasonId || null, notes: notes || null,
+      replacementExpected,
       sourceReceiptId: sourceReceiptId || null,
       lines: lines.filter(l => parseFloat(l.quantity) > 0).map(l => ({
         itemType: l.itemType || 'raw_material', itemId: l.itemId, warehouseId: l.warehouseId,
@@ -355,6 +362,21 @@ function NewReturnModal({ onClose, onSaved }) {
             </div>
           )}
 
+          {/* Reposición en especie: el proveedor repondrá el material en lugar
+              de nota de crédito. La reposición se recibe en Recepciones
+              eligiendo esta devolución. */}
+          <label className="flex items-start gap-2 border border-line-subtle rounded-lg px-3 py-2.5 cursor-pointer hover:bg-surface-elevated/40">
+            <input type="checkbox" className="mt-0.5 accent-brand-600"
+              checked={replacementExpected} onChange={e => setReplacementExpected(e.target.checked)} />
+            <span className="text-sm">
+              <span className="font-medium text-ink-primary">↩ El proveedor repondrá el material</span>
+              <span className="block text-xs text-ink-muted mt-0.5">
+                Reposición en especie: sin nota de crédito, la factura original sigue vigente. La
+                devolución quedará pendiente hasta recibir la reposición en <strong>Recepciones</strong>.
+              </span>
+            </span>
+          </label>
+
           <div>
             <label className="label">Notas (opcional)</label>
             <textarea className="input min-h-16 resize-y" value={notes} onChange={e => setNotes(e.target.value)}
@@ -391,6 +413,14 @@ function ReturnDetailModal({ returnId, onClose, onChanged }) {
   const cancelMut = useMutation({
     mutationFn: () => purchasesApi.cancelReturn(returnId),
     onSuccess: refresh, onError: (e) => setError(e.response?.data?.error || 'Error'),
+  })
+  const replacementMut = useMutation({
+    mutationFn: (expected) => purchasesApi.setReplacementExpected(returnId, { expected }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['returns-pending-replacement'] })
+      setError(null); refresh()
+    },
+    onError: (e) => setError(e.response?.data?.error || 'Error'),
   })
 
   return createPortal(
@@ -434,16 +464,43 @@ function ReturnDetailModal({ returnId, onClose, onChanged }) {
               </div>
               <div className="text-right text-sm font-semibold text-ink-primary">Total: {money(ret.total_mxn)}</div>
 
+              {/* Reposición en especie — avance y recepciones ligadas */}
+              {(ret.replacement_expected || (ret.replacement_receipts || []).length > 0) && (
+                <ReplacementSection ret={ret} />
+              )}
+
               {/* Resolución fiscal (Fase 2) */}
               {ret.credit_status === 'resolved' ? (
                 <FiscalResolutionSummary ret={ret} />
               ) : ret.status === 'confirmed' ? (
-                <FiscalResolutionForm ret={ret} onResolved={() => { setError(null); refresh() }} onError={setError} />
+                <>
+                  {/* El proveedor repondrá el material → no hay NC/cancelación que
+                      registrar; la devolución se resuelve sola al recibir la reposición. */}
+                  <Can do="purchases:return">
+                    <label className="flex items-start gap-2 border border-line-subtle rounded-lg px-3 py-2.5 cursor-pointer hover:bg-surface-elevated/40">
+                      <input type="checkbox" className="mt-0.5 accent-brand-600"
+                        checked={!!ret.replacement_expected}
+                        disabled={replacementMut.isPending}
+                        onChange={e => replacementMut.mutate(e.target.checked)} />
+                      <span className="text-sm">
+                        <span className="font-medium text-ink-primary">↩ El proveedor repondrá el material</span>
+                        <span className="block text-xs text-ink-muted mt-0.5">
+                          La factura original sigue vigente (sin nota de crédito). Recibe la reposición en
+                          <b> Recepciones → Nueva recepción → &quot;Reposición de devolución&quot;</b>; al
+                          completarse, esta devolución se resuelve sola.
+                        </span>
+                      </span>
+                    </label>
+                  </Can>
+                  {!ret.replacement_expected && (
+                    <FiscalResolutionForm ret={ret} onResolved={() => { setError(null); refresh() }} onError={setError} />
+                  )}
+                </>
               ) : (
                 <div className="text-xs text-ink-muted bg-surface-elevated/40 rounded-lg px-3 py-2">
                   Crédito fiscal: <b>{(CREDIT[ret.credit_status] || CREDIT.pending).label}</b>. Confirma la
                   devolución para registrar la resolución fiscal del CFDI (nota de crédito, cancelación o
-                  sustitución que emite el proveedor).
+                  sustitución que emite el proveedor) — o marca que el proveedor repondrá el material.
                 </div>
               )}
             </>
@@ -475,6 +532,49 @@ function ReturnDetailModal({ returnId, onClose, onChanged }) {
   )
 }
 
+// ── Reposición en especie: avance por línea + recepciones ligadas ─────────────
+function ReplacementSection({ ret }) {
+  const receipts = ret.replacement_receipts || []
+  const complete = !!ret.replacement_completed_at
+  return (
+    <div className={`rounded-lg border px-3 py-2.5 text-sm flex flex-col gap-2 ${
+      complete ? 'border-status-success/30 bg-status-success/5' : 'border-status-warning/40 bg-status-warning/10'}`}>
+      <div className="flex items-center gap-2">
+        <span className="font-semibold text-ink-primary">↩ Reposición en especie</span>
+        {complete
+          ? <Badge variant="green" label="Recibida por completo" />
+          : <Badge variant="amber" label="Pendiente de recibir" />}
+      </div>
+      <div className="flex flex-col gap-1">
+        {(ret.lines || []).map(l => {
+          const qty = parseFloat(l.quantity)
+          const rep = parseFloat(l.quantity_replaced || 0)
+          return (
+            <p key={l.id} className="text-xs text-ink-secondary">
+              • {l.item_name}: repuesto <b>{rep}</b> de <b>{qty}</b> {l.unit}
+              {rep >= qty - 1e-4 ? ' ✓' : ` (faltan ${Math.max(0, qty - rep).toFixed(2)})`}
+            </p>
+          )
+        })}
+      </div>
+      {receipts.length > 0 && (
+        <div className="text-xs text-ink-secondary">
+          Recibida en: {receipts.map(r => (
+            <span key={r.id} className="font-mono mr-2">
+              {r.receipt_number}{r.document_number ? ` (${r.document_type || 'doc'} ${r.document_number})` : ''}
+            </span>
+          ))}
+        </div>
+      )}
+      {!complete && (
+        <p className="text-[11px] text-ink-muted">
+          Recíbela en <b>Compras → Recepciones → Nueva recepción → &quot;Reposición de devolución&quot;</b>.
+        </p>
+      )}
+    </div>
+  )
+}
+
 // ── Resumen de resolución fiscal (solo lectura, cuando ya está resuelta) ──────
 function FiscalResolutionSummary({ ret }) {
   return (
@@ -496,6 +596,13 @@ function FiscalResolutionSummary({ ret }) {
       {ret.fiscal_resolution === 'substitution' && (
         <div className="text-xs text-ink-secondary">
           El CFDI <b>{ret.cancelled_invoice_number}</b> se sustituyó por <b>{ret.substitute_invoice_number}</b>.
+        </div>
+      )}
+      {ret.fiscal_resolution === 'replacement' && (
+        <div className="text-xs text-ink-secondary">
+          El proveedor repuso el material en especie — la factura original
+          {ret.source_invoice_number ? <> (<b>{ret.source_invoice_number}</b>)</> : null} sigue vigente y la
+          cuenta por pagar no cambió.
         </div>
       )}
     </div>
