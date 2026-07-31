@@ -134,7 +134,7 @@ async function listCXC({ tenantId, status, partnerId, from, to, search, sortBy, 
   params.push(limit, offset)
 
   const { rows } = await query(
-    `SELECT ar.id, ar.document_type, ar.document_number,
+    `SELECT ar.id, ar.document_type, ar.document_number, ar.document_id,
             ar.issue_date, ar.due_date, ar.status,
             ar.amount_total, ar.amount_paid, ar.amount_pending,
             bp.name AS partner_name, bp.rfc AS partner_rfc,

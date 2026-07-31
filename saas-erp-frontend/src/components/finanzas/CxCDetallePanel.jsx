@@ -9,6 +9,7 @@ import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob } from '@/utils/downloadBlob'
+import InvoiceFileButtons from '@/components/facturacion/InvoiceFileButtons'
 import useAuthStore from '@/store/useAuthStore'
 import clsx from 'clsx'
 
@@ -49,6 +50,9 @@ function DocumentoOrigen({ ar }) {
         <div className="flex items-center justify-between flex-wrap gap-2">
           <p className="text-xs font-semibold text-status-info uppercase tracking-wide">Factura origen</p>
           <div className="flex items-center gap-2">
+            {isStamped && (
+              <InvoiceFileButtons invoiceId={src.id} documentNumber={src.document_number} />
+            )}
             {isStamped && <Badge status="stamped" />}
             <span className={clsx(
               'text-[10px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wide',

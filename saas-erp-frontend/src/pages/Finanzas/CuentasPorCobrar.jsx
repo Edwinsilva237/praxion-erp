@@ -12,6 +12,7 @@ import Can from '@/components/auth/Can'
 import { PagoModal } from '@/components/finanzas/PagoModal'
 import { IdentificarPagoModal } from '@/components/finanzas/IdentificarPagoModal'
 import { CxCDetallePanel } from '@/components/finanzas/CxCDetallePanel'
+import InvoiceFileButtons from '@/components/facturacion/InvoiceFileButtons'
 import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
@@ -243,6 +244,7 @@ export default function CuentasPorCobrar() {
                   <th>Complemento</th>
                   <SortableHeader sortKey="total"       sortBy={sortBy} sortDir={sortDir} onSort={onSort} align="right">Total</SortableHeader>
                   <SortableHeader sortKey="pendiente"   sortBy={sortBy} sortDir={sortDir} onSort={onSort} align="right">Pendiente</SortableHeader>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -295,6 +297,11 @@ export default function CuentasPorCobrar() {
                       parseFloat(d.amount_pending) <= 0.01 ? 'text-status-success' :
                         (d.is_overdue ? 'text-status-danger' : 'text-status-warning'))}>
                       {fmtMXN(d.amount_pending)}
+                    </td>
+                    <td className="text-right">
+                      {d.document_type === 'invoice' && d.invoice_status === 'stamped' && d.document_id && (
+                        <InvoiceFileButtons invoiceId={d.document_id} documentNumber={d.document_number} />
+                      )}
                     </td>
                   </tr>
                   )

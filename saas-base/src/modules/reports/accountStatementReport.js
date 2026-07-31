@@ -32,6 +32,9 @@ function getConfig(direction) {
         LEFT JOIN invoices       inv ON inv.id = d.document_id AND d.document_type = 'invoice'
         LEFT JOIN delivery_notes dn  ON dn.id  = d.document_id AND d.document_type = 'remission'
       `,
+      // Status de la factura origen: habilita descargar PDF/XML del CFDI
+      // (timbradas e importadas quedan en 'stamped').
+      invoiceStatusSelect: `inv.status`,
     }
   }
   if (direction === 'out') {
@@ -45,6 +48,7 @@ function getConfig(direction) {
       // CXP no referencia una OC de cliente.
       poSelect:         `NULL::varchar`,
       poJoins:          ``,
+      invoiceStatusSelect: `NULL::varchar`,
     }
   }
   const err = new Error(`direction debe ser 'in' u 'out' (recibió '${direction}')`)
@@ -164,12 +168,13 @@ async function getOpenDocuments(tenantId, cfg, filters) {
   }
 
   const { rows } = await query(`
-    SELECT d.id, d.document_type, d.document_number,
+    SELECT d.id, d.document_type, d.document_number, d.document_id,
            d.partner_id, bp.name AS partner_name, bp.rfc AS partner_rfc,
            d.issue_date, d.due_date,
            d.amount_total, d.amount_paid, d.amount_pending,
            d.status AS doc_status,
            ${cfg.poSelect} AS po_number,
+           ${cfg.invoiceStatusSelect} AS invoice_status,
            ${STATUS_CASE} AS aging_status,
            (CASE
              WHEN d.due_date IS NULL THEN NULL
@@ -194,6 +199,8 @@ async function getOpenDocuments(tenantId, cfg, filters) {
     id:              r.id,
     document_type:   r.document_type,
     document_number: r.document_number,
+    document_id:     r.document_id,
+    invoice_status:  r.invoice_status || null,
     partner_id:      r.partner_id,
     partner_name:    r.partner_name,
     partner_rfc:     r.partner_rfc,

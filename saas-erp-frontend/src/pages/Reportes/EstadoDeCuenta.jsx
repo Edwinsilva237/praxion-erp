@@ -8,6 +8,7 @@ import Autocomplete from '@/components/ui/Autocomplete'
 import Spinner from '@/components/ui/Spinner'
 import { PagoModal } from '@/components/finanzas/PagoModal'
 import { PagoProveedorModal } from '@/components/finanzas/PagoProveedorModal'
+import InvoiceFileButtons from '@/components/facturacion/InvoiceFileButtons'
 import clsx from 'clsx'
 
 // Montos de dinero: SIEMPRE con 2 decimales (los saldos de CxC/CxP deben cuadrar al centavo).
@@ -332,11 +333,17 @@ function DocumentsTable({ data, labels, direction, onOpenPartner, onPay }) {
               <td className="text-right font-mono tabular-nums text-status-success">{fmtMXN(d.amount_paid)}</td>
               <td className="text-right font-mono tabular-nums font-semibold">{fmtMXN(d.amount_pending)}</td>
               <td onClick={(e) => e.stopPropagation()} className="text-right">
-                {d.amount_pending > 0 && (
-                  <button onClick={() => onPay(d)} className="btn-secondary btn-sm whitespace-nowrap">
-                    Registrar pago
-                  </button>
-                )}
+                <div className="inline-flex items-center gap-1 whitespace-nowrap">
+                  {direction === 'cuentas-por-cobrar' && d.document_type === 'invoice'
+                    && d.invoice_status === 'stamped' && d.document_id && (
+                    <InvoiceFileButtons invoiceId={d.document_id} documentNumber={d.document_number} />
+                  )}
+                  {d.amount_pending > 0 && (
+                    <button onClick={() => onPay(d)} className="btn-secondary btn-sm whitespace-nowrap">
+                      Registrar pago
+                    </button>
+                  )}
+                </div>
               </td>
             </tr>
           )
@@ -468,6 +475,12 @@ function StatementDocumentRow({ d, direction }) {
             <span className="font-mono font-semibold text-brand-300">{d.document_number}</span>
           </span>
           <span className="ml-2 text-[10px] text-ink-muted">{DOC_TYPE_LABEL[d.document_type] || d.document_type}</span>
+          {direction === 'cuentas-por-cobrar' && d.document_type === 'invoice'
+            && d.invoice_status === 'stamped' && d.document_id && (
+            <span className="ml-2">
+              <InvoiceFileButtons invoiceId={d.document_id} documentNumber={d.document_number} />
+            </span>
+          )}
         </td>
         <td className="text-xs">{fmtDate(d.issue_date)}</td>
         <td className="text-xs">{fmtDate(d.due_date)}{d.days_overdue > 0 && <span className="text-[10px] text-status-danger ml-1">+{d.days_overdue}d</span>}</td>
