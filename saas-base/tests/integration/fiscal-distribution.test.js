@@ -3,21 +3,24 @@
 /**
  * Distribución de documentos fiscales (CSF + Opinión 32-D) a clientes.
  *
- * Mockeamos enqueueEmail para validar el flujo sin enviar correo real:
+ * Mockeamos sendEmail para validar el flujo sin enviar correo real:
  *   - subir/consultar docs del tenant (attachments a nivel tenant)
  *   - preview de destinatarios (clientes activos con contactos con email)
  *   - envío: un correo por cliente + bitácora (fiscal_doc_sends/_recipients)
  *   - validaciones (sin docs, sin clientes)
+ *
+ * En test pg-boss está desactivado → processSend corre INLINE (fallback), así
+ * que al responder el endpoint la bitácora ya quedó en 'sent'/'failed'.
  */
 
-jest.mock('../../src/queues/emailQueue', () => ({
-  enqueueEmail: jest.fn().mockResolvedValue({ queued: true, jobId: 'x' }),
-  emailQueue: null,
+jest.mock('../../src/modules/email/emailService', () => ({
+  sendEmail: jest.fn().mockResolvedValue({ messageId: 'test-msg' }),
+  verifyConnection: jest.fn().mockResolvedValue(true),
 }))
 
 const { createTenant, loginAs, authedClient, cleanupTestTenants } = require('../helpers/factory')
 const { pool, query, withBypass } = require('../../src/db')
-const { enqueueEmail } = require('../../src/queues/emailQueue')
+const { sendEmail } = require('../../src/modules/email/emailService')
 const storage = require('../../src/utils/storage')
 
 const PDF = Buffer.from('%PDF-1.4\n test doc fiscal\n%%EOF', 'utf8')
@@ -52,7 +55,7 @@ describe('Distribución de documentos fiscales a clientes', () => {
     await createCustomer(client, { name: 'Proveedor X', type: 'supplier', emails: ['prov@test.local'] })
   })
 
-  beforeEach(() => enqueueEmail.mockClear())
+  beforeEach(() => sendEmail.mockClear())
 
   test('sin documentos cargados, enviar da 400', async () => {
     const res = await client.post('/api/fiscal-distribution/send', {}).expect(400)
@@ -97,10 +100,9 @@ describe('Distribución de documentos fiscales a clientes', () => {
     expect(res.body.failedCount).toBe(0)
     expect(res.body.status).toBe('completed')
 
-    // Un enqueue por CLIENTE (no por correo).
-    expect(enqueueEmail).toHaveBeenCalledTimes(2)
-    const firstCall = enqueueEmail.mock.calls[0][0]
-    expect(firstCall.tenantId).toBe(tenantInfo.tenant.id)
+    // Un correo por CLIENTE (no por dirección).
+    expect(sendEmail).toHaveBeenCalledTimes(2)
+    const firstCall = sendEmail.mock.calls[0][0]
     expect(firstCall.attachments).toHaveLength(1)       // solo CSF cargada
     expect(Array.isArray(firstCall.to)).toBe(true)
 
@@ -113,7 +115,8 @@ describe('Distribución de documentos fiscales a clientes', () => {
     expect(detail.body.recipients).toHaveLength(3)
     const emails = detail.body.recipients.map(r => r.email).sort()
     expect(emails).toEqual(['a1@test.local', 'a2@test.local', 'b1@test.local'])
-    detail.body.recipients.forEach(r => expect(r.status).toBe('queued'))
+    // Sin pg-boss el envío corre inline → ya quedaron 'sent'.
+    detail.body.recipients.forEach(r => expect(r.status).toBe('sent'))
   })
 
   test('enviar acotado a un cliente por partnerIds', async () => {
@@ -125,7 +128,7 @@ describe('Distribución de documentos fiscales a clientes', () => {
     }).expect(200)
     expect(res.body.clientCount).toBe(1)
     expect(res.body.recipientCount).toBe(1)
-    expect(enqueueEmail).toHaveBeenCalledTimes(1)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
   })
 
   test('correos MANUALES combinados con clientes: asunto propio + bitácora con partner nulo', async () => {
@@ -140,9 +143,9 @@ describe('Distribución de documentos fiscales a clientes', () => {
     expect(res.body.recipientCount).toBe(5)       // 3 de clientes + 2 manuales
     expect(res.body.failedCount).toBe(0)
 
-    // enqueue: 2 clientes + 2 manuales = 4; todos con el asunto capturado.
-    expect(enqueueEmail).toHaveBeenCalledTimes(4)
-    enqueueEmail.mock.calls.forEach(([payload]) =>
+    // 2 clientes + 2 manuales = 4 correos; todos con el asunto capturado.
+    expect(sendEmail).toHaveBeenCalledTimes(4)
+    sendEmail.mock.calls.forEach(([payload]) =>
       expect(payload.subject).toBe('Mis documentos fiscales 2026'))
 
     // Bitácora: los manuales van con partner_id null + partner_name '(Correo manual)'.
@@ -163,8 +166,8 @@ describe('Distribución de documentos fiscales a clientes', () => {
     expect(res.body.clientCount).toBe(0)
     expect(res.body.manualCount).toBe(1)
     expect(res.body.recipientCount).toBe(1)
-    expect(enqueueEmail).toHaveBeenCalledTimes(1) // 1, NO los 3 correos de clientes
-    expect(enqueueEmail.mock.calls[0][0].to).toBe('solo@ext.local')
+    expect(sendEmail).toHaveBeenCalledTimes(1) // 1, NO los 3 correos de clientes
+    expect(sendEmail.mock.calls[0][0].to).toBe('solo@ext.local')
   })
 
   test('sin clientes ni manuales válidos → 400', async () => {
@@ -190,7 +193,7 @@ describe('Distribución de documentos fiscales a clientes', () => {
       manualEmails: 'destino@ext.local',
     }).expect(200)
 
-    const subject = enqueueEmail.mock.calls[0][0].subject
+    const subject = sendEmail.mock.calls[0][0].subject
     expect(subject).toBe('Documentos fiscales — RAZON SOCIAL PRUEBA SA DE CV')
   })
 
@@ -210,7 +213,7 @@ describe('Distribución de documentos fiscales a clientes', () => {
       partnerIds: [], manualEmails: 'brand@ext.local',
     }).expect(200)
 
-    const payload = enqueueEmail.mock.calls[0][0]
+    const payload = sendEmail.mock.calls[0][0]
     expect(payload.html).toContain('Powered by')     // pie de Praxion (witness mark)
     expect(payload.html).toContain('#123456')         // color de marca en el header
     expect(payload.html).toContain('cid:brandlogo')   // logo inline referenciado

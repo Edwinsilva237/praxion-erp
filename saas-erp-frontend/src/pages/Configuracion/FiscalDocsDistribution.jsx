@@ -11,6 +11,14 @@ const DOC_META = {
   opinion: { label: 'Opinión de Cumplimiento (art. 32-D)',  icon: '📑' },
 }
 
+// Estado del batch. 'queued' = el envío corre en segundo plano (worker).
+const SEND_STATUS = {
+  queued:    { label: 'Enviando',   cls: 'text-status-info' },
+  completed: { label: 'Enviado',    cls: 'text-status-success' },
+  partial:   { label: 'Con fallos', cls: 'text-status-warning' },
+}
+const isInProgress = (s) => s?.status === 'queued'
+
 function openBlob(blob) {
   const url = URL.createObjectURL(blob)
   window.open(url, '_blank', 'noopener')
@@ -169,15 +177,20 @@ function SendModal({ docs, onClose, onSent }) {
             <div className="bg-status-success/10 border border-status-success/40 rounded-lg p-4 text-center">
               <p className="text-2xl">✓</p>
               <p className="text-sm font-semibold text-status-success mt-1">
-                Enviado · {result.recipientCount} correo(s)
+                {result.queued ? 'Enviando en segundo plano' : 'Enviado'} · {result.recipientCount} correo(s)
               </p>
               <p className="text-xs text-ink-muted mt-0.5">
                 {result.clientCount} cliente(s)
                 {result.manualCount > 0 && ` · ${result.manualCount} manual(es)`}
               </p>
+              {result.queued && (
+                <p className="text-[11px] text-ink-muted mt-1">
+                  Puedes cerrar esta ventana. El progreso aparece en el historial.
+                </p>
+              )}
               {result.failedCount > 0 && (
                 <p className="text-xs text-status-warning mt-1">
-                  {result.failedCount} correo(s) fallaron al encolar. Revisa el historial.
+                  {result.failedCount} correo(s) fallaron. Revisa el historial.
                 </p>
               )}
             </div>
@@ -279,12 +292,17 @@ function SendDetailModal({ sendId, onClose }) {
   const { data, isLoading } = useQuery({
     queryKey: ['fiscal-send', sendId],
     queryFn: () => fiscalDistributionApi.getSend(sendId),
+    // Refrescar mientras el envío esté en curso (progreso vivo).
+    refetchInterval: (q) => isInProgress(q.state.data) ? 2500 : false,
   })
   const STATUS = {
-    queued: { label: 'Encolado', cls: 'text-status-info' },
+    queued: { label: 'En cola',  cls: 'text-status-info' },
     sent:   { label: 'Enviado',  cls: 'text-status-success' },
     failed: { label: 'Falló',    cls: 'text-status-danger' },
   }
+  const sentCount = (data?.recipients || []).filter(r => r.status === 'sent').length
+  const pct = data?.recipient_count
+    ? Math.round((sentCount / data.recipient_count) * 100) : 0
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
       <div className="card w-full max-w-lg p-6 flex flex-col gap-3 max-h-[90vh] overflow-y-auto">
@@ -292,7 +310,18 @@ function SendDetailModal({ sendId, onClose }) {
           <h2 className="text-base font-semibold text-ink-primary">Destinatarios del envío</h2>
           <button onClick={onClose} className="text-ink-muted hover:text-ink-primary">✕</button>
         </div>
-        {isLoading ? <div className="flex justify-center py-8"><Spinner /></div> : (
+        {isLoading ? <div className="flex justify-center py-8"><Spinner /></div> : (<>
+          {isInProgress(data) && (
+            <div>
+              <div className="flex items-center justify-between text-[11px] text-ink-muted mb-1">
+                <span>Enviando en segundo plano…</span>
+                <span>{sentCount}/{data.recipient_count}</span>
+              </div>
+              <div className="h-1.5 bg-surface-elevated rounded-full overflow-hidden">
+                <div className="h-full bg-brand-500 transition-all" style={{ width: `${pct}%` }} />
+              </div>
+            </div>
+          )}
           <div className="border border-line-subtle rounded-lg divide-y divide-line-subtle max-h-[60vh] overflow-y-auto">
             {(data?.recipients || []).map(r => (
               <div key={r.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
@@ -306,7 +335,7 @@ function SendDetailModal({ sendId, onClose }) {
               </div>
             ))}
           </div>
-        )}
+        </>)}
         <button onClick={onClose} className="btn-secondary w-full">Cerrar</button>
       </div>
     </div>,
@@ -327,6 +356,8 @@ export default function FiscalDocsDistribution() {
   const { data: sends = [] } = useQuery({
     queryKey: ['fiscal-sends'],
     queryFn: () => fiscalDistributionApi.listSends(),
+    // Mientras algún envío esté en curso, refrescar para ver el avance.
+    refetchInterval: (q) => (q.state.data || []).some(isInProgress) ? 2500 : false,
   })
 
   const refreshDocs = () => qc.invalidateQueries({ queryKey: ['fiscal-docs'] })
@@ -367,21 +398,29 @@ export default function FiscalDocsDistribution() {
             <div>
               <p className="text-xs font-semibold text-ink-secondary mb-1.5">Historial de envíos</p>
               <div className="border border-line-subtle rounded-lg divide-y divide-line-subtle">
-                {sends.slice(0, 10).map(s => (
-                  <button key={s.id} onClick={() => setDetailId(s.id)}
-                    className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-left hover:bg-surface-elevated/50">
-                    <div className="min-w-0">
-                      <p className="text-ink-primary truncate">
-                        {s.client_count} cliente(s) · {s.recipient_count} correo(s)
-                        {s.status === 'partial' && <span className="text-status-warning"> · con fallos</span>}
-                      </p>
-                      <p className="text-[11px] text-ink-muted">
-                        {fmtDate(s.created_at)}{s.sent_by_name ? ` · ${s.sent_by_name}` : ''}
-                      </p>
-                    </div>
-                    <span className="text-[11px] text-brand-300 shrink-0">Ver ›</span>
-                  </button>
-                ))}
+                {sends.slice(0, 10).map(s => {
+                  const st = SEND_STATUS[s.status] || {}
+                  return (
+                    <button key={s.id} onClick={() => setDetailId(s.id)}
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-left hover:bg-surface-elevated/50">
+                      <div className="min-w-0">
+                        <p className="text-ink-primary truncate">
+                          {s.client_count} cliente(s) · {s.recipient_count} correo(s)
+                        </p>
+                        <p className="text-[11px] text-ink-muted">
+                          {fmtDate(s.created_at)}{s.sent_by_name ? ` · ${s.sent_by_name}` : ''}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {isInProgress(s)
+                          ? <span className="text-[11px] text-status-info">{s.sent_count || 0}/{s.recipient_count}</span>
+                          : Number(s.failed_count) > 0 && <span className="text-[11px] text-status-warning">{s.failed_count} falló</span>}
+                        {st.label && <span className={clsx('text-[11px]', st.cls)}>{st.label}</span>}
+                        <span className="text-[11px] text-brand-300">Ver ›</span>
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
             </div>
           )}

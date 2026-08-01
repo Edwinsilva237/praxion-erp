@@ -24,6 +24,11 @@ const logger = require('./config/logger')
 // el worker hace el envío individual, actualiza progreso y es reanudable.
 require('./modules/communications/communicationsService').registerDispatchWorker()
 
+// Mismo patrón para la distribución de docs fiscales (CSF + 32-D): el endpoint
+// POST /fiscal-distribution/send encola `fiscal-docs.dispatch` y responde al
+// instante; el worker envía uno por uno y actualiza la bitácora.
+require('./modules/fiscal-distribution/fiscalDistributionService').registerDispatchWorker()
+
 // ── 1) Auto-activación de turnos programados ────────────────────────────────
 // Antes: setInterval cada 60s en app.js. Pg-boss tiene resolución mínima de
 // 1 minuto, lo cual es equivalente — y sobra de sobra para activar turnos
