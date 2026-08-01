@@ -10,6 +10,7 @@ import ItemDetailPanel        from '@/components/inventario/ItemDetailPanel'
 import RecomputeStockModal    from '@/components/inventario/RecomputeStockModal'
 import EditCostModal          from '@/components/inventario/EditCostModal'
 import ReleaseBlockedModal    from '@/components/inventario/ReleaseBlockedModal'
+import TransferStockModal     from '@/components/inventario/TransferStockModal'
 import KardexItemFilter       from '@/components/inventario/KardexItemFilter'
 import MovementDetailModal     from '@/components/inventario/MovementDetailModal'
 import { MOVEMENT_LABELS, MOVEMENT_BADGE, REFERENCE_LABELS } from '@/config/inventoryLabels'
@@ -145,6 +146,7 @@ export default function Inventario() {
   const [showRecompute, setShowRecompute] = useState(false)
   const [editCostRow, setEditCostRow] = useState(null)
   const [releaseRow, setReleaseRow] = useState(null)
+  const [transferRow, setTransferRow] = useState(null)
   const [selectedAdjustId, setSelectedAdjustId] = useState(null)
   const [selectedStockItem, setSelectedStockItem] = useState(null)  // {itemType, itemId, warehouseId}
   const [createdMsg, setCreatedMsg] = useState(null)
@@ -593,6 +595,15 @@ export default function Inventario() {
                           </span>
                         </Can>
                       )}
+                      {row.status === 'available' && parseFloat(row.quantity) > 0 && row.warehouse_id && (
+                        <Can do="inventory:adjust">
+                          <span role="button" tabIndex={0}
+                            onClick={e => { e.stopPropagation(); setTransferRow(row) }}
+                            className="inline-block mt-1 text-[11px] text-brand-300 underline decoration-dotted cursor-pointer">
+                            ⇄ Traspasar
+                          </span>
+                        </Can>
+                      )}
                     </div>
                   </div>
                 </button>
@@ -653,7 +664,18 @@ export default function Inventario() {
                         label={row.item_type === 'raw_material' ? 'MP' : 'PT'}
                       />
                     </td>
-                    <td className="text-ink-secondary">{row.warehouse_name || 'Sin existencia'}</td>
+                    <td className="text-ink-secondary" onClick={e => row.warehouse_id && e.stopPropagation()}>
+                      {row.warehouse_name || 'Sin existencia'}
+                      {row.status === 'available' && parseFloat(row.quantity) > 0 && row.warehouse_id && (
+                        <Can do="inventory:adjust">
+                          <button onClick={() => setTransferRow(row)}
+                            className="ml-1.5 align-middle text-[11px] text-brand-300 hover:text-brand-200"
+                            title="Traspasar a otro almacén">
+                            ⇄
+                          </button>
+                        </Can>
+                      )}
+                    </td>
                     <td>
                       <Badge
                         variant={
@@ -993,6 +1015,20 @@ export default function Inventario() {
             setCreatedMsg(`2ª calidad liberada a disponible para ${releaseRow.item_name}.`)
             setTimeout(() => setCreatedMsg(null), 5000)
             setReleaseRow(null)
+          }}
+        />
+      )}
+
+      {/* ── Modal: traspaso entre almacenes ─────────────────────────── */}
+      {transferRow && (
+        <TransferStockModal
+          row={transferRow}
+          warehouses={warehouses}
+          onClose={() => setTransferRow(null)}
+          onSaved={() => {
+            setCreatedMsg(`Traspaso registrado para ${transferRow.item_name}.`)
+            setTimeout(() => setCreatedMsg(null), 5000)
+            setTransferRow(null)
           }}
         />
       )}

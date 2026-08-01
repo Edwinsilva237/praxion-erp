@@ -52,6 +52,7 @@ export const REFERENCE_LABELS = {
   inventory_adjustment_reversal:  'Reversión ajuste',
   manual_adjustment:              'Ajuste manual',
   quality_release:                'Liberación 2ª calidad',
+  warehouse_transfer:             'Traspaso entre almacenes',
   sales_order:                    'Pedido',
   delivery_note:                  'Remisión',
   invoice:                        'Factura',

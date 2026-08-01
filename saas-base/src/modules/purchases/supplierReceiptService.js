@@ -347,9 +347,47 @@ async function assertReceiptLotsUntouched(client, tenantId, receiptId) {
   }
 }
 
+// ─── Candado de almacén contra la OC (2026-08-01) ────────────────────────────
+// La OC define el almacén destino por renglón desde que se captura; recibir en
+// otro almacén descuadraba el inventario (entradas repartidas entre bodegas por
+// descuido). Regla: cada línea ligada a un renglón de OC debe entrar al almacén
+// de ese renglón. `warehouseOverride:true` (la ruta ya validó el permiso
+// warehouses:update) permite la excepción consciente y queda auditada.
+async function assertWarehouseMatchesOC(client, {
+  tenantId, purchaseOrderId, headerWarehouseId, lines, warehouseOverride,
+}) {
+  const { rows: polRows } = await client.query(
+    `SELECT pol.id, pol.warehouse_id, w.name AS warehouse_name
+       FROM purchase_order_lines pol
+       LEFT JOIN warehouses w ON w.id = pol.warehouse_id
+      WHERE pol.purchase_order_id = $1`,
+    [purchaseOrderId]
+  )
+  const byId = new Map(polRows.map(l => [l.id, l]))
+  const mismatches = []
+  for (const line of lines) {
+    if (!line.purchaseOrderLineId) continue
+    const ocLine = byId.get(line.purchaseOrderLineId)
+    if (!ocLine || !ocLine.warehouse_id) continue  // línea genérica sin almacén en la OC
+    const effective = line.warehouseId || headerWarehouseId
+    if (effective !== ocLine.warehouse_id) mismatches.push(ocLine)
+  }
+  if (mismatches.length === 0) return { warehouseOverridden: false }
+  if (warehouseOverride) {
+    return {
+      warehouseOverridden: true,
+      ocWarehouses: [...new Set(mismatches.map(m => m.warehouse_name).filter(Boolean))],
+    }
+  }
+  const names = [...new Set(mismatches.map(m => m.warehouse_name).filter(Boolean))]
+  throw createError(409,
+    `La OC destina esta mercancía al almacén "${names.join('" / "') || 'definido en la OC'}" y la recepción intenta entrar a otro. ` +
+    'Recibe en el almacén que indica la OC; si de verdad debe entrar a otra bodega, un usuario con permiso de administrar almacenes puede cambiarlo, o recibe conforme a la OC y haz un traspaso.')
+}
+
 async function createReceipt({
   tenantId, purchaseOrderId, replacementReturnId, partnerId, genericSupplier,
-  warehouseId, receivedDate, documentType, documentNumber,
+  warehouseId, receivedDate, documentType, documentNumber, warehouseOverride,
   lines = [], notes, userId, ipAddress, userAgent,
 }) {
   const receipt = await withTransaction(async (client) => {
@@ -370,6 +408,7 @@ async function createReceipt({
 
     let resolvedPartnerId = partnerId
     let resolvedGenericSupplier = genericSupplier
+    let ocWarehouseCheck = null
 
     if (purchaseOrderId) {
       const { rows: po } = await client.query(
@@ -383,6 +422,10 @@ async function createReceipt({
       } else {
         resolvedPartnerId = resolvedPartnerId || po[0].partner_id
       }
+      ocWarehouseCheck = await assertWarehouseMatchesOC(client, {
+        tenantId, purchaseOrderId, headerWarehouseId: warehouseId,
+        lines, warehouseOverride: warehouseOverride === true,
+      })
     }
 
     // Reposición en especie (mig 240): la recepción se registra CONTRA una
@@ -433,7 +476,9 @@ async function createReceipt({
     await audit({
       tenantId, userId, action: 'supplier_receipt.created',
       resource: 'supplier_receipts', resourceId: receipt.id,
-      payload: { receiptNumber, purchaseOrderId, partnerId: resolvedPartnerId },
+      payload: { receiptNumber, purchaseOrderId, partnerId: resolvedPartnerId,
+                 ...(ocWarehouseCheck?.warehouseOverridden
+                   ? { warehouseOverridden: true, ocWarehouses: ocWarehouseCheck.ocWarehouses } : {}) },
       ipAddress, userAgent,
     })
 
@@ -448,7 +493,7 @@ async function createReceipt({
 // OC está mal, cancela y crea otra). No toca recepciones confirmadas/canceladas.
 async function updateReceipt({
   tenantId, receiptId, warehouseId, receivedDate,
-  documentType, documentNumber, lines = [], notes,
+  documentType, documentNumber, warehouseOverride, lines = [], notes,
   userId, ipAddress, userAgent,
 }) {
   return withTransaction(async (client) => {
@@ -461,6 +506,15 @@ async function updateReceipt({
     if (receipt.status !== 'draft') throw createError(409, 'Solo se puede editar una recepción en borrador.')
     if (!warehouseId) throw createError(400, 'warehouseId es requerido.')
     if (lines.length === 0) throw createError(400, 'Se requiere al menos una línea.')
+
+    let ocWarehouseCheck = null
+    if (receipt.purchase_order_id) {
+      ocWarehouseCheck = await assertWarehouseMatchesOC(client, {
+        tenantId, purchaseOrderId: receipt.purchase_order_id,
+        headerWarehouseId: warehouseId, lines,
+        warehouseOverride: warehouseOverride === true,
+      })
+    }
 
     // No editar si algún lote del borrador ya se consumió.
     await assertReceiptLotsUntouched(client, tenantId, receiptId)
@@ -503,7 +557,9 @@ async function updateReceipt({
     await audit({
       tenantId, userId, action: 'supplier_receipt.updated',
       resource: 'supplier_receipts', resourceId: receiptId,
-      payload: { receiptNumber: receipt.receipt_number, linesCount: lines.length },
+      payload: { receiptNumber: receipt.receipt_number, linesCount: lines.length,
+                 ...(ocWarehouseCheck?.warehouseOverridden
+                   ? { warehouseOverridden: true, ocWarehouses: ocWarehouseCheck.ocWarehouses } : {}) },
       ipAddress, userAgent,
     })
 

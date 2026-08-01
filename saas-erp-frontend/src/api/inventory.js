@@ -47,6 +47,16 @@ export const inventoryApi = {
   releaseBlockedStock: ({ itemId, warehouseId, quantity, note }) =>
     api.post(`${BASE}/stock/release-blocked`, { itemId, warehouseId, quantity, note }).then(r => r.data),
 
+  // ── Traspaso entre almacenes (cantidad suelta o lotes completos) ──────────
+  transferStock: ({ itemType, itemId, fromWarehouseId, toWarehouseId, quantity, lotIds, note }) =>
+    api.post(`${BASE}/stock/transfer`, { itemType, itemId, fromWarehouseId, toWarehouseId, quantity, lotIds, note }).then(r => r.data),
+
+  // Lotes activos con saldo de un artículo en un almacén (para elegir qué mover)
+  getTransferableLots: ({ itemType, itemId, warehouseId }) =>
+    api.get(`${BASE}/stock/transferable-lots`, {
+      params: { item_type: itemType, item_id: itemId, warehouse_id: warehouseId },
+    }).then(r => r.data),
+
   // ── Autocomplete de items ─────────────────────────────────────────────────
   searchItems: (params) =>
     api.get(`${BASE}/items/search`, { params }).then(r => r.data),

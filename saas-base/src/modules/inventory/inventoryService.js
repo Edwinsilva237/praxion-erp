@@ -1562,6 +1562,166 @@ async function releaseBlockedStock({ tenantId, warehouseId, itemId, quantity = n
   })
 }
 
+/**
+ * Traspaso entre almacenes: mueve stock 'available' de un almacén a otro con un
+ * par de movimientos ligados (transfer_out en origen + transfer_in en destino,
+ * mismo referenceId) al costo promedio del origen — la valuación viaja intacta.
+ *
+ * Lotes: si el artículo se controla por lote, `lotIds` mueve LOTES COMPLETOS
+ * (quantity_remaining) y reubica el lote (raw_material_lots/product_lots
+ * .warehouse_id) para que FEFO/trazabilidad lo encuentren en el destino; el
+ * kardex liga cada par de movimientos a su lote. Sin `lotIds`, mueve una
+ * cantidad suelta (artículos sin lote). Gated a inventory:adjust.
+ */
+async function transferStock({
+  tenantId, itemType, itemId, fromWarehouseId, toWarehouseId,
+  quantity = null, lotIds = null, note = null, userId,
+  ipAddress = null, userAgent = null,
+}) {
+  if (!['raw_material', 'product'].includes(itemType || '')) {
+    throw createError(400, "itemType debe ser 'raw_material' o 'product'.")
+  }
+  if (!itemId) throw createError(400, 'itemId es requerido.')
+  if (!fromWarehouseId || !toWarehouseId) throw createError(400, 'Almacén de origen y destino son requeridos.')
+  if (fromWarehouseId === toWarehouseId) throw createError(400, 'El almacén de destino debe ser distinto al de origen.')
+  if (!note || !String(note).trim()) throw createError(400, 'El motivo del traspaso es obligatorio.')
+
+  return withTransaction(async (client) => {
+    const { rows: whRows } = await client.query(
+      `SELECT id, name, type FROM warehouses
+        WHERE tenant_id = $1 AND id = ANY($2::uuid[]) AND is_active = true`,
+      [tenantId, [fromWarehouseId, toWarehouseId]])
+    const whFrom = whRows.find(w => w.id === fromWarehouseId)
+    const whTo   = whRows.find(w => w.id === toWarehouseId)
+    if (!whFrom || !whTo) throw createError(404, 'Almacén de origen o destino no encontrado o inactivo.')
+    if (whFrom.type === 'wip' || whTo.type === 'wip') {
+      throw createError(409, 'Los almacenes WIP son de solo lectura. Solo los hooks de producción pueden moverlos.')
+    }
+
+    const { rows: stockRows } = await client.query(
+      `SELECT id, quantity::numeric AS quantity, avg_cost::numeric AS avg_cost, unit
+         FROM inventory_stock
+        WHERE tenant_id=$1 AND item_type=$2 AND item_id=$3
+          AND warehouse_id=$4 AND status='available'
+        FOR UPDATE`,
+      [tenantId, itemType, itemId, fromWarehouseId])
+    const src = stockRows[0]
+    const srcQty = src ? parseFloat(src.quantity) : 0
+    if (!src || srcQty <= 0) {
+      throw createError(404, `No hay stock disponible de este artículo en ${whFrom.name}.`)
+    }
+    const unit = src.unit || (itemType === 'raw_material' ? 'kg' : 'pza')
+    const avgCost = parseFloat(src.avg_cost)
+
+    const transferId = require('crypto').randomUUID()
+    const ref = { referenceType: 'warehouse_transfer', referenceId: transferId }
+    const notes = `Traspaso ${whFrom.name} → ${whTo.name}: ${String(note).trim()}`
+
+    let totalQty = 0
+    let movedLots = 0
+
+    if (Array.isArray(lotIds) && lotIds.length > 0) {
+      // ── Por lotes completos ──
+      const lotTable = itemType === 'raw_material' ? 'raw_material_lots' : 'product_lots'
+      const itemCol  = itemType === 'raw_material' ? 'raw_material_id' : 'product_id'
+      const { rows: lots } = await client.query(
+        `SELECT id, lot_number, quantity_remaining::numeric AS remaining, unit_cost::numeric AS unit_cost
+           FROM ${lotTable}
+          WHERE tenant_id = $1 AND ${itemCol} = $2 AND warehouse_id = $3
+            AND id = ANY($4::uuid[]) AND status = 'active' AND quantity_remaining > 0
+          FOR UPDATE`,
+        [tenantId, itemId, fromWarehouseId, lotIds])
+      if (lots.length !== lotIds.length) {
+        throw createError(409, 'Algún lote seleccionado ya no está disponible en el almacén de origen (¿se consumió o ya se movió?). Refresca e intenta de nuevo.')
+      }
+
+      for (const lot of lots) {
+        const qty = parseFloat(lot.remaining)
+        const lotRef = itemType === 'raw_material'
+          ? { rawMaterialLotId: lot.id } : { productLotId: lot.id }
+        await recordMovement(client, {
+          tenantId, warehouseId: fromWarehouseId, itemType, itemId,
+          movementType: 'transfer_out', quantity: -qty, unit, unitCost: avgCost,
+          statusTo: 'available', ...ref, ...lotRef, validateStock: true,
+          notes: `${notes} (lote ${lot.lot_number})`, createdBy: userId,
+        })
+        await recordMovement(client, {
+          tenantId, warehouseId: toWarehouseId, itemType, itemId,
+          movementType: 'transfer_in', quantity: qty, unit, unitCost: avgCost,
+          statusTo: 'available', ...ref, ...lotRef,
+          notes: `${notes} (lote ${lot.lot_number})`, createdBy: userId,
+        })
+        await client.query(
+          `UPDATE ${lotTable} SET warehouse_id = $1 WHERE id = $2`,
+          [toWarehouseId, lot.id])
+        totalQty += qty
+        movedLots++
+      }
+    } else {
+      // ── Cantidad suelta (artículos sin control por lote) ──
+      const qty = parseFloat(quantity)
+      if (isNaN(qty) || qty <= 0) throw createError(400, 'La cantidad a traspasar debe ser un número positivo.')
+      if (qty > srcQty + 1e-6) {
+        throw createError(400, `Solo hay ${srcQty.toFixed(4)} ${unit} disponibles en ${whFrom.name}; no puedes traspasar ${qty.toFixed(4)}.`)
+      }
+      await recordMovement(client, {
+        tenantId, warehouseId: fromWarehouseId, itemType, itemId,
+        movementType: 'transfer_out', quantity: -qty, unit, unitCost: avgCost,
+        statusTo: 'available', ...ref, validateStock: true,
+        notes, createdBy: userId,
+      })
+      await recordMovement(client, {
+        tenantId, warehouseId: toWarehouseId, itemType, itemId,
+        movementType: 'transfer_in', quantity: qty, unit, unitCost: avgCost,
+        statusTo: 'available', ...ref,
+        notes, createdBy: userId,
+      })
+      totalQty = qty
+    }
+
+    await audit({
+      tenantId, userId, action: 'inventory.stock_transferred',
+      resource: 'inventory_stock', resourceId: transferId,
+      payload: { itemType, itemId, fromWarehouseId, toWarehouseId,
+                 fromWarehouse: whFrom.name, toWarehouse: whTo.name,
+                 quantity: totalQty, unitCost: avgCost, lots: movedLots, note },
+      ipAddress, userAgent,
+    })
+
+    return {
+      transferId, itemType, itemId,
+      fromWarehouseId, toWarehouseId,
+      fromWarehouse: whFrom.name, toWarehouse: whTo.name,
+      quantity: totalQty, unitCost: avgCost, lotsMoved: movedLots,
+    }
+  })
+}
+
+/**
+ * Lotes activos con saldo de un artículo en un almacén — para elegir qué lotes
+ * mover en un traspaso (se mueven completos). Vacío = el artículo no maneja
+ * lotes (el traspaso va por cantidad suelta).
+ */
+async function listTransferableLots({ tenantId, itemType, itemId, warehouseId }) {
+  if (!['raw_material', 'product'].includes(itemType || '')) {
+    throw createError(400, "itemType debe ser 'raw_material' o 'product'.")
+  }
+  if (!itemId || !warehouseId) throw createError(400, 'itemId y warehouseId son requeridos.')
+  const lotTable = itemType === 'raw_material' ? 'raw_material_lots' : 'product_lots'
+  const itemCol  = itemType === 'raw_material' ? 'raw_material_id' : 'product_id'
+  // product_lots no tiene received_at — su fecha de entrada es created_at.
+  const dateCol  = itemType === 'raw_material' ? 'received_at' : 'created_at'
+  const { rows } = await query(
+    `SELECT id, lot_number, quantity_remaining::numeric AS quantity_remaining,
+            unit_cost::numeric AS unit_cost, expiry_date, ${dateCol} AS received_at
+       FROM ${lotTable}
+      WHERE tenant_id = $1 AND ${itemCol} = $2 AND warehouse_id = $3
+        AND status = 'active' AND quantity_remaining > 0
+      ORDER BY ${dateCol} ASC`,
+    [tenantId, itemId, warehouseId])
+  return rows
+}
+
 async function searchItems({ tenantId, q = '', type = null, warehouseId = null, limit = 20 }) {
   const like = `%${q}%`
   const params = [tenantId, like]
@@ -1635,6 +1795,8 @@ module.exports = {
   recomputeStockFromMovements,
   setStockCost,
   releaseBlockedStock,
+  transferStock,
+  listTransferableLots,
   getMovementDetail,
 
   searchItems,

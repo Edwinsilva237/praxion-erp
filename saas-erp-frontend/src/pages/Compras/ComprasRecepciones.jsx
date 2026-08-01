@@ -9,7 +9,7 @@ import Autocomplete from '@/components/ui/Autocomplete'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
 import SignatureCaptureModal from '@/components/ui/SignatureCaptureModal'
-import Can from '@/components/auth/Can'
+import Can, { useCan } from '@/components/auth/Can'
 import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob, printBlob } from '@/utils/downloadBlob'
 import { useDocumentScanner } from '@/hooks/useDocumentScanner'
@@ -816,6 +816,10 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
   const [evidenceOpen, setEvidenceOpen] = useState(false)
   const [error, setError]         = useState(null)
   const [excessWarning, setExcess] = useState(null)
+  // Candado de almacén: la OC dicta el almacén destino. Solo quien administra
+  // almacenes puede desbloquearlo (whOverride) — queda auditado en el backend.
+  const [whOverride, setWhOverride] = useState(false)
+  const canOverrideWH = useCan('warehouses:update')
   // "Recibir otra OC del mismo embarque": folio de la última recepción guardada
   // (banner de progreso) + intención de NO cerrar el modal tras guardar.
   const [savedBanner, setSavedBanner] = useState(null)
@@ -860,9 +864,12 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
         const received = parseFloat(l.quantity_received || 0)
         return ordered - received > 0.001
       })
-      setLines((pending.length > 0 ? pending : oc.lines || []).map(l => ({
+      const formLines = (pending.length > 0 ? pending : oc.lines || []).map(l => ({
         oc_line_id:      l.id,
         oc_qty_original: parseFloat(l.quantity || 0),
+        // Almacén destino dictado por la OC (candado; ver mutation)
+        oc_warehouse_id:   l.warehouse_id || null,
+        oc_warehouse_name: l.warehouse_name || null,
         item_type:       l.item_type || 'raw_material',
         item:            { id: l.item_id, label: l.item_name || l.description || '—' },
         unit:            l.unit || 'kg',
@@ -873,7 +880,12 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
         lot_number:      '',
         manufacturer_lot: '',
         expiry_date:     '',
-      })))
+      }))
+      setLines(formLines)
+      // La OC dicta el almacén: pre-llenar el encabezado y re-armar el candado.
+      const ocWh = formLines.find(l => l.oc_warehouse_id)
+      if (ocWh) setWH(ocWh.oc_warehouse_id)
+      setWhOverride(false)
     } catch { setError('No se pudo cargar la OC.') }
     finally { setOcLoading(false) }
   }
@@ -915,6 +927,7 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
     setOcId(''); setOcData(null)
     setReturnId(''); setReturnData(null)
     setLines([]); setError(null); setExcess(null)
+    setWhOverride(false)
   }
 
   // En edición: las líneas ya vienen precargadas del borrador; solo cargamos la
@@ -941,6 +954,13 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
     })
   }
 
+  // Candado de almacén: la OC dicta el destino por renglón. Mientras el candado
+  // esté puesto, cada línea entra al almacén de SU renglón de OC; con override
+  // (permiso warehouses:update) todo entra al almacén elegido en el encabezado.
+  const ocWarehouseNames = [...new Set(lines.map(l => l.oc_warehouse_name).filter(Boolean))]
+  const ocDictatesWH = source === 'oc' && !!ocId && ocWarehouseNames.length > 0
+  const whLocked = ocDictatesWH && !whOverride
+
   const mutation = useMutation({
     mutationFn: async () => {
       if (!ocId && !returnId && !isEdit) throw new Error('Selecciona una OC o una devolución.')
@@ -953,6 +973,9 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
         purchaseOrderId: source === 'oc' ? (ocId || null) : null,
         replacementReturnId: source === 'return' ? (returnId || null) : null,
         warehouseId,
+        // Recibir en un almacén distinto al de la OC exige desbloqueo explícito
+        // (permiso warehouses:update); el backend lo valida y lo audita.
+        warehouseOverride: (ocDictatesWH && whOverride) || undefined,
         receivedDate:    receiptDate,
         documentType:    docType,
         documentNumber:  docNumber || null,
@@ -965,7 +988,7 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
           quantityReceived:    l.qty_received !== '' ? parseFloat(l.qty_received) : parseFloat(l.qty_ordered),
           unitPrice:           parseFloat(l.unit_price || 0),
           unit:                l.unit,
-          warehouseId,
+          warehouseId:         (whLocked && l.oc_warehouse_id) ? l.oc_warehouse_id : warehouseId,
           // Trazabilidad por lote — el backend solo los usa si uses_lots=true
           lotNumber:       l.lot_number       ? l.lot_number.trim()       : null,
           manufacturerLot: l.manufacturer_lot ? l.manufacturer_lot.trim() : null,
@@ -1223,10 +1246,39 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
                 <p className="text-xs font-bold text-brand-300 uppercase tracking-wider">Datos del documento</p>
                 <div>
                   <label className="label">Almacén destino <span className="text-status-danger">*</span></label>
-                  <select className="select" value={warehouseId} onChange={e => setWH(e.target.value)}>
+                  <select className="select" value={warehouseId} disabled={whLocked}
+                    onChange={e => setWH(e.target.value)}>
                     <option value="">Seleccionar almacén...</option>
                     {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
                   </select>
+                  {whLocked && (
+                    <div className="flex items-center justify-between gap-2 mt-1">
+                      <span className="text-[11px] text-ink-muted">
+                        🔒 Definido en la OC{ocWarehouseNames.length > 1 && ' (varía por renglón)'}
+                        {!canOverrideWH && ' — solo quien administra almacenes puede cambiarlo.'}
+                      </span>
+                      {canOverrideWH && (
+                        <button type="button" onClick={() => setWhOverride(true)}
+                          className="text-[11px] text-brand-300 hover:underline shrink-0">
+                          Cambiar almacén
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {ocDictatesWH && whOverride && (
+                    <div className="flex items-center justify-between gap-2 mt-1">
+                      <span className="text-[11px] text-status-warning">
+                        ⚠ Vas a recibir en un almacén distinto al que indica la OC ({ocWarehouseNames.join(', ')}). Quedará registrado.
+                      </span>
+                      <button type="button" onClick={() => {
+                        setWhOverride(false)
+                        const ocWh = lines.find(l => l.oc_warehouse_id)
+                        if (ocWh) setWH(ocWh.oc_warehouse_id)
+                      }} className="text-[11px] text-brand-300 hover:underline shrink-0">
+                        Volver al de la OC
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
@@ -1266,6 +1318,12 @@ function NuevaRecepcionModal({ preselectedOcId, editReceipt = null, onClose, onC
                           {line.item_type === 'raw_material' ? 'MP' : 'PT'}
                         </span>
                         <p className="text-sm font-semibold text-ink-primary flex-1">{line.item?.label}</p>
+                        {whLocked && line.oc_warehouse_name && ocWarehouseNames.length > 1 && (
+                          <span className="text-[10px] text-ink-muted bg-surface-elevated px-2 py-0.5 rounded-full shrink-0"
+                            title="Almacén destino según la OC">
+                            → {line.oc_warehouse_name}
+                          </span>
+                        )}
                         {hayExceso && <span className="text-[10px] font-bold text-status-warning bg-status-warning/15 px-2 py-0.5 rounded-full">⚠ exceso</span>}
                       </div>
                       {/* Traza de origen de la reposición (lote/recepción devueltos) */}

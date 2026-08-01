@@ -101,6 +101,40 @@ router.post('/stock/release-blocked', checkPermission('inventory', 'adjust'), as
   } catch (err) { next(err) }
 })
 
+// ── POST /api/inventory/stock/transfer ───────────────────────────────────────
+// Traspaso entre almacenes: par transfer_out/transfer_in ligados, al costo
+// promedio del origen. Con lotIds mueve lotes COMPLETOS y los reubica. Gated a
+// inventory:adjust (mueve existencias entre bodegas).
+router.post('/stock/transfer', checkPermission('inventory', 'adjust'), async (req, res, next) => {
+  try {
+    const { itemType, itemId, fromWarehouseId, toWarehouseId, quantity, lotIds, note } = req.body || {}
+    const data = await inventoryService.transferStock({
+      tenantId:  req.tenant.id,
+      itemType, itemId, fromWarehouseId, toWarehouseId,
+      quantity:  quantity != null && quantity !== '' ? quantity : null,
+      lotIds:    Array.isArray(lotIds) && lotIds.length ? lotIds : null,
+      note,
+      userId:    req.auth.userId,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    })
+    res.json(data)
+  } catch (err) { next(err) }
+})
+
+// ── GET /api/inventory/stock/transferable-lots ───────────────────────────────
+// Lotes activos con saldo de un artículo en un almacén (para elegir qué mover).
+router.get('/stock/transferable-lots', checkPermission('inventory', 'read'), async (req, res, next) => {
+  try {
+    const { item_type, item_id, warehouse_id } = req.query
+    const data = await inventoryService.listTransferableLots({
+      tenantId: req.tenant.id,
+      itemType: item_type, itemId: item_id, warehouseId: warehouse_id,
+    })
+    res.json(data)
+  } catch (err) { next(err) }
+})
+
 // ── GET /api/inventory/movements/:id ─────────────────────────────────────────
 // Detalle de un movimiento del kardex + su documento origen resuelto (remisión,
 // recepción, ajuste, turno, etc.) para trazabilidad.

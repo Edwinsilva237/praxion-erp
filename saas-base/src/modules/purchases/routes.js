@@ -6,6 +6,7 @@ const { tenantResolver }  = require('../../middleware/tenantResolver')
 const { authGuard }       = require('../../middleware/authGuard')
 const { requireActiveTenant } = require('../../middleware/requireActiveTenant')
 const { checkPermission, checkAnyPermission } = require('../../middleware/checkPermission')
+const { hasPermission }   = require('../roles/permissionService')
 const requireModule       = require('../../middleware/requireModule')
 const purchaseOrderService    = require('./purchaseOrderService')
 const supplierReceiptService  = require('./supplierReceiptService')
@@ -629,6 +630,12 @@ router.post('/receipts', checkPermission('purchases', 'create'), async (req, res
     if (!warehouseId) return res.status(400).json({ error: 'warehouseId es requerido.' })
     if (!lines || lines.length === 0) return res.status(400).json({ error: 'Se requiere al menos una línea.' })
 
+    // Cambiar el almacén que dicta la OC exige permiso de administrar almacenes.
+    if (req.body.warehouseOverride === true &&
+        !(await hasPermission(req.auth.userId, 'warehouses', 'update'))) {
+      return res.status(403).json({ error: 'Cambiar el almacén indicado en la OC requiere permiso de administración de almacenes.' })
+    }
+
     const receipt = await supplierReceiptService.createReceipt({
       tenantId: req.tenant.id, ...req.body,
       userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
@@ -682,6 +689,12 @@ router.put('/receipts/:id', checkPermission('purchases', 'update'), async (req, 
     const { warehouseId, lines } = req.body
     if (!warehouseId) return res.status(400).json({ error: 'warehouseId es requerido.' })
     if (!lines || lines.length === 0) return res.status(400).json({ error: 'Se requiere al menos una línea.' })
+
+    // Cambiar el almacén que dicta la OC exige permiso de administrar almacenes.
+    if (req.body.warehouseOverride === true &&
+        !(await hasPermission(req.auth.userId, 'warehouses', 'update'))) {
+      return res.status(403).json({ error: 'Cambiar el almacén indicado en la OC requiere permiso de administración de almacenes.' })
+    }
 
     const receipt = await supplierReceiptService.updateReceipt({
       tenantId: req.tenant.id, receiptId: req.params.id, ...req.body,
