@@ -111,12 +111,15 @@ async function listCXC({ tenantId, status, partnerId, from, to, search, sortBy, 
     sortBy, sortDir, columns: CXC_SORT_COLUMNS, defaultKey: 'vencimiento', defaultDir: 'asc', tiebreaker: 'ar.id DESC',
   })
 
-  if (status) {
+  if (status === 'all') {
+    // "Todos": la foto completa menos cancelados (accesibles con status=cancelled).
+    filters.push(`ar.status <> 'cancelled'`)
+  } else if (status) {
     params.push(status); filters.push(`ar.status = $${params.length}`)
   } else {
-    // Sin filtro explícito, ocultar cancelados — quedan accesibles eligiendo
-    // "Cancelado" en el dropdown del listado.
-    filters.push(`ar.status <> 'cancelled'`)
+    // Default = SOLO cartera viva (la pantalla se llama "Cuentas por COBRAR"):
+    // lo cobrado se consulta con status=paid o status=all desde el dropdown.
+    filters.push(`ar.status NOT IN ('paid','cancelled')`)
   }
   if (partnerId) { params.push(partnerId); filters.push(`ar.partner_id = $${params.length}`) }
   if (from)      { params.push(from);      filters.push(`ar.issue_date >= $${params.length}`) }

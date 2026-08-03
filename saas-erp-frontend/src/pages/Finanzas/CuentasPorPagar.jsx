@@ -10,11 +10,13 @@ import Spinner from '@/components/ui/Spinner'
 import Can from '@/components/auth/Can'
 import { PagoProveedorModal } from '@/components/finanzas/PagoProveedorModal'
 import { CxPDetallePanel } from '@/components/finanzas/CxPDetallePanel'
-import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
+import { fmtMXN, fmtMXN4, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import clsx from 'clsx'
 
+// '' (default) = solo cartera viva (pendiente/parcial); 'all' = todo menos cancelados.
 const STATUS_OPTS = [
-  ['',           'Todos los estados'],
+  ['',           'Pendientes de pago'],
+  ['all',        'Todos los estados'],
   ['pending',    'Pendiente'],
   ['partial',    'Parcial'],
   ['paid',       'Pagado'],
@@ -150,11 +152,11 @@ export default function CuentasPorPagar() {
           </div>
           <div className="card p-3">
             <p className="text-[10px] text-ink-muted uppercase tracking-wide">Total facturado</p>
-            <p className="text-lg font-mono font-semibold text-ink-primary mt-0.5">{fmtMXN(summary.total)}</p>
+            <p className="text-lg font-mono font-semibold text-ink-primary mt-0.5">{fmtMXN4(summary.total)}</p>
           </div>
           <div className="card p-3 bg-status-success/10/40">
             <p className="text-[10px] text-green-500 uppercase tracking-wide">Pagado</p>
-            <p className="text-lg font-mono font-semibold text-status-success mt-0.5">{fmtMXN(summary.paid)}</p>
+            <p className="text-lg font-mono font-semibold text-status-success mt-0.5">{fmtMXN4(summary.paid)}</p>
           </div>
           <div className={clsx('card p-3', summary.overdue > 0 ? 'bg-status-danger/10/40' : 'bg-status-warning/10/40')}>
             <p className={clsx('text-[10px] uppercase tracking-wide',
@@ -163,7 +165,7 @@ export default function CuentasPorPagar() {
             </p>
             <p className={clsx('text-lg font-mono font-semibold mt-0.5',
               summary.overdue > 0 ? 'text-status-danger' : 'text-status-warning')}>
-              {fmtMXN(summary.pending)}
+              {fmtMXN4(summary.pending)}
             </p>
           </div>
           {summary.advances > 0 && (
@@ -339,11 +341,11 @@ export default function CuentasPorPagar() {
                         <span className="text-[10px] text-ink-muted" title="Sin evidencias">—</span>
                       )}
                     </td>
-                    <td className="text-right font-mono tabular-nums">{fmtMXN(d.amount_total)}</td>
+                    <td className="text-right font-mono tabular-nums">{fmtMXN4(d.amount_total)}</td>
                     <td className={clsx('text-right font-mono tabular-nums font-semibold',
                       parseFloat(d.amount_pending) <= 0.01 ? 'text-status-success' :
                         (d.is_overdue ? 'text-status-danger' : 'text-status-warning'))}>
-                      {fmtMXN(d.amount_pending)}
+                      {fmtMXN4(d.amount_pending)}
                     </td>
                   </tr>
                   )

@@ -6,6 +6,15 @@ export const fmtMXN = (n, currency = 'MXN') => {
   return `${sym}${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
+// Igual que fmtMXN pero mostrando HASTA 4 decimales cuando existen (precios
+// unitarios con fracciones de centavo, saldos finos de CxC/CxP). Mínimo 2 —
+// los montos redondos se ven exactamente igual que con fmtMXN.
+export const fmtMXN4 = (n, currency = 'MXN') => {
+  if (n == null || n === '') return '—'
+  const sym = currency === 'USD' ? 'US$' : '$'
+  return `${sym}${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`
+}
+
 export const fmtDate = (d) =>
   d ? new Date(d).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'
 

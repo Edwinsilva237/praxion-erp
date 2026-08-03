@@ -289,9 +289,16 @@ test('HTTP: subir XML a mano — REP entra, factura normal se rechaza con 400', 
 })
 
 test('CxP: el listado trae el semáforo rep_status', async () => {
-  const res = await client.get('/api/purchases/cxp')
+  // status=all: la factura ya está PAGADA y el default del listado ahora es
+  // solo cartera viva (pendiente/parcial).
+  const res = await client.get('/api/purchases/cxp?status=all')
   expect(res.status).toBe(200)
   const row = res.body.data.find(d => d.document_number === 'A-555')
   expect(row).toBeTruthy()
   expect(row.rep_status).toBe('complete')
+
+  // Y por lo mismo, el default ya NO debe traerla.
+  const def = await client.get('/api/purchases/cxp')
+  expect(def.status).toBe(200)
+  expect(def.body.data.find(d => d.document_number === 'A-555')).toBeUndefined()
 })

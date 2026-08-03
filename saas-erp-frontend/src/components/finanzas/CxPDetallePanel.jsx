@@ -6,7 +6,7 @@ import { cxpApi } from '@/api/cxp'
 import { PagoProveedorModal } from '@/components/finanzas/PagoProveedorModal'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
-import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
+import { fmtMXN, fmtMXN4, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob } from '@/utils/downloadBlob'
 import clsx from 'clsx'
 
@@ -74,7 +74,7 @@ function LineasDocumento({ lines }) {
                   <td className="text-right font-mono tabular-nums text-ink-secondary whitespace-nowrap">
                     {new Intl.NumberFormat('es-MX', { maximumFractionDigits: 4 }).format(l.quantity || 0)} {l.unit}
                   </td>
-                  <td className="text-right font-mono tabular-nums text-ink-secondary">{fmtMXN(l.unit_price)}</td>
+                  <td className="text-right font-mono tabular-nums text-ink-secondary">{fmtMXN4(l.unit_price)}</td>
                   <td className="text-right font-mono tabular-nums font-semibold text-ink-primary">{fmtMXN(l.subtotal)}</td>
                 </tr>
               ))}
@@ -681,7 +681,7 @@ export function CxPDetallePanel({ apId, onClose }) {
               <div className="grid grid-cols-3 gap-2">
                 <div className="card p-3">
                   <p className="text-[10px] text-ink-muted uppercase tracking-wide">Total</p>
-                  <p className="text-base font-mono font-semibold text-ink-primary mt-0.5">{fmtMXN(ap.amount_total)}</p>
+                  <p className="text-base font-mono font-semibold text-ink-primary mt-0.5">{fmtMXN4(ap.amount_total)}</p>
                   {ap.currency !== 'MXN' && (
                     <p className="text-[10px] text-ink-muted mt-0.5">
                       {ap.currency} · TC {parseFloat(ap.exchange_rate).toFixed(4)}
@@ -690,7 +690,7 @@ export function CxPDetallePanel({ apId, onClose }) {
                 </div>
                 <div className="card p-3 bg-status-success/10/40">
                   <p className="text-[10px] text-green-500 uppercase tracking-wide">Pagado</p>
-                  <p className="text-base font-mono font-semibold text-status-success mt-0.5">{fmtMXN(ap.amount_paid)}</p>
+                  <p className="text-base font-mono font-semibold text-status-success mt-0.5">{fmtMXN4(ap.amount_paid)}</p>
                 </div>
                 <div className={clsx('card p-3', ap.is_overdue ? 'bg-status-danger/10/40' : 'bg-status-warning/10/40')}>
                   <p className={clsx('text-[10px] uppercase tracking-wide',
@@ -699,7 +699,7 @@ export function CxPDetallePanel({ apId, onClose }) {
                   </p>
                   <p className={clsx('text-base font-mono font-semibold mt-0.5',
                     ap.is_overdue ? 'text-status-danger' : 'text-status-warning')}>
-                    {fmtMXN(ap.amount_pending)}
+                    {fmtMXN4(ap.amount_pending)}
                   </p>
                 </div>
               </div>

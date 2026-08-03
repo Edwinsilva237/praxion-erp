@@ -6,7 +6,7 @@ import { tenantsApi } from '@/api/tenants'
 import useAuthStore from '@/store/useAuthStore'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
-import { fmtMXN, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
+import { fmtMXN, fmtMXN4, fmtDate, fmtNum, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob } from '@/utils/downloadBlob'
 import clsx from 'clsx'
 
@@ -219,7 +219,7 @@ function TabDetalle({ oc }) {
                     <td>
                       <LineProgress ordered={ordered} received={received} unit={l.unit} isEstimated={l.is_estimated} />
                     </td>
-                    <td className="text-right font-mono tabular-nums">{fmtMXN(l.unit_price, oc.currency)}</td>
+                    <td className="text-right font-mono tabular-nums">{fmtMXN4(l.unit_price, oc.currency)}</td>
                     <td className="text-right font-mono tabular-nums font-medium">{fmtMXN(importe, oc.currency)}</td>
                   </tr>
                 )

@@ -36,10 +36,15 @@ async function listCXP({ tenantId, status, partnerId, from, to, sortBy, sortDir,
     sortBy, sortDir, columns: CXP_SORT_COLUMNS, defaultKey: 'vencimiento', defaultDir: 'asc', tiebreaker: 'ap.id DESC',
   })
 
-  if (status) {
+  if (status === 'all') {
+    // "Todos": la foto completa menos cancelados (accesibles con status=cancelled).
+    filters.push(`ap.status <> 'cancelled'`)
+  } else if (status) {
     params.push(status); filters.push(`ap.status = $${params.length}`)
   } else {
-    filters.push(`ap.status <> 'cancelled'`)
+    // Default = SOLO cartera viva (la pantalla se llama "Cuentas por PAGAR"):
+    // lo pagado se consulta con status=paid o status=all desde el dropdown.
+    filters.push(`ap.status NOT IN ('paid','cancelled')`)
   }
   if (partnerId) { params.push(partnerId); filters.push(`ap.partner_id = $${params.length}`) }
   if (from)      { params.push(from);      filters.push(`ap.issue_date >= $${params.length}`) }

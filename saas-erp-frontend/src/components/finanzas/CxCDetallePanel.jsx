@@ -7,7 +7,7 @@ import { tenantsApi } from '@/api/tenants'
 import { PagoModal } from '@/components/finanzas/PagoModal'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
-import { fmtMXN, fmtDate, fmtDateOnly} from '@/utils/fmt'
+import { fmtMXN, fmtMXN4, fmtDate, fmtDateOnly} from '@/utils/fmt'
 import { downloadBlob } from '@/utils/downloadBlob'
 import InvoiceFileButtons from '@/components/facturacion/InvoiceFileButtons'
 import useAuthStore from '@/store/useAuthStore'
@@ -364,11 +364,11 @@ export function CxCDetallePanel({ arId, onClose }) {
                 parseFloat(ar.amount_credited || 0) > 0 ? 'grid-cols-4' : 'grid-cols-3')}>
                 <div className="bg-surface-elevated/40 rounded-lg px-3 py-2">
                   <p className="text-[10px] text-ink-muted uppercase tracking-wide">Total</p>
-                  <p className="text-sm font-mono font-semibold text-ink-primary">{fmtMXN(ar.amount_total, ar.currency)}</p>
+                  <p className="text-sm font-mono font-semibold text-ink-primary">{fmtMXN4(ar.amount_total, ar.currency)}</p>
                 </div>
                 <div className="bg-status-success/10 rounded-lg px-3 py-2">
                   <p className="text-[10px] text-green-500 uppercase tracking-wide">Pagado</p>
-                  <p className="text-sm font-mono font-semibold text-status-success">{fmtMXN(ar.amount_paid, ar.currency)}</p>
+                  <p className="text-sm font-mono font-semibold text-status-success">{fmtMXN4(ar.amount_paid, ar.currency)}</p>
                 </div>
                 {parseFloat(ar.amount_credited || 0) > 0 && (
                   <div className="bg-purple-500/10 rounded-lg px-3 py-2">
@@ -386,7 +386,7 @@ export function CxCDetallePanel({ arId, onClose }) {
                   </p>
                   <p className={clsx('text-sm font-mono font-semibold',
                     hasPending ? (ar.is_overdue ? 'text-status-danger' : 'text-status-warning') : 'text-ink-muted')}>
-                    {fmtMXN(ar.amount_pending, ar.currency)}
+                    {fmtMXN4(ar.amount_pending, ar.currency)}
                   </p>
                 </div>
               </div>

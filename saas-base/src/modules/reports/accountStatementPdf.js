@@ -11,7 +11,9 @@ const storage = require('../../utils/storage')
 const { query } = require('../../db')
 const { addPraxionFooterPDF, addPraxionFooterAllPagesPDF } = require('../../utils/praxionWitnessMark')
 
-const fmtMXN  = (n) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n || 0)
+// Hasta 4 decimales cuando existen (mínimo 2) — los montos redondos se ven igual.
+const fmtMXN  = (n) => new Intl.NumberFormat('es-MX',
+  { style: 'currency', currency: 'MXN', minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(n || 0)
 const fmtMXNf = fmtMXN
 
 // Reduce el tamaño de fuente hasta que el texto quepa en maxW (asume font ya seteada).

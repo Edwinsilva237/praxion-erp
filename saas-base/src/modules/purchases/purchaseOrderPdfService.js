@@ -297,7 +297,7 @@ async function generatePurchaseOrderPDF({ tenantId, orderId }) {
       cx += cw.cant
       doc.text(line.unit || '', cx, y + 7, { width: cw.unidad })
       cx += cw.unidad
-      doc.text(fmt(line.unit_price), cx, y + 7, { width: cw.precio, align: 'right' })
+      doc.text(fmtP(line.unit_price), cx, y + 7, { width: cw.precio, align: 'right' })
       cx += cw.precio
       doc.font('Helvetica-Bold')
          .text(fmt(line.subtotal), cx, y + 7, { width: cw.importe, align: 'right' })
@@ -387,6 +387,11 @@ async function generatePurchaseOrderPDF({ tenantId, orderId }) {
 // ── Utilidades ──────────────────────────────────────────────────────────
 const fmt = (n) => parseFloat(n || 0).toLocaleString('es-MX',
   { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+// Precio unitario: HASTA 4 decimales cuando existen (los proveedores cotizan
+// con fracciones de centavo). Importes y totales se quedan en 2.
+const fmtP = (n) => parseFloat(n || 0).toLocaleString('es-MX',
+  { minimumFractionDigits: 2, maximumFractionDigits: 4 })
 
 function fmtDate(d) {
   if (!d) return ''
