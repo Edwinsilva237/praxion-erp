@@ -139,6 +139,48 @@ test('la recepción aprende el precio REAL (source receipt) y corrige el de la O
   expect(s.source).toBe('receipt')
 })
 
+test('concepto del proveedor + flag de ref. interna: se aprenden en la OC y una recepción posterior sin ellos NO los olvida', async () => {
+  const sup = await makeSupplier('Prov Concepto')
+  const rm  = await makeRawMaterial('Bolsa premium interna')
+  await purchaseOrderService.createOrder({
+    tenantId, partnerId: sup, currency: 'MXN', userId,
+    lines: [{
+      itemType: 'raw_material', itemId: rm, quantity: 5, unit: 'kg', unitPrice: 40, warehouseId,
+      supplierSku: 'C-600', supplierDescription: 'Bolsa natural calibre 600', showInternalRef: false,
+    }],
+  })
+  let s = await supplierPriceService.getSuggestedSupplierPrice({
+    tenantId, supplierId: sup, itemType: 'raw_material', itemId: rm,
+  })
+  expect(s.supplierSku).toBe('C-600')
+  expect(s.supplierDescription).toBe('Bolsa natural calibre 600')
+  expect(s.showInternalRef).toBe(false)
+
+  // El snapshot quedó en la línea de la OC.
+  const { rows: pol } = await withBypass(() => query(
+    `SELECT supplier_description, show_internal_ref FROM purchase_order_lines
+      WHERE item_id = $1`, [rm]))
+  expect(pol[0].supplier_description).toBe('Bolsa natural calibre 600')
+  expect(pol[0].show_internal_ref).toBe(false)
+
+  // La recepción aprende el precio REAL sin clave/concepto → la fila nueva (más
+  // reciente, la que gana en la vista) debe arrastrarlos, no borrarlos.
+  await withTransaction(async (client) => {
+    await supplierPriceService.learnFromLines(client, {
+      tenantId, supplierId: sup, currency: 'MXN', source: 'receipt', userId,
+      lines: [{ itemType: 'raw_material', itemId: rm, unitPrice: 42 }],
+    })
+  })
+  s = await supplierPriceService.getSuggestedSupplierPrice({
+    tenantId, supplierId: sup, itemType: 'raw_material', itemId: rm,
+  })
+  expect(s.unit_price).toBe(42)
+  expect(s.source).toBe('receipt')
+  expect(s.supplierSku).toBe('C-600')
+  expect(s.supplierDescription).toBe('Bolsa natural calibre 600')
+  expect(s.showInternalRef).toBe(false)
+})
+
 test('endpoint GET /api/purchases/suggested-price devuelve la sugerencia', async () => {
   const res = await request(app)
     .get('/api/purchases/suggested-price')

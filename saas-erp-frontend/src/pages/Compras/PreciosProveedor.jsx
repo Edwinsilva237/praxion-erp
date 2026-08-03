@@ -130,7 +130,17 @@ export default function PreciosProveedor() {
                         {p.item_sku && <span className="font-mono"> · {p.item_sku}</span>}
                       </p>
                     </td>
-                    <td className="font-mono text-xs text-ink-secondary">{p.supplier_sku || '—'}</td>
+                    <td className="text-xs text-ink-secondary">
+                      <span className="font-mono">{p.supplier_sku || '—'}</span>
+                      {p.supplier_description && (
+                        <p className="text-[10px] text-ink-muted mt-0.5">{p.supplier_description}</p>
+                      )}
+                      {p.show_internal_ref === false && (
+                        <p className="text-[9px] font-bold uppercase tracking-wide text-status-warning mt-0.5">
+                          Ref. interna oculta en OC
+                        </p>
+                      )}
+                    </td>
                     <td className="text-right font-mono tabular-nums font-medium">{fmtMXN(p.unit_price, p.currency)}</td>
                     <td><SourceBadge source={p.source} /></td>
                     <td className="text-right font-mono tabular-nums text-xs text-ink-muted">
@@ -184,6 +194,8 @@ function PriceModal({ supplierId, row, onClose, onSaved }) {
   const [unitPrice, setUnitPrice]       = useState(row ? String(row.unit_price) : '')
   const [currency, setCurrency]         = useState(row?.currency || 'MXN')
   const [supplierSku, setSupplierSku]   = useState(row?.supplier_sku || '')
+  const [supplierDescription, setSupplierDescription] = useState(row?.supplier_description || '')
+  const [showInternalRef, setShowInternalRef] = useState(row ? row.show_internal_ref !== false : true)
   const [minOrderQty, setMinOrderQty]   = useState(row?.min_order_qty != null ? String(row.min_order_qty) : '')
   const [leadTimeDays, setLeadTimeDays] = useState(row?.lead_time_days != null ? String(row.lead_time_days) : '')
   const [notes, setNotes]               = useState(row?.notes || '')
@@ -203,6 +215,8 @@ function PriceModal({ supplierId, row, onClose, onSaved }) {
       supplierId, itemType, itemId: item.id,
       unitPrice: parseFloat(unitPrice), currency,
       supplierSku:  supplierSku.trim() || null,
+      supplierDescription: supplierDescription.trim() || null,
+      showInternalRef,
       minOrderQty:  minOrderQty  ? parseFloat(minOrderQty)  : null,
       leadTimeDays: leadTimeDays ? parseInt(leadTimeDays, 10) : null,
       notes: notes.trim() || null,
@@ -275,6 +289,26 @@ function PriceModal({ supplierId, row, onClose, onSaved }) {
               <input className="input font-mono" value={supplierSku} onChange={e => setSupplierSku(e.target.value)}
                 placeholder="Código con el que el proveedor identifica el artículo" />
             </div>
+            <div>
+              <label className="label">Concepto del proveedor <span className="text-ink-muted font-normal text-[10px]">(opcional)</span></label>
+              <input className="input" value={supplierDescription} onChange={e => setSupplierDescription(e.target.value)}
+                placeholder="Nombre con el que el proveedor conoce el artículo" />
+              <p className="text-[10px] text-ink-muted mt-1">
+                Si lo capturas, la OC impresa usará este concepto como descripción principal — el proveedor lee su propio idioma.
+              </p>
+            </div>
+            <label className={clsx('flex items-start gap-2 cursor-pointer select-none', !supplierDescription.trim() && 'opacity-40 cursor-default')}>
+              <input type="checkbox" className="w-4 h-4 accent-brand-600 rounded mt-0.5"
+                checked={showInternalRef}
+                disabled={!supplierDescription.trim()}
+                onChange={e => setShowInternalRef(e.target.checked)} />
+              <span className="text-xs text-ink-secondary">
+                Mostrar nuestra ref. interna en la OC impresa
+                <span className="block text-[10px] text-ink-muted mt-0.5">
+                  Desmárcalo si no quieres que el proveedor vea tu clave/descripción interna (p. ej. cuando posicionas el producto distinto a como te lo vende).
+                </span>
+              </span>
+            </label>
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="label">Mín. de orden <span className="text-ink-muted font-normal text-[10px]">(opcional)</span></label>

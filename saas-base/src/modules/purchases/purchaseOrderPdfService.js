@@ -232,14 +232,29 @@ async function generatePurchaseOrderPDF({ tenantId, orderId }) {
 
     const bottomLimit = doc.page.height - 70
     lines.forEach((line, i) => {
-      const desc = line.item_name || line.description || ''
-      // Clave del proveedor + nota de la línea: se imprimen DEBAJO de la
-      // descripción (gris, cursiva) para que el proveedor reconozca el producto.
-      const skuProv = (line.supplier_sku || '').trim()
-      const note    = (line.notes || '').trim()
-      const extras  = []
-      if (skuProv) extras.push(`Clave prov.: ${skuProv}`)
-      if (note)    extras.push(`Nota: ${note}`)
+      // Cuando hay concepto del proveedor, la OC habla SU idioma: su concepto es
+      // la descripción principal y su clave va en la columna Clave. Nuestra ref.
+      // interna baja a la línea gris — o se OMITE por completo si la línea lo
+      // pide (show_internal_ref=false: no revelar cómo posicionamos el producto).
+      // Sin concepto, comportamiento clásico: nuestra descripción + "Clave prov.".
+      const supplierDesc = (line.supplier_description || '').trim()
+      const showInternal = line.show_internal_ref !== false
+      const internalName = line.item_name || line.description || ''
+      const internalSku  = line.item_sku || line.sat_product_code || ''
+      const skuProv      = (line.supplier_sku || '').trim()
+      const note         = (line.notes || '').trim()
+
+      const desc     = supplierDesc || internalName
+      const claveCol = supplierDesc ? skuProv : internalSku
+      const extras   = []
+      if (supplierDesc) {
+        if (showInternal && (internalSku || internalName)) {
+          extras.push(`Ref. interna: ${[internalSku, internalName].filter(Boolean).join(' — ')}`)
+        }
+      } else if (skuProv) {
+        extras.push(`Clave prov.: ${skuProv}`)
+      }
+      if (note) extras.push(`Nota: ${note}`)
 
       // La descripción AHORA envuelve a varias líneas — antes se truncaba con
       // ellipsis y cortaba los nombres largos. La altura de la fila se ajusta
@@ -260,7 +275,7 @@ async function generatePurchaseOrderPDF({ tenantId, orderId }) {
       doc.rect(40, y, W, rowH).fill(i % 2 === 0 ? 'white' : gris)
       doc.fillColor(negro).fontSize(7.5).font('Helvetica')
       cx = 45
-      doc.text(line.item_sku || line.sat_product_code || '', cx, y + 7,
+      doc.text(claveCol, cx, y + 7,
                { width: cw.clave, ellipsis: true, height: 10, lineBreak: false })
       cx += cw.clave
       doc.text(desc, cx, y + 7, { width: cw.desc - 5 })

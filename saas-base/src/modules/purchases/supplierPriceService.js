@@ -24,7 +24,8 @@ async function getSuggestedSupplierPrice({ tenantId, supplierId, itemType, itemI
 
   // 1) Precio vigente del proveedor (la vista ya prioriza manual sobre aprendido).
   const { rows: sp } = await query(
-    `SELECT unit_price, currency, source, supplier_sku, min_order_qty, lead_time_days
+    `SELECT unit_price, currency, source, supplier_sku, supplier_description,
+            show_internal_ref, min_order_qty, lead_time_days
        FROM current_supplier_prices
       WHERE tenant_id = $1 AND business_partner_id = $2
         AND item_type = $3 AND item_id = $4`,
@@ -32,12 +33,15 @@ async function getSuggestedSupplierPrice({ tenantId, supplierId, itemType, itemI
   )
 
   let priceRaw = null, priceCurrency = null, source = null
-  let supplierSku = null, minOrderQty = null, leadTimeDays = null
+  let supplierSku = null, supplierDescription = null, showInternalRef = null
+  let minOrderQty = null, leadTimeDays = null
   if (sp.length) {
     priceRaw      = parseFloat(sp[0].unit_price)
     priceCurrency = sp[0].currency
     source        = sp[0].source            // 'manual' | 'po' | 'receipt'
     supplierSku   = sp[0].supplier_sku
+    supplierDescription = sp[0].supplier_description
+    showInternalRef     = sp[0].show_internal_ref
     minOrderQty   = sp[0].min_order_qty != null ? parseFloat(sp[0].min_order_qty) : null
     leadTimeDays  = sp[0].lead_time_days
   } else if (itemType === 'raw_material') {
@@ -55,14 +59,14 @@ async function getSuggestedSupplierPrice({ tenantId, supplierId, itemType, itemI
     }
   }
 
-  // Sin precio: devolvemos al menos el SKU/MOQ del proveedor si existían.
+  // Sin precio: devolvemos al menos el SKU/concepto/MOQ del proveedor si existían.
   if (priceRaw == null) {
-    return (supplierSku || minOrderQty || leadTimeDays)
-      ? { supplierSku, minOrderQty, leadTimeDays }
+    return (supplierSku || supplierDescription || minOrderQty || leadTimeDays)
+      ? { supplierSku, supplierDescription, showInternalRef, minOrderQty, leadTimeDays }
       : null
   }
 
-  const extra = { source, supplierSku, minOrderQty, leadTimeDays }
+  const extra = { source, supplierSku, supplierDescription, showInternalRef, minOrderQty, leadTimeDays }
 
   if (priceCurrency === currency) {
     return { unit_price: priceRaw, currency: priceCurrency, ...extra }
@@ -95,26 +99,43 @@ async function getSuggestedSupplierPrice({ tenantId, supplierId, itemType, itemI
 }
 
 // ── Auto-aprendizaje (corre dentro de una transacción → recibe client) ─────
-async function recordLearnedSupplierPrice(client, { tenantId, supplierId, itemType, itemId, unitPrice, currency = 'MXN', source = 'po', supplierSku = null, userId = null }) {
+async function recordLearnedSupplierPrice(client, { tenantId, supplierId, itemType, itemId, unitPrice, currency = 'MXN', source = 'po', supplierSku = null, supplierDescription = null, showInternalRef = null, userId = null }) {
   if (!tenantId || !supplierId || !itemType || !itemId) return
   if (!['po', 'receipt'].includes(source)) return
   const price = parseFloat(unitPrice)
   if (!Number.isFinite(price) || price <= 0) return // no aprender 0 ni inválidos
 
-  // supplier_sku se RECUERDA: solo se pisa cuando llega un valor nuevo no nulo
-  // (COALESCE), así una OC posterior sin clave no borra la clave ya aprendida.
+  // Clave/concepto/flag se RECUERDAN: la fila nueva arrastra lo ya vigente cuando
+  // no llega un valor. Sin este merge, una recepción posterior (que no captura
+  // clave ni concepto) insertaría una fila más reciente "vacía" y la vista —que
+  // toma solo la fila más nueva— los olvidaría.
+  const { rows: prev } = await client.query(
+    `SELECT supplier_sku, supplier_description, show_internal_ref
+       FROM current_supplier_prices
+      WHERE tenant_id = $1 AND business_partner_id = $2
+        AND item_type = $3 AND item_id = $4`,
+    [tenantId, supplierId, itemType, itemId]
+  )
+  const sku  = (supplierSku && String(supplierSku).trim()) || prev[0]?.supplier_sku || null
+  const desc = (supplierDescription && String(supplierDescription).trim()) || prev[0]?.supplier_description || null
+  const showRef = (showInternalRef === null || showInternalRef === undefined)
+    ? (prev.length ? prev[0].show_internal_ref : true)
+    : !!showInternalRef
+
   await client.query(
     `INSERT INTO supplier_prices
        (tenant_id, business_partner_id, item_type, item_id, currency, unit_price,
-        supplier_sku, valid_from, source, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7, CURRENT_DATE, $8, $9)
+        supplier_sku, supplier_description, show_internal_ref, valid_from, source, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, CURRENT_DATE, $10, $11)
      ON CONFLICT (tenant_id, business_partner_id, item_type, item_id, valid_from, source)
-     DO UPDATE SET unit_price    = EXCLUDED.unit_price,
-                   currency      = EXCLUDED.currency,
-                   supplier_sku  = COALESCE(EXCLUDED.supplier_sku, supplier_prices.supplier_sku),
-                   updated_at    = now()`,
+     DO UPDATE SET unit_price           = EXCLUDED.unit_price,
+                   currency             = EXCLUDED.currency,
+                   supplier_sku         = EXCLUDED.supplier_sku,
+                   supplier_description = EXCLUDED.supplier_description,
+                   show_internal_ref    = EXCLUDED.show_internal_ref,
+                   updated_at           = now()`,
     [tenantId, supplierId, itemType, itemId, currency, price,
-     (supplierSku && String(supplierSku).trim()) || null, source, userId]
+     sku, desc, showRef, source, userId]
   )
 }
 
@@ -128,7 +149,10 @@ async function learnFromLines(client, { tenantId, supplierId, currency, source, 
       tenantId, supplierId,
       itemType: l.itemType, itemId: l.itemId,
       unitPrice: l.unitPrice, currency, source,
-      supplierSku: l.supplierSku || null, userId,
+      supplierSku: l.supplierSku || null,
+      supplierDescription: l.supplierDescription || null,
+      showInternalRef: l.showInternalRef ?? null,
+      userId,
     })
   }
 }
@@ -159,7 +183,8 @@ async function listSupplierPrices({ tenantId, supplierId = null, itemType = null
 
 async function upsertManualSupplierPrice({
   tenantId, supplierId, itemType, itemId, unitPrice, currency = 'MXN',
-  supplierSku = null, minOrderQty = null, leadTimeDays = null, notes = null, userId = null,
+  supplierSku = null, supplierDescription = null, showInternalRef = true,
+  minOrderQty = null, leadTimeDays = null, notes = null, userId = null,
 }) {
   if (!supplierId) throw createError(400, 'Falta el proveedor.')
   if (!['raw_material', 'product'].includes(itemType)) throw createError(400, 'item_type inválido.')
@@ -170,19 +195,24 @@ async function upsertManualSupplierPrice({
   const { rows } = await query(
     `INSERT INTO supplier_prices
        (tenant_id, business_partner_id, item_type, item_id, currency, unit_price,
-        supplier_sku, min_order_qty, lead_time_days, valid_from, source, notes, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, CURRENT_DATE, 'manual', $10, $11)
+        supplier_sku, supplier_description, show_internal_ref,
+        min_order_qty, lead_time_days, valid_from, source, notes, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, CURRENT_DATE, 'manual', $12, $13)
      ON CONFLICT (tenant_id, business_partner_id, item_type, item_id, valid_from, source)
-     DO UPDATE SET unit_price     = EXCLUDED.unit_price,
-                   currency       = EXCLUDED.currency,
-                   supplier_sku   = EXCLUDED.supplier_sku,
-                   min_order_qty  = EXCLUDED.min_order_qty,
-                   lead_time_days = EXCLUDED.lead_time_days,
-                   notes          = EXCLUDED.notes,
-                   updated_at     = now()
+     DO UPDATE SET unit_price           = EXCLUDED.unit_price,
+                   currency             = EXCLUDED.currency,
+                   supplier_sku         = EXCLUDED.supplier_sku,
+                   supplier_description = EXCLUDED.supplier_description,
+                   show_internal_ref    = EXCLUDED.show_internal_ref,
+                   min_order_qty        = EXCLUDED.min_order_qty,
+                   lead_time_days       = EXCLUDED.lead_time_days,
+                   notes                = EXCLUDED.notes,
+                   updated_at           = now()
      RETURNING *`,
     [tenantId, supplierId, itemType, itemId, currency, price,
-     supplierSku || null, minOrderQty ?? null, leadTimeDays ?? null, notes || null, userId]
+     supplierSku || null, (supplierDescription && String(supplierDescription).trim()) || null,
+     showInternalRef !== false,
+     minOrderQty ?? null, leadTimeDays ?? null, notes || null, userId]
   )
   return rows[0]
 }

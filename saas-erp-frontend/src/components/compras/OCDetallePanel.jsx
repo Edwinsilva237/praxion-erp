@@ -198,6 +198,16 @@ function TabDetalle({ oc }) {
                       {l.supplier_sku && (
                         <p className="text-[11px] text-ink-muted">Clave prov.: <span className="font-mono">{l.supplier_sku}</span></p>
                       )}
+                      {l.supplier_description && (
+                        <p className="text-[11px] text-ink-muted">
+                          Concepto prov.: {l.supplier_description}
+                          {l.show_internal_ref === false && (
+                            <span className="ml-1.5 text-[9px] font-bold uppercase tracking-wide text-status-warning bg-status-warning/10 px-1.5 py-0.5 rounded-full">
+                              ref. interna oculta en PDF
+                            </span>
+                          )}
+                        </p>
+                      )}
                       {l.notes && (
                         <p className="text-[11px] text-ink-muted italic">{l.notes}</p>
                       )}

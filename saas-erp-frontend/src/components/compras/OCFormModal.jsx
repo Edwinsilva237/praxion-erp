@@ -15,11 +15,11 @@ import clsx from 'clsx'
 // ── Constantes ─────────────────────────────────────────────────────────────
 const EMPTY_LINE_MP = () => ({
   item: null, quantity: '', unit: 'kg', unit_price: '', warehouse_id: '', is_estimated: true,
-  price_source: null, supplier_sku: '', notes: '',
+  price_source: null, supplier_sku: '', supplier_description: '', show_internal_ref: true, notes: '',
 })
 const EMPTY_LINE_PT = () => ({
   item: null, quantity: '', unit: 'pza', unit_price: '', warehouse_id: '', product_meta: null,
-  price_source: null, supplier_sku: '', notes: '',
+  price_source: null, supplier_sku: '', supplier_description: '', show_internal_ref: true, notes: '',
 })
 
 // Chip que indica de dónde salió el precio sugerido del proveedor (espejo del
@@ -42,14 +42,22 @@ function SupplierPriceChip({ source }) {
 }
 
 // Consulta el precio sugerido del proveedor para una línea. Devuelve el patch a
-// aplicar ({ unit_price, price_source, supplier_sku }) o null. Best-effort.
+// aplicar (precio, clave, concepto y flag de ref. interna — solo lo que exista;
+// el backend puede conocer clave/concepto aunque no haya precio). Best-effort.
 async function fetchSupplierLinePrice(supplierId, itemType, itemId, currency) {
   if (!supplierId || !itemId) return null
   try {
     const res = await purchasesApi.suggestedSupplierPrice(supplierId, itemType, itemId, currency)
-    if (res?.unit_price != null) {
-      return { unit_price: String(res.unit_price), price_source: res.source || null, supplier_sku: res.supplierSku || null }
+    if (!res) return null
+    const patch = {}
+    if (res.unit_price != null) {
+      patch.unit_price   = String(res.unit_price)
+      patch.price_source = res.source || null
     }
+    if (res.supplierSku)              patch.supplier_sku = res.supplierSku
+    if (res.supplierDescription)      patch.supplier_description = res.supplierDescription
+    if (res.showInternalRef != null)  patch.show_internal_ref = res.showInternalRef !== false
+    if (Object.keys(patch).length) return patch
   } catch { /* sin precio previo → captura manual */ }
   return null
 }
@@ -331,6 +339,8 @@ function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
           warehouseId: l.warehouse_id,
           isEstimated: true,
           supplierSku: l.supplier_sku?.trim() || null,
+          supplierDescription: l.supplier_description?.trim() || null,
+          showInternalRef: l.show_internal_ref !== false,
           notes:       l.notes?.trim() || null,
         })),
       })
@@ -470,20 +480,43 @@ function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
                 </div>
               </div>
             </div>
-            {/* Clave del proveedor (se recuerda para la próxima OC) + nota de esta OC */}
+            {/* Clave + concepto del proveedor (se recuerdan para la próxima OC) + nota de esta OC.
+                Con concepto capturado, el PDF imprime SU concepto como descripción principal;
+                el checkbox decide si nuestra ref. interna aparece debajo o se oculta. */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="label">Clave del proveedor</label>
                 <input className="input" value={line.supplier_sku || ''}
                   onChange={e => updateLine(idx, 'supplier_sku', e.target.value)}
-                  placeholder="Cómo lo identifica el proveedor (opcional)" />
+                  placeholder="Su código para este artículo (opcional)" />
               </div>
+              <div>
+                <label className="label">Concepto del proveedor</label>
+                <input className="input" value={line.supplier_description || ''}
+                  onChange={e => updateLine(idx, 'supplier_description', e.target.value)}
+                  placeholder="Cómo lo llama el proveedor (opcional)" />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="label">Nota / detalle</label>
                 <input className="input" value={line.notes || ''}
                   onChange={e => updateLine(idx, 'notes', e.target.value)}
                   placeholder="Detalle extra de esta línea (opcional)" />
               </div>
+              <label
+                className={clsx(
+                  'flex items-center gap-2 self-end pb-2.5 cursor-pointer select-none',
+                  !line.supplier_description?.trim() && 'opacity-40 cursor-default'
+                )}
+                title="Con concepto del proveedor, la OC impresa usa su concepto. Marcado: tu clave y descripción internas aparecen debajo en gris. Desmarcado: la OC solo muestra lo del proveedor."
+              >
+                <input type="checkbox" className="w-4 h-4 accent-brand-600 rounded"
+                  checked={line.show_internal_ref !== false}
+                  disabled={!line.supplier_description?.trim()}
+                  onChange={e => updateLine(idx, 'show_internal_ref', e.target.checked)} />
+                <span className="text-xs text-ink-secondary">Mostrar ref. interna en el PDF</span>
+              </label>
             </div>
           </div>
         ))}
@@ -628,6 +661,8 @@ function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
           warehouseId: l.warehouse_id,
           isEstimated: false,
           supplierSku: l.supplier_sku?.trim() || null,
+          supplierDescription: l.supplier_description?.trim() || null,
+          showInternalRef: l.show_internal_ref !== false,
           notes:       l.notes?.trim() || null,
         })),
       })
@@ -758,20 +793,43 @@ function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
                 </div>
               </div>
             </div>
-            {/* Clave del proveedor (se recuerda para la próxima OC) + nota de esta OC */}
+            {/* Clave + concepto del proveedor (se recuerdan para la próxima OC) + nota de esta OC.
+                Con concepto capturado, el PDF imprime SU concepto como descripción principal;
+                el checkbox decide si nuestra ref. interna aparece debajo o se oculta. */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="label">Clave del proveedor</label>
                 <input className="input" value={line.supplier_sku || ''}
                   onChange={e => updateLine(idx, 'supplier_sku', e.target.value)}
-                  placeholder="Cómo lo identifica el proveedor (opcional)" />
+                  placeholder="Su código para este artículo (opcional)" />
               </div>
+              <div>
+                <label className="label">Concepto del proveedor</label>
+                <input className="input" value={line.supplier_description || ''}
+                  onChange={e => updateLine(idx, 'supplier_description', e.target.value)}
+                  placeholder="Cómo lo llama el proveedor (opcional)" />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="label">Nota / detalle</label>
                 <input className="input" value={line.notes || ''}
                   onChange={e => updateLine(idx, 'notes', e.target.value)}
                   placeholder="Detalle extra de esta línea (opcional)" />
               </div>
+              <label
+                className={clsx(
+                  'flex items-center gap-2 self-end pb-2.5 cursor-pointer select-none',
+                  !line.supplier_description?.trim() && 'opacity-40 cursor-default'
+                )}
+                title="Con concepto del proveedor, la OC impresa usa su concepto. Marcado: tu clave y descripción internas aparecen debajo en gris. Desmarcado: la OC solo muestra lo del proveedor."
+              >
+                <input type="checkbox" className="w-4 h-4 accent-brand-600 rounded"
+                  checked={line.show_internal_ref !== false}
+                  disabled={!line.supplier_description?.trim()}
+                  onChange={e => updateLine(idx, 'show_internal_ref', e.target.checked)} />
+                <span className="text-xs text-ink-secondary">Mostrar ref. interna en el PDF</span>
+              </label>
             </div>
           </div>
         ))}

@@ -236,15 +236,18 @@ async function createOrder({
             quantity, unit, unit_price, currency,
             is_estimated, estimated_qty, estimated_price,
             is_generic, generic_category,
-            warehouse_id, line_number, notes, supplier_sku)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+            warehouse_id, line_number, notes, supplier_sku,
+            supplier_description, show_internal_ref)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
         [order.id,
          line.itemType || null, line.itemId || null, line.description || null,
          line.quantity || 0, line.unit || 'kg', line.unitPrice || 0, resolvedCurrency,
          line.isEstimated || false, line.estimatedQty || null, line.estimatedPrice || null,
          line.isGeneric || false, line.genericCategory || null,
          line.warehouseId || null, i + 1, line.notes || null,
-         (line.supplierSku && String(line.supplierSku).trim()) || null]
+         (line.supplierSku && String(line.supplierSku).trim()) || null,
+         (line.supplierDescription && String(line.supplierDescription).trim()) || null,
+         line.showInternalRef !== false]
       )
     }
 
@@ -261,6 +264,8 @@ async function createOrder({
           unitPrice: l.isEstimated ? (l.estimatedPrice || l.unitPrice) : l.unitPrice,
           isGeneric: l.isGeneric,
           supplierSku: l.supplierSku || null,
+          supplierDescription: l.supplierDescription || null,
+          showInternalRef: l.showInternalRef ?? null,
         })),
       })
     }
@@ -427,7 +432,7 @@ async function addOrderLine({
   quantity, unit, unitPrice,
   isEstimated, estimatedQty, estimatedPrice,
   isGeneric, genericCategory,
-  warehouseId, notes, supplierSku,
+  warehouseId, notes, supplierSku, supplierDescription, showInternalRef,
   userId,
 }) {
   return withTransaction(async (client) => {
@@ -453,8 +458,9 @@ async function addOrderLine({
           quantity, unit, unit_price, currency,
           is_estimated, estimated_qty, estimated_price,
           is_generic, generic_category,
-          warehouse_id, line_number, notes, supplier_sku)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+          warehouse_id, line_number, notes, supplier_sku,
+          supplier_description, show_internal_ref)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
        RETURNING *`,
       [orderId,
        itemType || null, itemId || null, description || null,
@@ -462,7 +468,9 @@ async function addOrderLine({
        isEstimated || false, estimatedQty || null, estimatedPrice || null,
        isGeneric || false, genericCategory || null,
        warehouseId || null, maxLine[0].max + 1, notes || null,
-       (supplierSku && String(supplierSku).trim()) || null]
+       (supplierSku && String(supplierSku).trim()) || null,
+       (supplierDescription && String(supplierDescription).trim()) || null,
+       showInternalRef !== false]
     )
 
     await recalcOrderTotals(client, orderId)
@@ -476,6 +484,7 @@ async function addOrderLine({
 async function updateOrderLine({
   tenantId, orderId, lineId,
   quantity, unitPrice, estimatedQty, estimatedPrice, notes, supplierSku,
+  supplierDescription, showInternalRef,
 }) {
   return withTransaction(async (client) => {
     const { rows: order } = await client.query(
@@ -484,9 +493,10 @@ async function updateOrderLine({
     )
     if (order.length === 0) throw createError(404, 'OC no encontrada o ya no está en borrador.')
 
-    // notes / supplier_sku usan un centinela: undefined = no tocar; string (incl.
-    // vacío) = fijar/limpiar. Así editar la línea SÍ puede borrar una nota/clave,
-    // sin que COALESCE la conserve para siempre.
+    // notes / supplier_sku / supplier_description / show_internal_ref usan un
+    // centinela: undefined = no tocar; valor (incl. vacío) = fijar/limpiar. Así
+    // editar la línea SÍ puede borrar una nota/clave, sin que COALESCE la
+    // conserve para siempre.
     const { rows } = await client.query(
       `UPDATE purchase_order_lines SET
          quantity       = COALESCE($1, quantity),
@@ -494,11 +504,15 @@ async function updateOrderLine({
          estimated_qty  = COALESCE($3, estimated_qty),
          estimated_price= COALESCE($4, estimated_price),
          notes          = CASE WHEN $5::boolean THEN $6 ELSE notes END,
-         supplier_sku   = CASE WHEN $7::boolean THEN $8 ELSE supplier_sku END
-       WHERE id = $9 AND purchase_order_id = $10 RETURNING *`,
+         supplier_sku   = CASE WHEN $7::boolean THEN $8 ELSE supplier_sku END,
+         supplier_description = CASE WHEN $9::boolean  THEN $10 ELSE supplier_description END,
+         show_internal_ref    = CASE WHEN $11::boolean THEN $12::boolean ELSE show_internal_ref END
+       WHERE id = $13 AND purchase_order_id = $14 RETURNING *`,
       [quantity || null, unitPrice || null, estimatedQty || null, estimatedPrice || null,
        notes !== undefined, notes !== undefined ? (notes || null) : null,
        supplierSku !== undefined, supplierSku !== undefined ? ((supplierSku && String(supplierSku).trim()) || null) : null,
+       supplierDescription !== undefined, supplierDescription !== undefined ? ((supplierDescription && String(supplierDescription).trim()) || null) : null,
+       showInternalRef !== undefined && showInternalRef !== null, (showInternalRef !== undefined && showInternalRef !== null) ? showInternalRef !== false : null,
        lineId, orderId]
     )
     if (rows.length === 0) throw createError(404, 'Línea no encontrada.')
