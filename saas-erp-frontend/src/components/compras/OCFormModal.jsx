@@ -22,6 +22,23 @@ const EMPTY_LINE_PT = () => ({
   price_source: null, supplier_sku: '', supplier_description: '', show_internal_ref: true, notes: '',
 })
 
+// Convierte una línea del backend (getOrder) al estado del formulario — para
+// editar un borrador precargando lo capturado.
+const lineFromOrder = (l) => ({
+  item: l.item_id ? { id: l.item_id, label: l.item_name || l.description || '', unit: l.unit } : null,
+  quantity:     l.quantity != null ? String(parseFloat(l.quantity)) : '',
+  unit:         l.unit || 'kg',
+  unit_price:   l.unit_price != null ? String(parseFloat(l.unit_price)) : '',
+  warehouse_id: l.warehouse_id || '',
+  is_estimated: l.is_estimated !== false,
+  product_meta: null,
+  price_source: null,
+  supplier_sku:         l.supplier_sku || '',
+  supplier_description: l.supplier_description || '',
+  show_internal_ref:    l.show_internal_ref !== false,
+  notes: l.notes || '',
+})
+
 // Chip que indica de dónde salió el precio sugerido del proveedor (espejo del
 // chip de ventas). `source` puede traer sufijo `_converted` (USD→MXN).
 function SupplierPriceChip({ source }) {
@@ -232,13 +249,15 @@ function TotalesBlock({ lines, qtyField = 'quantity', currency, exchangeRate, ap
 }
 
 // ── Modal OC Materia Prima ─────────────────────────────────────────────────
-function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
+function OCFormMP({ onClose, onCreated, prefilledItem = null, editOrder = null }) {
   const qc = useQueryClient()
-  const [partner, setPartner]     = useState(null)
-  const [expectedDate, setDate]   = useState('')
-  const [currency, setCurrency]   = useState('MXN')
-  const [notes, setNotes]         = useState('')
-  const [applyTax, setApplyTax]   = useState(false)
+  const [partner, setPartner]     = useState(() => editOrder?.partner_id
+    ? { id: editOrder.partner_id, label: editOrder.partner_name || '' } : null)
+  const [expectedDate, setDate]   = useState(() => editOrder?.expected_date
+    ? String(editOrder.expected_date).slice(0, 10) : '')
+  const [currency, setCurrency]   = useState(editOrder?.currency || 'MXN')
+  const [notes, setNotes]         = useState(editOrder?.notes || '')
+  const [applyTax, setApplyTax]   = useState(() => editOrder ? parseFloat(editOrder.tax_mxn || 0) > 0 : false)
   const [error, setError]         = useState(null)
   const [customTC, setCustomTC]   = useState('')
 
@@ -249,6 +268,7 @@ function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
   const defaultWh = pickDefaultWarehouse(warehouses, ['raw_material'])
 
   const [lines, setLines]         = useState(() => {
+    if (editOrder?.lines?.length) return editOrder.lines.map(lineFromOrder)
     if (prefilledItem) {
       return [{
         item: {
@@ -322,7 +342,7 @@ function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
       if (!validLines.length) throw new Error('Agrega al menos un artículo con cantidad.')
       const missingWh = validLines.findIndex(l => !l.warehouse_id)
       if (missingWh >= 0) throw new Error(`Línea ${missingWh + 1}: falta seleccionar almacén destino.`)
-      return purchasesApi.createOrder({
+      const payload = {
         partnerId:    partner.id,
         expectedDate: expectedDate || null,
         currency,
@@ -343,10 +363,17 @@ function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
           showInternalRef: l.show_internal_ref !== false,
           notes:       l.notes?.trim() || null,
         })),
-      })
+      }
+      return editOrder
+        ? purchasesApi.updateOrder(editOrder.id, payload)
+        : purchasesApi.createOrder(payload)
     },
-    onSuccess: (oc) => { qc.invalidateQueries({ queryKey: ['purchase-orders'] }); onCreated(oc); onClose() },
-    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al crear la orden'),
+    onSuccess: (oc) => {
+      qc.invalidateQueries({ queryKey: ['purchase-orders'] })
+      if (editOrder) qc.invalidateQueries({ queryKey: ['purchase-order', editOrder.id] })
+      onCreated(oc); onClose()
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al guardar la orden'),
   })
 
   function handleSubmit(e) { e.preventDefault(); setError(null); mutation.mutate() }
@@ -533,7 +560,7 @@ function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
       <div className="flex gap-2 pt-1">
         <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancelar</button>
         <button type="submit" disabled={mutation.isPending} className="btn-primary flex-1">
-          {mutation.isPending ? <Spinner size="sm" /> : 'Crear orden de compra'}
+          {mutation.isPending ? <Spinner size="sm" /> : (editOrder ? 'Guardar cambios' : 'Crear orden de compra')}
         </button>
       </div>
     </form>
@@ -541,13 +568,15 @@ function OCFormMP({ onClose, onCreated, prefilledItem = null }) {
 }
 
 // ── Modal OC Producto Terminado ────────────────────────────────────────────
-function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
+function OCFormPT({ onClose, onCreated, prefilledItem = null, editOrder = null }) {
   const qc = useQueryClient()
-  const [partner, setPartner]   = useState(null)
-  const [expectedDate, setDate] = useState('')
-  const [currency, setCurrency] = useState('MXN')
-  const [notes, setNotes]       = useState('')
-  const [applyTax, setApplyTax] = useState(false)
+  const [partner, setPartner]   = useState(() => editOrder?.partner_id
+    ? { id: editOrder.partner_id, label: editOrder.partner_name || '' } : null)
+  const [expectedDate, setDate] = useState(() => editOrder?.expected_date
+    ? String(editOrder.expected_date).slice(0, 10) : '')
+  const [currency, setCurrency] = useState(editOrder?.currency || 'MXN')
+  const [notes, setNotes]       = useState(editOrder?.notes || '')
+  const [applyTax, setApplyTax] = useState(() => editOrder ? parseFloat(editOrder.tax_mxn || 0) > 0 : false)
   const [error, setError]       = useState(null)
   const [customTC, setCustomTC] = useState('')
 
@@ -558,6 +587,7 @@ function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
   const defaultWh = pickDefaultWarehouse(warehouses, ['finished_product', 'resale'])
 
   const [lines, setLines]       = useState(() => {
+    if (editOrder?.lines?.length) return editOrder.lines.map(lineFromOrder)
     if (prefilledItem) {
       return [{
         item: {
@@ -644,7 +674,7 @@ function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
       if (!validLines.length) throw new Error('Agrega al menos un artículo con cantidad.')
       const missingWh = validLines.findIndex(l => !l.warehouse_id)
       if (missingWh >= 0) throw new Error(`Línea ${missingWh + 1}: falta seleccionar almacén destino.`)
-      return purchasesApi.createOrder({
+      const payload = {
         partnerId:    partner.id,
         expectedDate: expectedDate || null,
         currency,
@@ -665,10 +695,17 @@ function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
           showInternalRef: l.show_internal_ref !== false,
           notes:       l.notes?.trim() || null,
         })),
-      })
+      }
+      return editOrder
+        ? purchasesApi.updateOrder(editOrder.id, payload)
+        : purchasesApi.createOrder(payload)
     },
-    onSuccess: (oc) => { qc.invalidateQueries({ queryKey: ['purchase-orders'] }); onCreated(oc); onClose() },
-    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al crear la orden'),
+    onSuccess: (oc) => {
+      qc.invalidateQueries({ queryKey: ['purchase-orders'] })
+      if (editOrder) qc.invalidateQueries({ queryKey: ['purchase-order', editOrder.id] })
+      onCreated(oc); onClose()
+    },
+    onError: (e) => setError(e.response?.data?.error || e.message || 'Error al guardar la orden'),
   })
 
   function handleSubmit(e) { e.preventDefault(); setError(null); mutation.mutate() }
@@ -846,7 +883,7 @@ function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
       <div className="flex gap-2 pt-1">
         <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancelar</button>
         <button type="submit" disabled={mutation.isPending} className="btn-primary flex-1">
-          {mutation.isPending ? <Spinner size="sm" /> : 'Crear orden de compra'}
+          {mutation.isPending ? <Spinner size="sm" /> : (editOrder ? 'Guardar cambios' : 'Crear orden de compra')}
         </button>
       </div>
     </form>
@@ -854,7 +891,7 @@ function OCFormPT({ onClose, onCreated, prefilledItem = null }) {
 }
 
 // ── Modal wrapper con título y tipo ────────────────────────────────────────
-export function OCFormModal({ type, onClose, onCreated, prefilledItem = null }) {
+export function OCFormModal({ type, onClose, onCreated, prefilledItem = null, editOrder = null }) {
   const isMP = type === 'raw_material'
 
   return createPortal(
@@ -875,12 +912,16 @@ export function OCFormModal({ type, onClose, onCreated, prefilledItem = null }) 
             </div>
             <div>
               <h2 className="text-base font-semibold text-ink-primary">
-                Nueva OC — {isMP ? 'Materia Prima' : 'Producto Terminado'}
+                {editOrder
+                  ? `Editar ${editOrder.order_number}`
+                  : `Nueva OC — ${isMP ? 'Materia Prima' : 'Producto Terminado'}`}
               </h2>
               <p className="text-xs text-ink-muted mt-0.5">
-                {prefilledItem
-                  ? `Reposición sugerida desde Inventario · ${prefilledItem.itemName}`
-                  : (isMP ? 'Cantidades estimadas · se confirman en recepción' : 'Cantidades firmes · almacén y precio precargados')}
+                {editOrder
+                  ? 'Borrador editable · los cambios no afectan nada hasta confirmar la OC'
+                  : prefilledItem
+                    ? `Reposición sugerida desde Inventario · ${prefilledItem.itemName}`
+                    : (isMP ? 'Cantidades estimadas · se confirman en recepción' : 'Cantidades firmes · almacén y precio precargados')}
               </p>
             </div>
           </div>
@@ -892,8 +933,8 @@ export function OCFormModal({ type, onClose, onCreated, prefilledItem = null }) 
         </div>
 
         {isMP
-          ? <OCFormMP onClose={onClose} onCreated={onCreated} prefilledItem={prefilledItem} />
-          : <OCFormPT onClose={onClose} onCreated={onCreated} prefilledItem={prefilledItem} />
+          ? <OCFormMP onClose={onClose} onCreated={onCreated} prefilledItem={prefilledItem} editOrder={editOrder} />
+          : <OCFormPT onClose={onClose} onCreated={onCreated} prefilledItem={prefilledItem} editOrder={editOrder} />
         }
       </div>
     </div>,

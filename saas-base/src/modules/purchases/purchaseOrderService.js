@@ -396,31 +396,170 @@ async function closeOrderReception({ tenantId, orderId, reason, userId, ipAddres
 }
 
 /**
- * Edita datos generales de una OC en draft.
+ * Edita una OC en draft. Dos modos según el body:
+ *  - Parcial (sin `lines`): expectedDate / notes / genericSupplier con COALESCE.
+ *  - Completo (con `lines`): el "Editar borrador" del formulario de OC —
+ *    actualiza proveedor, moneda, IVA y REEMPLAZA todas las líneas (un draft
+ *    no tiene recepciones ligadas, así que el reemplazo es seguro).
  */
 async function updateOrder({
-  tenantId, orderId, expectedDate, notes, genericSupplier,
+  tenantId, orderId,
+  partnerId, isGeneric, genericSupplier,
+  currency, taxRate, expectedDate, notes, lines,
   userId, ipAddress, userAgent,
 }) {
-  const { rows } = await query(
-    `UPDATE purchase_orders SET
-       expected_date    = COALESCE($1, expected_date),
-       notes            = COALESCE($2, notes),
-       generic_supplier = COALESCE($3, generic_supplier)
-     WHERE id = $4 AND tenant_id = $5 AND status = 'draft'
-     RETURNING id, order_number, status, expected_date`,
-    [expectedDate || null, notes || null, genericSupplier || null, orderId, tenantId]
-  )
-  if (rows.length === 0) throw createError(404, 'OC no encontrada o ya no está en borrador.')
+  const fullEdit = Array.isArray(lines)
+  if (fullEdit && lines.length === 0) throw createError(400, 'Se requiere al menos una línea.')
 
-  await audit({
-    tenantId, userId, action: 'purchase_order.updated',
-    resource: 'purchase_orders', resourceId: orderId,
-    payload: { expectedDate, genericSupplier },
-    ipAddress, userAgent,
+  return withTransaction(async (client) => {
+    const { rows: existing } = await client.query(
+      `SELECT * FROM purchase_orders
+       WHERE id = $1 AND tenant_id = $2 AND status = 'draft'
+       FOR UPDATE`,
+      [orderId, tenantId]
+    )
+    if (existing.length === 0) throw createError(404, 'OC no encontrada o ya no está en borrador.')
+    const prev = existing[0]
+
+    if (!fullEdit) {
+      const { rows } = await client.query(
+        `UPDATE purchase_orders SET
+           expected_date    = COALESCE($1, expected_date),
+           notes            = COALESCE($2, notes),
+           generic_supplier = COALESCE($3, generic_supplier)
+         WHERE id = $4 AND tenant_id = $5
+         RETURNING id, order_number, status, expected_date`,
+        [expectedDate || null, notes || null, genericSupplier || null, orderId, tenantId]
+      )
+
+      await audit({
+        tenantId, userId, action: 'purchase_order.updated',
+        resource: 'purchase_orders', resourceId: orderId,
+        payload: { expectedDate, genericSupplier },
+        ipAddress, userAgent,
+      })
+
+      return rows[0]
+    }
+
+    // ── Edición completa ────────────────────────────────────────────────────
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i]
+      if (!l.isGeneric && l.itemId && !l.warehouseId) {
+        throw createError(400, `Línea ${i + 1}: falta seleccionar almacén destino.`)
+      }
+    }
+
+    // Moneda y TC: al cambiar (o entrar) a USD se resuelve el TC oficial de hoy,
+    // igual que en createOrder. Si ya estaba en USD se conserva el TC original.
+    const resolvedCurrency = currency || prev.currency || 'MXN'
+    let exchangeRateId = prev.exchange_rate_id
+    let exchangeRateValue = parseFloat(prev.exchange_rate_value || 1)
+    if (resolvedCurrency === 'USD') {
+      if (prev.currency !== 'USD' || !prev.exchange_rate_id) {
+        const today = new Date().toISOString().split('T')[0]
+        const rate = await getRateForDate({ tenantId, date: today, currency: 'USD' })
+        if (!rate) throw createError(400, 'No hay tipo de cambio disponible para hoy. Sincroniza el TC primero.')
+        exchangeRateId = rate.id
+        exchangeRateValue = parseFloat(rate.rate_mxn)
+      }
+    } else {
+      exchangeRateId = null
+      exchangeRateValue = 1
+    }
+
+    const resolvedTaxRate = (taxRate !== undefined && taxRate !== null)
+      ? parseFloat(taxRate)
+      : (parseFloat(prev.tax_mxn || 0) > 0 ? 0.16 : 0)
+
+    let subtotal = 0
+    for (const line of lines) {
+      const price = line.isEstimated ? (line.estimatedPrice || line.unitPrice || 0) : (line.unitPrice || 0)
+      const qty   = line.isEstimated ? (line.estimatedQty  || line.quantity  || 0) : (line.quantity  || 0)
+      subtotal += qty * price
+    }
+    const tax    = subtotal * resolvedTaxRate
+    const total  = subtotal + tax
+    const factor = resolvedCurrency === 'USD' ? exchangeRateValue : 1
+
+    const { rows } = await client.query(
+      `UPDATE purchase_orders SET
+         partner_id          = $1,
+         is_generic          = $2,
+         generic_supplier    = $3,
+         currency            = $4,
+         exchange_rate_id    = $5,
+         exchange_rate_value = $6,
+         subtotal_mxn        = $7,
+         tax_mxn             = $8,
+         total_mxn           = $9,
+         expected_date       = $10,
+         notes               = $11
+       WHERE id = $12 AND tenant_id = $13
+       RETURNING *`,
+      [partnerId !== undefined ? (partnerId || null) : prev.partner_id,
+       isGeneric !== undefined ? !!isGeneric : prev.is_generic,
+       genericSupplier !== undefined ? (genericSupplier || null) : prev.generic_supplier,
+       resolvedCurrency, exchangeRateId, resolvedCurrency === 'USD' ? exchangeRateValue : null,
+       subtotal * factor, tax * factor, total * factor,
+       expectedDate !== undefined ? (expectedDate || null) : prev.expected_date,
+       notes !== undefined ? (notes || null) : prev.notes,
+       orderId, tenantId]
+    )
+    const order = rows[0]
+
+    await client.query(
+      `DELETE FROM purchase_order_lines WHERE purchase_order_id = $1`, [orderId]
+    )
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      await client.query(
+        `INSERT INTO purchase_order_lines
+           (purchase_order_id, item_type, item_id, description,
+            quantity, unit, unit_price, currency,
+            is_estimated, estimated_qty, estimated_price,
+            is_generic, generic_category,
+            warehouse_id, line_number, notes, supplier_sku,
+            supplier_description, show_internal_ref)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+        [orderId,
+         line.itemType || null, line.itemId || null, line.description || null,
+         line.quantity || 0, line.unit || 'kg', line.unitPrice || 0, resolvedCurrency,
+         line.isEstimated || false, line.estimatedQty || null, line.estimatedPrice || null,
+         line.isGeneric || false, line.genericCategory || null,
+         line.warehouseId || null, i + 1, line.notes || null,
+         (line.supplierSku && String(line.supplierSku).trim()) || null,
+         (line.supplierDescription && String(line.supplierDescription).trim()) || null,
+         line.showInternalRef !== false]
+      )
+    }
+
+    // Re-aprender precios del proveedor con las líneas editadas (best-effort).
+    if (order.partner_id) {
+      await supplierPriceService.learnFromLines(client, {
+        tenantId, supplierId: order.partner_id, currency: resolvedCurrency,
+        source: 'po', userId,
+        lines: lines.map(l => ({
+          itemType:  l.itemType,
+          itemId:    l.itemId,
+          unitPrice: l.isEstimated ? (l.estimatedPrice || l.unitPrice) : l.unitPrice,
+          isGeneric: l.isGeneric,
+          supplierSku: l.supplierSku || null,
+          supplierDescription: l.supplierDescription || null,
+          showInternalRef: l.showInternalRef ?? null,
+        })),
+      })
+    }
+
+    await audit({
+      tenantId, userId, action: 'purchase_order.updated',
+      resource: 'purchase_orders', resourceId: orderId,
+      payload: { orderNumber: order.order_number, fullEdit: true, total: total * factor },
+      ipAddress, userAgent,
+    })
+
+    return order
   })
-
-  return rows[0]
 }
 
 /**

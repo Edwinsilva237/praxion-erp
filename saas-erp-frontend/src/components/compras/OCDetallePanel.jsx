@@ -526,6 +526,11 @@ function AccionesOC({ oc, onAction, loadingAction }) {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7"/>
         </svg>}
       />
+      <Btn label="Editar" action="edit"
+        icon={<svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+        </svg>}
+      />
       <PdfBtn /><EmailBtn /><CancelBtn />
     </div>
   )
@@ -552,7 +557,7 @@ function AccionesOC({ oc, onAction, loadingAction }) {
 }
 
 // ── Panel principal ────────────────────────────────────────────────────────
-export function OCDetallePanel({ ocId, onClose, onGoToRecepcion }) {
+export function OCDetallePanel({ ocId, onClose, onGoToRecepcion, onEdit }) {
   const qc = useQueryClient()
   const [tab, setTab]               = useState('detalle')
   const [loadingAction, setLoading] = useState(null)
@@ -606,6 +611,10 @@ export function OCDetallePanel({ ocId, onClose, onGoToRecepcion }) {
     try {
       if (action === 'email') {
         setShowEmail(true)
+        setLoading(null); return
+      }
+      if (action === 'edit') {
+        onEdit?.(oc)
         setLoading(null); return
       }
       if (action === 'confirm') {

@@ -73,6 +73,7 @@ export default function ComprasOrdenes() {
   const [showTypeSelector, setShowTypeSelector] = useState(false)
   const [formType, setFormType]                 = useState(null)   // 'raw_material' | 'product'
   const [prefilledItem, setPrefilledItem]       = useState(null)   // viene desde Inventario
+  const [editOc, setEditOc]                     = useState(null)   // OC en borrador a editar
   const [selectedOcId, setSelectedOcId]         = useState(null)
   const [createdMsg, setCreatedMsg]             = useState(null)
 
@@ -121,9 +122,17 @@ export default function ComprasOrdenes() {
     setFormType(type)
   }
 
-  function handleCreated(oc) {
-    setCreatedMsg(`OC ${oc.order_number} creada correctamente.`)
+  function handleCreated(oc, wasEdit = false) {
+    setCreatedMsg(`OC ${oc.order_number} ${wasEdit ? 'actualizada' : 'creada'} correctamente.`)
     setTimeout(() => setCreatedMsg(null), 5000)
+  }
+
+  // Abre el formulario en modo edición con el borrador precargado.
+  function handleEdit(oc) {
+    setSelectedOcId(null)
+    setEditOc(oc)
+    const isMP = oc.order_type === 'raw_material' || oc.lines?.some(l => l.item_type === 'raw_material')
+    setFormType(isMP ? 'raw_material' : 'product')
   }
 
   function handleGoToRecepcion(oc) {
@@ -363,8 +372,9 @@ export default function ComprasOrdenes() {
         <OCFormModal
           type={formType}
           prefilledItem={prefilledItem}
-          onClose={() => { setFormType(null); setPrefilledItem(null) }}
-          onCreated={(oc) => { handleCreated(oc); setPrefilledItem(null) }}
+          editOrder={editOc}
+          onClose={() => { setFormType(null); setPrefilledItem(null); setEditOc(null) }}
+          onCreated={(oc) => { handleCreated(oc, !!editOc); setPrefilledItem(null); setEditOc(null) }}
         />
       )}
 
@@ -373,6 +383,7 @@ export default function ComprasOrdenes() {
           ocId={selectedOcId}
           onClose={() => setSelectedOcId(null)}
           onGoToRecepcion={handleGoToRecepcion}
+          onEdit={handleEdit}
         />
       )}
     </div>
