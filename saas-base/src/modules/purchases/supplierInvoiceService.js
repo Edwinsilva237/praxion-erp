@@ -1714,6 +1714,269 @@ async function unlinkInvoiceFromReceipt({ tenantId, expenseId, userId, ipAddress
   })
 }
 
+/**
+ * Candidatos a CFDI SUSTITUTO de una factura de compra: gastos sueltos del MISMO
+ * proveedor (así caen los CFDI del buzón de correo), vivos y sin recepción ligada.
+ * Ordenados por cercanía de monto a la factura sustituida (la sustitución normalmente
+ * es por el mismo total). `references_old_uuid` marca los que traen el UUID de la
+ * factura vieja en su XML (relación SAT 04 = sustitución detectada).
+ */
+async function listSubstituteCandidates({ tenantId, invoiceId }) {
+  const { rows: oldRows } = await query(
+    `SELECT id, partner_id, uuid_sat, total_mxn FROM supplier_invoices
+      WHERE id = $1 AND tenant_id = $2 AND type = 'invoice'`,
+    [invoiceId, tenantId]
+  )
+  if (!oldRows.length) throw createError(404, 'Factura no encontrada.')
+  const old = oldRows[0]
+  if (!old.partner_id) throw createError(400, 'La factura no tiene proveedor del catálogo.')
+
+  const { rows } = await query(
+    `SELECT si.id, si.invoice_number, si.uuid_sat, si.invoice_date, si.received_date,
+            si.currency, si.total, si.total_mxn, si.metodo_pago_sat,
+            COALESCE($3::text IS NOT NULL AND si.xml_content ILIKE '%' || $3 || '%', false)
+              AS references_old_uuid
+       FROM supplier_invoices si
+      WHERE si.tenant_id = $1 AND si.partner_id = $2
+        AND si.is_expense = true AND si.type = 'invoice'
+        AND si.status <> 'cancelled' AND si.id <> $4
+        AND NOT EXISTS (
+          SELECT 1 FROM invoice_receipt_links irl WHERE irl.supplier_invoice_id = si.id
+        )
+      ORDER BY references_old_uuid DESC,
+               ABS(COALESCE(si.total_mxn, 0) - $5::numeric) ASC,
+               si.received_date DESC
+      LIMIT 20`,
+    [tenantId, old.partner_id, old.uuid_sat || null, invoiceId, old.total_mxn || 0]
+  )
+  return rows
+}
+
+/**
+ * SUSTITUYE un CFDI de proveedor: el proveedor canceló la factura ante el SAT y
+ * emitió una sustitución. En UNA transacción:
+ *   1. Cancela la factura vieja (+ su CxP) anotando la referencia cruzada.
+ *   2. Libera sus recepciones/líneas y las traspasa al CFDI sustituto.
+ *   3. El sustituto puede ser un GASTO ya en el sistema (`newExpenseId` — se
+ *      reclasifica en su lugar, como link-receipt) o los datos de un XML nuevo
+ *      (`invoice` — se registra vía registerInvoice reusando esta txn).
+ * Bloqueado si la vieja tiene pagos aplicados (reversar el pago primero).
+ */
+async function substituteInvoice({
+  tenantId, invoiceId, newExpenseId = null, invoice: newInvoiceData = null,
+  reason = null, userId, ipAddress, userAgent,
+}) {
+  if (!newExpenseId && !newInvoiceData) {
+    throw createError(400, 'Indica el CFDI sustituto: uno ya registrado (newExpenseId) o los datos del XML (invoice).')
+  }
+
+  return withTransaction(async (client) => {
+    // 1. La factura vieja, con candados.
+    const { rows: oldRows } = await client.query(
+      `SELECT si.*, ap.id AS ap_id, ap.amount_paid AS ap_amount_paid,
+              bp.rfc AS partner_rfc
+         FROM supplier_invoices si
+         LEFT JOIN accounts_payable ap
+           ON ap.document_id = si.id AND ap.tenant_id = si.tenant_id
+          AND ap.document_type = 'invoice'
+         LEFT JOIN business_partners bp ON bp.id = si.partner_id
+        WHERE si.id = $1 AND si.tenant_id = $2 AND si.type = 'invoice'
+        FOR UPDATE OF si`,
+      [invoiceId, tenantId]
+    )
+    if (!oldRows.length) throw createError(404, 'Factura no encontrada.')
+    const old = oldRows[0]
+    if (old.status === 'cancelled') throw createError(409, 'La factura ya está cancelada.')
+    if (!old.partner_id) throw createError(400, 'La factura no tiene proveedor del catálogo.')
+    if (parseFloat(old.ap_amount_paid || 0) > 0) {
+      throw createError(409,
+        'La factura tiene pagos aplicados. Reversa el pago (en Pagos emitidos) y vuelve a intentar la sustitución.')
+    }
+
+    // 2. Sus enlaces actuales (recepciones + líneas cubiertas) — se heredarán.
+    const { rows: links } = await client.query(
+      `SELECT supplier_receipt_id, amount_applied FROM invoice_receipt_links
+        WHERE tenant_id = $1 AND supplier_invoice_id = $2`,
+      [tenantId, invoiceId]
+    )
+    const { rows: coveredLines } = await client.query(
+      `SELECT id FROM supplier_receipt_lines WHERE invoiced_by_invoice_id = $1`,
+      [invoiceId]
+    )
+    const receiptIds      = links.map(l => l.supplier_receipt_id)
+    const coveredLineIds  = coveredLines.map(l => l.id)
+
+    // 3. Si el sustituto ya está en el sistema, validarlo ANTES de tocar nada.
+    let candidate = null
+    if (newExpenseId) {
+      const { rows: candRows } = await client.query(
+        `SELECT si.* FROM supplier_invoices si
+          WHERE si.id = $1 AND si.tenant_id = $2
+          FOR UPDATE OF si`,
+        [newExpenseId, tenantId]
+      )
+      if (!candRows.length) throw createError(404, 'El CFDI sustituto no se encontró.')
+      candidate = candRows[0]
+      if (!candidate.is_expense || candidate.type !== 'invoice') {
+        throw createError(409, 'El CFDI elegido ya está vinculado o no es una factura.')
+      }
+      if (candidate.status === 'cancelled') throw createError(409, 'El CFDI elegido está cancelado.')
+      if (candidate.partner_id !== old.partner_id) {
+        throw createError(400, 'El CFDI elegido es de otro proveedor.')
+      }
+      const { rows: candLinks } = await client.query(
+        `SELECT 1 FROM invoice_receipt_links WHERE supplier_invoice_id = $1 LIMIT 1`,
+        [newExpenseId]
+      )
+      if (candLinks.length) throw createError(409, 'El CFDI elegido ya está ligado a una recepción.')
+    } else {
+      // Sustituto por XML: candados de datos.
+      if (newInvoiceData.uuidSat && old.uuid_sat && newInvoiceData.uuidSat === old.uuid_sat) {
+        throw createError(400, 'El XML es el MISMO CFDI que estás sustituyendo (mismo UUID).')
+      }
+      const newRfc = (newInvoiceData.rfcEmisor || '').toUpperCase().replace(/\s+/g, '')
+      const oldRfc = (old.partner_rfc || '').toUpperCase().replace(/\s+/g, '')
+      if (newRfc && oldRfc && newRfc !== oldRfc) {
+        throw createError(400,
+          `El RFC del XML (${newRfc}) no coincide con el del proveedor (${oldRfc}).`)
+      }
+    }
+    const newRef = newExpenseId
+      ? (candidate.uuid_sat || candidate.invoice_number)
+      : (newInvoiceData.uuidSat || newInvoiceData.documentNumber)
+    const oldRef = old.uuid_sat || old.invoice_number
+
+    // 4. Liberar recepciones/líneas y cancelar la vieja + su CxP.
+    await client.query(
+      `UPDATE supplier_receipt_lines SET invoiced_by_invoice_id = NULL
+        WHERE invoiced_by_invoice_id = $1`, [invoiceId])
+    await client.query(
+      `DELETE FROM invoice_receipt_links WHERE tenant_id = $1 AND supplier_invoice_id = $2`,
+      [tenantId, invoiceId])
+    await client.query(
+      `UPDATE supplier_invoices
+          SET status = 'cancelled', updated_at = NOW(),
+              notes = COALESCE(notes, '') || $3
+        WHERE id = $1 AND tenant_id = $2`,
+      [invoiceId, tenantId,
+       `\n[Sustituida] por CFDI ${newRef}${reason ? ` — ${reason}` : ''}`])
+    if (old.ap_id) {
+      await client.query(
+        `UPDATE accounts_payable SET status = 'cancelled' WHERE id = $1 AND tenant_id = $2`,
+        [old.ap_id, tenantId])
+    }
+
+    // 5. El sustituto toma su lugar.
+    let newInvoice
+    if (newExpenseId) {
+      // Reclasificar el gasto en su lugar y heredar los MISMOS enlaces/líneas.
+      const round2 = (n) => parseFloat(Number(n || 0).toFixed(2))
+      const candSubtotalMxn = candidate.currency === 'USD'
+        ? round2(parseFloat(candidate.subtotal || 0) * parseFloat(candidate.exchange_rate_value || 1))
+        : round2(candidate.subtotal)
+      const coverage = round2(links.reduce((s, l) => s + parseFloat(l.amount_applied || 0), 0))
+      const reconDiff   = round2(candSubtotalMxn - coverage)
+      const reconStatus = receiptIds.length === 0 ? 'pending'
+                        : Math.abs(reconDiff) < 0.01 ? 'reconciled' : 'with_diff'
+
+      await client.query(
+        `UPDATE supplier_invoices
+            SET is_expense = false, expense_category_id = NULL,
+                supplier_receipt_id = $3,
+                reconciliation_status = $4, reconciliation_diff = $5,
+                notes = COALESCE(notes, '') || $6, updated_at = NOW()
+          WHERE id = $1 AND tenant_id = $2`,
+        [newExpenseId, tenantId, receiptIds[0] || null, reconStatus,
+         receiptIds.length ? reconDiff : null,
+         `\n[Sustituye] al CFDI ${oldRef}`])
+      for (const l of links) {
+        await client.query(
+          `INSERT INTO invoice_receipt_links (tenant_id, supplier_invoice_id, supplier_receipt_id, amount_applied)
+           VALUES ($1,$2,$3,$4) ON CONFLICT (supplier_invoice_id, supplier_receipt_id) DO NOTHING`,
+          [tenantId, newExpenseId, l.supplier_receipt_id, l.amount_applied])
+      }
+      if (coveredLineIds.length) {
+        await client.query(
+          `UPDATE supplier_receipt_lines SET invoiced_by_invoice_id = $1 WHERE id = ANY($2::uuid[])`,
+          [newExpenseId, coveredLineIds])
+      }
+      // El gasto ya trae su CxP; por si acaso (gasto genérico reasignado) se asegura.
+      await client.query(
+        `INSERT INTO accounts_payable
+           (tenant_id, partner_id, document_type, document_id, document_number,
+            currency, exchange_rate, amount_total, issue_date, due_date, created_by)
+         VALUES ($1,$2,'invoice',$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT (tenant_id, document_type, document_id) DO NOTHING`,
+        [tenantId, candidate.partner_id, newExpenseId, candidate.invoice_number,
+         candidate.currency, candidate.exchange_rate_value || 1, candidate.total_mxn,
+         candidate.invoice_date, candidate.due_date, userId])
+
+      const { rows: fresh } = await client.query(
+        `SELECT * FROM supplier_invoices WHERE id = $1 AND tenant_id = $2`,
+        [newExpenseId, tenantId])
+      newInvoice = fresh[0]
+    } else {
+      // Registrar el XML nuevo reusando esta transacción, ligado a las mismas
+      // recepciones/líneas (recién liberadas — registerInvoice las toma).
+      newInvoice = await registerInvoice({
+        tenantId,
+        supplierId:     old.partner_id,
+        documentType:   'invoice',
+        documentNumber: newInvoiceData.documentNumber,
+        uuidSat:        newInvoiceData.uuidSat || null,
+        serie:          newInvoiceData.serie || null,
+        folio:          newInvoiceData.folio || null,
+        rfcEmisor:      newInvoiceData.rfcEmisor || null,
+        invoiceDate:    newInvoiceData.invoiceDate || null,
+        currency:       newInvoiceData.currency || 'MXN',
+        subtotal:       parseFloat(newInvoiceData.subtotal) || 0,
+        tax:            parseFloat(newInvoiceData.tax) || 0,
+        total:          parseFloat(newInvoiceData.total) || 0,
+        metodoPagoSat:  newInvoiceData.metodoPagoSat || null,
+        receiptIds,
+        receiptLineIds: coveredLineIds.length ? coveredLineIds : undefined,
+        notes: `${newInvoiceData.notes ? `${newInvoiceData.notes}\n` : ''}[Sustituye] al CFDI ${oldRef}`,
+        userId, ipAddress, userAgent,
+        client,
+      })
+    }
+
+    // 6. Recomputar invoiced_at de las recepciones afectadas.
+    for (const rid of receiptIds) {
+      await client.query(
+        `UPDATE supplier_receipts sr
+            SET invoiced_at = CASE WHEN NOT EXISTS (
+                  SELECT 1 FROM supplier_receipt_lines srl
+                   LEFT JOIN supplier_invoices ci ON ci.id = srl.invoiced_by_invoice_id
+                  WHERE srl.supplier_receipt_id = sr.id
+                    AND (srl.invoiced_by_invoice_id IS NULL OR ci.status = 'cancelled')
+                ) THEN COALESCE(sr.invoiced_at, NOW()) ELSE NULL END
+          WHERE sr.id = $1 AND sr.tenant_id = $2`,
+        [rid, tenantId]
+      )
+    }
+
+    await audit({
+      tenantId, userId, action: 'supplier_invoice.substituted',
+      resource: 'supplier_invoices', resourceId: invoiceId,
+      payload: {
+        oldUuid: old.uuid_sat, oldNumber: old.invoice_number,
+        newInvoiceId: newInvoice.id, newUuid: newInvoice.uuid_sat,
+        newNumber: newInvoice.invoice_number,
+        receiptIds, reason: reason || null,
+        via: newExpenseId ? 'existing_expense' : 'uploaded_xml',
+      },
+      ipAddress, userAgent,
+    })
+
+    return {
+      old: { id: old.id, invoice_number: old.invoice_number, uuid_sat: old.uuid_sat, status: 'cancelled' },
+      new: newInvoice,
+      receiptIds,
+    }
+  })
+}
+
 // Tolerancia de monto para SUGERIR que un gasto cuadra con una recepción (±2%).
 const RECEIPT_SUGGEST_TOLERANCE = 0.02
 
@@ -2065,5 +2328,5 @@ module.exports = {
   listExpensesSummary, getExpense, updateExpense, cancelExpense, linkExpenseToReceipt,
   assignExpenseSupplier, payExpense, getExpenseConceptos, reReadExpenseFromXml,
   suggestReceiptForExpense, requestExpenseInvoice, registerPayment, reverseSupplierPayment, getSupplierStatement,
-  unlinkInvoiceFromReceipt,
+  unlinkInvoiceFromReceipt, listSubstituteCandidates, substituteInvoice,
 }

@@ -7,6 +7,8 @@ import { printBlob, downloadBlob } from '@/utils/downloadBlob'
 import { fmtMXN, fmtDateOnly } from '@/utils/fmt'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
+import Can from '@/components/auth/Can'
+import { SustituirCfdiModal } from '@/components/compras/SustituirCfdiModal'
 import clsx from 'clsx'
 
 // Abre/imprime un adjunto (XML/PDF/imagen) según plataforma.
@@ -35,6 +37,7 @@ export function FacturaProveedorDetallePanel({ invoiceId, onClose }) {
   const qc = useQueryClient()
   const [err, setErr] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [showSubstitute, setShowSubstitute] = useState(false)
 
   const { data: inv, isLoading, error: queryError } = useQuery({
     queryKey: ['purchase-invoice-detail', invoiceId],
@@ -160,6 +163,20 @@ export function FacturaProveedorDetallePanel({ invoiceId, onClose }) {
                 </div>
               )}
 
+              {/* Acciones — sustituir CFDI (el proveedor canceló ante el SAT y re-facturó) */}
+              {!isRemission && inv.status !== 'cancelled' && (
+                <Can do="purchases:update">
+                  <div className="flex flex-col sm:flex-row gap-2 border-t border-line-subtle pt-3">
+                    <button onClick={() => setShowSubstitute(true)} className="btn-secondary btn-sm justify-center">
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                      </svg>
+                      Sustituir CFDI
+                    </button>
+                  </div>
+                </Can>
+              )}
+
               {/* Respaldo (XML/PDF) */}
               <div className="border border-line-subtle rounded-xl p-3 flex flex-col gap-2">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
@@ -192,6 +209,17 @@ export function FacturaProveedorDetallePanel({ invoiceId, onClose }) {
           )}
         </div>
       </div>
+
+      {showSubstitute && inv && (
+        <SustituirCfdiModal
+          invoice={inv}
+          onClose={() => setShowSubstitute(false)}
+          onDone={() => {
+            qc.invalidateQueries({ queryKey: ['purchase-invoice-detail', invoiceId] })
+            onClose()
+          }}
+        />
+      )}
     </div>,
     document.body
   )

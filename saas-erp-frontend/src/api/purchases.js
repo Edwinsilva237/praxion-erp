@@ -66,6 +66,14 @@ export const purchasesApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     }).then(r => r.data),
 
+  // Sustitución de CFDI (el proveedor canceló ante el SAT y emitió otro):
+  // candidatos = gastos sueltos del mismo proveedor (p.ej. llegados por el buzón).
+  substituteCandidates: (id) =>
+    api.get(`${B}/invoices/${id}/substitute-candidates`).then(r => r.data),
+  // body: { newExpenseId } o { invoice: {...datos del XML} }, + { reason? }
+  substituteInvoice: (id, body) =>
+    api.post(`${B}/invoices/${id}/substitute`, body).then(r => r.data),
+
   // Adjuntos (respaldo XML/PDF) de una factura de proveedor.
   listInvoiceAttachments: (id) =>
     api.get(`${B}/invoices/${id}/attachments`).then(r => r.data),

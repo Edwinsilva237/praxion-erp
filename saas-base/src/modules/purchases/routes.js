@@ -1257,6 +1257,46 @@ router.get('/invoices/:id', checkPermission('purchases', 'read'), async (req, re
 })
 
 /**
+ * GET /api/purchases/invoices/:id/substitute-candidates
+ * Gastos sueltos del mismo proveedor que pueden ser el CFDI sustituto
+ * (así caen los del buzón de correo). Ordenados por cercanía de monto.
+ */
+router.get('/invoices/:id/substitute-candidates',
+  checkPermission('purchases', 'read'),
+  async (req, res, next) => {
+    try {
+      const candidates = await supplierInvoiceService.listSubstituteCandidates({
+        tenantId: req.tenant.id, invoiceId: req.params.id,
+      })
+      res.json(candidates)
+    } catch (err) { next(err) }
+  })
+
+/**
+ * POST /api/purchases/invoices/:id/substitute
+ * Sustituye el CFDI (el proveedor lo canceló ante el SAT y emitió otro):
+ * cancela la factura + su CxP y traspasa sus recepciones al sustituto.
+ * Body: { newExpenseId? }  — un CFDI ya en el sistema (gasto suelto), O
+ *       { invoice: { documentNumber, uuidSat?, serie?, folio?, rfcEmisor?,
+ *                    invoiceDate?, currency?, subtotal, tax, total, notes? } }
+ *       + { reason? }
+ */
+router.post('/invoices/:id/substitute',
+  checkPermission('purchases', 'update'),
+  async (req, res, next) => {
+    try {
+      const result = await supplierInvoiceService.substituteInvoice({
+        tenantId: req.tenant.id, invoiceId: req.params.id,
+        newExpenseId: req.body.newExpenseId || null,
+        invoice:      req.body.invoice || null,
+        reason:       req.body.reason || null,
+        userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+      })
+      res.json(result)
+    } catch (err) { next(err) }
+  })
+
+/**
  * Parsea un XML CFDI 4.0 y devuelve los datos extraídos + proveedor encontrado.
  */
 router.post('/invoices/parse-xml',
