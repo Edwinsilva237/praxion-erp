@@ -233,11 +233,46 @@ async function getCXP({ tenantId, apId }) {
   return { ...ap, sourceDoc, payments, attachments, availableAdvances: advances }
 }
 
+// Estado REP por pago (mig 235). Un pago "requiere" REP solo si liquidó
+// facturas PPD; "cuadra" = la suma de sus REPs ligados coincide con el monto
+// del pago con la misma tolerancia del auto-cruce: máx($1, 0.5%).
+const REP_JOINS = `
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS rep_count,
+                COALESCE(SUM(c.amount), 0) AS rep_amount,
+                COUNT(*) FILTER (WHERE c.currency <> sp.currency)::int AS rep_other_currency
+           FROM supplier_payment_complements c
+          WHERE c.supplier_payment_id = sp.id
+       ) rep ON true
+       LEFT JOIN LATERAL (
+         SELECT EXISTS (
+           SELECT 1
+             FROM supplier_payment_applications spa2
+             JOIN supplier_invoices si2 ON si2.id = spa2.supplier_invoice_id
+            WHERE spa2.supplier_payment_id = sp.id
+              AND si2.metodo_pago_sat = 'PPD'
+         ) AS has_ppd
+       ) ppd ON true`
+
+const REP_STATUS_SQL = `
+       CASE
+         WHEN rep.rep_count > 0 AND rep.rep_other_currency = 0
+              AND ABS(rep.rep_amount - sp.amount) <= GREATEST(1, sp.amount * 0.005)
+           THEN 'matched'
+         WHEN rep.rep_count > 0 THEN 'mismatch'
+         WHEN ppd.has_ppd THEN 'missing'
+         ELSE 'not_required'
+       END`
+
+const REP_FILTER_VALUES = ['matched', 'mismatch', 'missing', 'not_required']
+
 /**
  * Historial de PAGOS EMITIDOS (a proveedor): lista cronológica de supplier_payments,
- * un registro por pago, con los documentos a los que se aplicó (agregados).
+ * un registro por pago, con los documentos a los que se aplicó (agregados) y el
+ * estado de su complemento de pago (REP): rep_status matched/mismatch/missing/
+ * not_required + rep_count/rep_amount para pintar la diferencia.
  */
-async function listPayments({ tenantId, partnerId, from, to, method, sortBy, sortDir, page = 1, limit = 50 }) {
+async function listPayments({ tenantId, partnerId, from, to, method, rep, sortBy, sortDir, page = 1, limit = 50 }) {
   const offset = (page - 1) * limit
   const params = [tenantId]
   // Los pagos reversados no son movimientos reales de dinero → fuera del historial.
@@ -250,6 +285,9 @@ async function listPayments({ tenantId, partnerId, from, to, method, sortBy, sor
   if (from)      { params.push(from);      filters.push(`sp.payment_date >= $${params.length}`) }
   if (to)        { params.push(to);        filters.push(`sp.payment_date <= $${params.length}`) }
   if (method)    { params.push(method);    filters.push(`sp.method = $${params.length}`) }
+  if (rep && REP_FILTER_VALUES.includes(rep)) {
+    params.push(rep); filters.push(`${REP_STATUS_SQL} = $${params.length}`)
+  }
   const where = filters.length ? `AND ${filters.join(' AND ')}` : ''
   params.push(limit, offset)
 
@@ -263,11 +301,14 @@ async function listPayments({ tenantId, partnerId, from, to, method, sortBy, sor
             (SELECT string_agg(DISTINCT si.invoice_number, ', ')
                FROM supplier_payment_applications spa
                JOIN supplier_invoices si ON si.id = spa.supplier_invoice_id
-              WHERE spa.supplier_payment_id = sp.id) AS applied_docs
+              WHERE spa.supplier_payment_id = sp.id) AS applied_docs,
+            rep.rep_count, rep.rep_amount, ppd.has_ppd, sp.rep_requested_at,
+            ${REP_STATUS_SQL} AS rep_status
        FROM supplier_payments sp
        LEFT JOIN business_partners bp ON bp.id = sp.partner_id
        LEFT JOIN bank_accounts ba     ON ba.id = sp.bank_account_id
        LEFT JOIN users u              ON u.id  = sp.created_by
+       ${REP_JOINS}
       WHERE sp.tenant_id = $1 ${where}
       ORDER BY ${orderBy}
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -277,6 +318,7 @@ async function listPayments({ tenantId, partnerId, from, to, method, sortBy, sor
   const { rows: countRows } = await query(
     `SELECT COUNT(*) AS n, COALESCE(SUM(sp.amount_mxn),0) AS total
        FROM supplier_payments sp
+       ${REP_JOINS}
       WHERE sp.tenant_id = $1 ${where}`,
     params.slice(0, params.length - 2)
   )
@@ -298,7 +340,7 @@ async function getPayment({ tenantId, paymentId }) {
   const { rows } = await query(
     `SELECT sp.id, sp.payment_date, sp.method AS payment_method, sp.reference,
             sp.amount, sp.amount_mxn, sp.currency, sp.notes, sp.created_at,
-            sp.generic_supplier, sp.reversed_at, sp.reversal_reason,
+            sp.generic_supplier, sp.reversed_at, sp.reversal_reason, sp.rep_requested_at,
             bp.id AS partner_id, bp.name AS partner_name, bp.tax_name AS partner_tax_name, bp.rfc AS partner_rfc,
             ba.bank_name, ba.alias AS bank_alias, ba.account_number AS bank_account_number,
             u.full_name AS created_by_name

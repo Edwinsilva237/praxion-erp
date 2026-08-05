@@ -6,6 +6,7 @@
  * reales con su documento, socio y método.
  */
 
+const { randomUUID } = require('crypto')
 const { createTenant, cleanupTestTenants } = require('../helpers/factory')
 const { pool, query, withBypass } = require('../../src/db')
 const cxcService = require('../../src/modules/financials/cxcService')
@@ -108,5 +109,86 @@ describe('Historial de pagos (recibidos / emitidos)', () => {
     expect(detail.complement_uuid).toBe('12345678-90ab-cdef-1234-567890abcdef')
     expect(detail.document_number).toBe('F-COMP-1')
     expect(parseFloat(detail.amount)).toBeCloseTo(1160, 2)
+  })
+
+  // ─── Semáforo REP en pagos emitidos (rep_status) ──────────────────────────
+  describe('rep_status en cxpService.listPayments', () => {
+    // Crea factura (metodoPago PUE/PPD) + pago aplicado; devuelve el paymentId.
+    async function makePaidInvoice({ suffix, metodoPago, amount }) {
+      const { rows: si } = await withBypass(() => query(
+        `INSERT INTO supplier_invoices
+           (tenant_id, invoice_number, status, partner_id, tax, total, total_mxn,
+            invoice_date, metodo_pago_sat, uuid_sat)
+         VALUES ($1,$2,'paid',$3,0,$4,$4,CURRENT_DATE,$5,$6) RETURNING id`,
+        [tenantId, `SI-REP-${suffix}`, partnerId, amount, metodoPago, randomUUID()]))
+      const { rows: sp } = await withBypass(() => query(
+        `INSERT INTO supplier_payments
+           (tenant_id, partner_id, payment_date, method, amount, currency,
+            exchange_rate_value, amount_mxn, created_by)
+         VALUES ($1,$2,CURRENT_DATE,'transfer',$3,'MXN',1,$3,$4) RETURNING id`,
+        [tenantId, partnerId, amount, userId]))
+      await withBypass(() => query(
+        `INSERT INTO supplier_payment_applications
+           (supplier_payment_id, supplier_invoice_id, amount_applied, created_by)
+         VALUES ($1,$2,$3,$4)`, [sp[0].id, si[0].id, amount, userId]))
+      return sp[0].id
+    }
+
+    async function linkComplement({ paymentId, amount }) {
+      await withBypass(() => query(
+        `INSERT INTO supplier_payment_complements
+           (tenant_id, partner_id, cfdi_uuid, payment_date, amount, currency,
+            supplier_payment_id, match_status, created_by)
+         VALUES ($1,$2,$3,CURRENT_DATE,$4,'MXN',$5,'matched',$6)`,
+        [tenantId, partnerId, randomUUID(), amount, paymentId, userId]))
+    }
+
+    let payMissing, payMatched, payMismatch, payPue
+
+    beforeAll(async () => {
+      payMissing  = await makePaidInvoice({ suffix: 'MISS',  metodoPago: 'PPD', amount: 1000 })
+      payMatched  = await makePaidInvoice({ suffix: 'MATCH', metodoPago: 'PPD', amount: 2000 })
+      payMismatch = await makePaidInvoice({ suffix: 'DIFF',  metodoPago: 'PPD', amount: 3000 })
+      payPue      = await makePaidInvoice({ suffix: 'PUE',   metodoPago: 'PUE', amount: 4000 })
+      await linkComplement({ paymentId: payMatched,  amount: 1999.5 }) // dentro de tolerancia máx($1, 0.5%)
+      await linkComplement({ paymentId: payMismatch, amount: 2500 })   // fuera de tolerancia
+    })
+
+    test('cada pago trae su rep_status: missing / matched / mismatch / not_required', async () => {
+      const res = await cxpService.listPayments({ tenantId, limit: 100 })
+      const byId = Object.fromEntries(res.data.map(r => [r.id, r]))
+
+      expect(byId[payMissing].rep_status).toBe('missing')
+      expect(byId[payMissing].has_ppd).toBe(true)
+      expect(byId[payMissing].rep_count).toBe(0)
+
+      expect(byId[payMatched].rep_status).toBe('matched')
+      expect(byId[payMatched].rep_count).toBe(1)
+
+      expect(byId[payMismatch].rep_status).toBe('mismatch')
+      expect(parseFloat(byId[payMismatch].rep_amount)).toBeCloseTo(2500, 2)
+
+      expect(byId[payPue].rep_status).toBe('not_required')
+      expect(byId[payPue].has_ppd).toBe(false)
+    })
+
+    test('filtro rep=missing acota lista Y totales', async () => {
+      const res = await cxpService.listPayments({ tenantId, rep: 'missing', limit: 100 })
+      expect(res.data.map(r => r.id)).toEqual([payMissing])
+      expect(res.total).toBe(1)
+      expect(res.totalAmount).toBeCloseTo(1000, 2)
+    })
+
+    test('filtro rep=mismatch y rep=matched separan bien', async () => {
+      const mm = await cxpService.listPayments({ tenantId, rep: 'mismatch', limit: 100 })
+      expect(mm.data.map(r => r.id)).toEqual([payMismatch])
+      const ok = await cxpService.listPayments({ tenantId, rep: 'matched', limit: 100 })
+      expect(ok.data.map(r => r.id)).toEqual([payMatched])
+    })
+
+    test('valor de filtro desconocido se ignora (no truena, no filtra)', async () => {
+      const res = await cxpService.listPayments({ tenantId, rep: 'x-invalido', limit: 100 })
+      expect(res.data.length).toBeGreaterThanOrEqual(4)
+    })
   })
 })

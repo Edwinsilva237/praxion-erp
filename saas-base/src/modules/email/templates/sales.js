@@ -244,4 +244,81 @@ function expenseInvoiceRequestEmail({ tenantName, brandColor, supplierName, conc
   })
 }
 
-module.exports = { remisionEmail, invoiceEmail, quotationEmail, purchaseOrderEmail, expenseInvoiceRequestEmail }
+/**
+ * Email para SOLICITAR al proveedor el complemento de pago (REP, CFDI tipo P)
+ * de un pago emitido, o su CORRECCIÓN cuando el recibido no cuadra.
+ * Lo manda Pagos emitidos.
+ *
+ * mode: 'missing' (no ha emitido REP) | 'mismatch' (el REP no cuadra).
+ * invoices: [{ folio, uuid, amountApplied }] — facturas que liquidó el pago,
+ *           con su UUID para que el proveedor arme el DoctoRelacionado.
+ * repReceived (solo mismatch): { folio, uuid, amount }.
+ * method/bankName: método de pago y banco emisor (con últimos 4 de la cuenta)
+ *           para que el proveedor rastree la transferencia en su estado de cuenta.
+ */
+function repRequestEmail({
+  tenantName, brandColor, supplierName, mode,
+  paymentDate, amount, currency, reference,
+  method = null, bankName = null,
+  invoices = [], repReceived = null,
+}) {
+  const summaryRows = [['Fecha del pago', fmtDate(paymentDate)]]
+  if (method)    summaryRows.push(['Método de pago', method])
+  if (bankName)  summaryRows.push(['Banco emisor', bankName])
+  if (reference) summaryRows.push(['Referencia', reference])
+  const rowsHTML = summaryRows.map(([k, v]) =>
+    `<div class="row"><span>${k}</span><strong>${escapeHTML(v)}</strong></div>`
+  ).join('')
+
+  const invoiceRows = invoices.map(i => `
+    <tr>
+      <td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;">${escapeHTML(i.folio || '—')}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;font-family:monospace;color:#6b7280;">${escapeHTML(i.uuid || '—')}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;text-align:right;">${fmtCurrency(i.amountApplied, currency)}</td>
+    </tr>`).join('')
+  const invoicesBlock = invoices.length ? `
+    <p style="font-size:13px;color:#374151;margin:14px 0 6px;">Facturas liquidadas con este pago:</p>
+    <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;">
+      <tr>
+        <th style="padding:6px 10px;text-align:left;font-size:12px;color:#6b7280;">Folio</th>
+        <th style="padding:6px 10px;text-align:left;font-size:12px;color:#6b7280;">UUID (folio fiscal)</th>
+        <th style="padding:6px 10px;text-align:right;font-size:12px;color:#6b7280;">Aplicado</th>
+      </tr>
+      ${invoiceRows}
+    </table>` : ''
+
+  const isMismatch = mode === 'mismatch'
+  const mismatchBlock = (isMismatch && repReceived) ? `
+    <p style="font-size:13px;color:#92400e;background:#fef3c7;border-radius:8px;padding:10px 12px;margin:14px 0;">
+      El complemento recibido${repReceived.folio ? ` (folio ${escapeHTML(repReceived.folio)})` : ''}
+      ampara <strong>${fmtCurrency(repReceived.amount, currency)}</strong>, pero el pago realizado fue de
+      <strong>${fmtCurrency(amount, currency)}</strong>
+      (diferencia de <strong>${fmtCurrency(Math.abs(repReceived.amount - amount), currency)}</strong>).${
+      repReceived.uuid ? `<br/><span style="font-size:11px;font-family:monospace;">UUID del REP: ${escapeHTML(repReceived.uuid)}</span>` : ''}
+    </p>` : ''
+
+  return shellHTML({
+    headerName: tenantName,
+    brandColor,
+    title: isMismatch ? 'Corrección de complemento de pago' : 'Solicitud de complemento de pago',
+    preheader: isMismatch
+      ? `El REP recibido no coincide con nuestro pago de ${fmtCurrency(amount, currency)}`
+      : `Le solicitamos el REP de nuestro pago de ${fmtCurrency(amount, currency)}`,
+    body: `
+      <h2>${isMismatch ? 'Corrección de complemento de pago (REP)' : 'Solicitud de complemento de pago (REP)'}</h2>
+      <p>Estimados <strong>${escapeHTML(supplierName || 'proveedor')}</strong>:</p>
+      ${isMismatch
+        ? `<p>Recibimos su complemento de pago, pero <strong>no coincide con el pago realizado</strong>. Les pedimos amablemente cancelarlo y reexpedirlo con los datos correctos:</p>`
+        : `<p>Les solicitamos amablemente el <strong>complemento de pago (REP, CFDI tipo P)</strong> del siguiente pago, requerido para nuestra contabilidad y deducibilidad:</p>`}
+      <div class="summary">
+        ${rowsHTML}
+        <div class="row total"><span>Monto pagado</span><span>${fmtCurrency(amount, currency)}</span></div>
+      </div>
+      ${mismatchBlock}
+      ${invoicesBlock}
+      <p style="font-size:13px;color:#6b7280;margin-top:16px;">Pueden responder a este correo con el XML y el PDF del complemento. ¡Gracias!</p>
+    `,
+  })
+}
+
+module.exports = { remisionEmail, invoiceEmail, quotationEmail, purchaseOrderEmail, expenseInvoiceRequestEmail, repRequestEmail }

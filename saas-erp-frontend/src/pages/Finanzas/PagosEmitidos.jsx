@@ -29,6 +29,51 @@ const METHOD_LABEL = {
 
 const methodLabel = (m) => METHOD_LABEL[m] || m || '—'
 
+const REP_OPTS = [
+  ['',             'Todos'],
+  ['missing',      'Falta REP'],
+  ['matched',      'REP recibido ✓'],
+  ['mismatch',     'REP no cuadra'],
+  ['not_required', 'No requiere (PUE)'],
+]
+
+// Misma tolerancia que el auto-cruce del backend: máx($1, 0.5%).
+const repAmountsClose = (a, b) => Math.abs(a - b) <= Math.max(1, Math.abs(b) * 0.005)
+
+/** Semáforo del complemento de pago (REP) de un pago emitido. */
+function RepChip({ payment: r }) {
+  switch (r.rep_status) {
+    case 'matched':
+      return (
+        <span className="text-[10px] font-bold uppercase bg-status-success/15 text-status-success px-1.5 py-0.5 rounded-full whitespace-nowrap"
+          title="El proveedor ya emitió el complemento de pago (REP) y su monto cuadra con el pago">
+          REP ✓
+        </span>
+      )
+    case 'mismatch':
+      return (
+        <span className="text-[10px] font-bold uppercase bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded-full whitespace-nowrap"
+          title={`REP recibido pero no cuadra: complemento(s) por ${fmtMXN(r.rep_amount)} vs pago de ${fmtMXN(r.amount)}`}>
+          REP ≠
+        </span>
+      )
+    case 'missing':
+      return (
+        <span className="text-[10px] font-bold uppercase bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded-full whitespace-nowrap"
+          title="Este pago liquidó factura(s) PPD y el proveedor aún no emite el complemento de pago (REP)">
+          Falta REP
+        </span>
+      )
+    default:
+      return (
+        <span className="text-xs text-ink-muted"
+          title="Sin facturas PPD ligadas — no requiere complemento de pago">
+          —
+        </span>
+      )
+  }
+}
+
 const PAGE_SIZE = 25
 
 export default function PagosEmitidos() {
@@ -37,6 +82,7 @@ export default function PagosEmitidos() {
   const [from, setFrom]       = useState(searchParams.get('from') || '')
   const [to, setTo]           = useState(searchParams.get('to') || '')
   const [method, setMethod]   = useState('')
+  const [rep, setRep]         = useState(searchParams.get('rep') || '')
   const [page, setPage]       = useState(1)
   const [reverseTarget, setReverseTarget] = useState(null) // pago a reversar
   // ?open=<id> (desde "Pagos aplicados") abre el detalle del pago; clic en fila igual.
@@ -47,7 +93,7 @@ export default function PagosEmitidos() {
   const highlightRef = useRef(null)
 
   const { sortBy, sortDir, onSort } = useTableSort('fecha', 'desc')
-  useEffect(() => { setPage(1) }, [partner, from, to, method, sortBy, sortDir])
+  useEffect(() => { setPage(1) }, [partner, from, to, method, rep, sortBy, sortDir])
 
   const queryParams = useMemo(() => {
     const p = { page, limit: PAGE_SIZE, sortBy, sortDir }
@@ -55,8 +101,9 @@ export default function PagosEmitidos() {
     if (from)        p.from      = from
     if (to)          p.to        = to
     if (method)      p.method    = method
+    if (rep)         p.rep       = rep
     return p
-  }, [partner, from, to, method, page, sortBy, sortDir])
+  }, [partner, from, to, method, rep, page, sortBy, sortDir])
 
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['pagos-emitidos', queryParams],
@@ -74,7 +121,7 @@ export default function PagosEmitidos() {
   const totalAmount = data?.totalAmount || 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
-  const hasFilters = partner || from || to || method
+  const hasFilters = partner || from || to || method || rep
 
   // Scroll + destello a la fila resaltada cuando aparece en la lista cargada.
   useEffect(() => {
@@ -132,8 +179,15 @@ export default function PagosEmitidos() {
             {METHOD_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
         </div>
+        <div>
+          <label className="label">Complemento (REP)</label>
+          <select className="select" value={rep}
+            onChange={e => { setRep(e.target.value); setPage(1) }}>
+            {REP_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </div>
         {hasFilters && (
-          <button onClick={() => { setPartner(null); setFrom(''); setTo(''); setMethod(''); setPage(1) }}
+          <button onClick={() => { setPartner(null); setFrom(''); setTo(''); setMethod(''); setRep(''); setPage(1) }}
             className="btn-ghost btn-sm text-ink-muted">
             Limpiar filtros
           </button>
@@ -176,9 +230,12 @@ export default function PagosEmitidos() {
                         <p className="text-[11px] text-ink-muted truncate">{r.partner_tax_name}</p>
                       )}
                     </div>
-                    <p className="font-mono tabular-nums font-semibold text-ink-primary shrink-0">
-                      {fmtMXN(r.amount_mxn)}
-                    </p>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <p className="font-mono tabular-nums font-semibold text-ink-primary">
+                        {fmtMXN(r.amount_mxn)}
+                      </p>
+                      <RepChip payment={r} />
+                    </div>
                   </div>
                   <div className="mt-1.5 flex items-center gap-2 flex-wrap text-[11px] text-ink-muted">
                     <span>{fmtDateOnly(r.payment_date)}</span>
@@ -214,6 +271,7 @@ export default function PagosEmitidos() {
                     <th>Documentos</th>
                     <SortableHeader sortKey="metodo"    sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Método</SortableHeader>
                     <th>Banco</th>
+                    <th>REP</th>
                     <SortableHeader sortKey="monto"     sortBy={sortBy} sortDir={sortDir} onSort={onSort} align="right">Monto</SortableHeader>
                     <th></th>
                   </tr>
@@ -237,6 +295,7 @@ export default function PagosEmitidos() {
                       <td className="text-xs text-ink-secondary">{r.applied_docs || '—'}</td>
                       <td className="text-xs text-ink-secondary">{methodLabel(r.payment_method)}</td>
                       <td className="text-xs text-ink-secondary">{r.bank_alias || r.bank_name || '—'}</td>
+                      <td><RepChip payment={r} /></td>
                       <td className="text-right font-mono tabular-nums font-semibold text-ink-primary">
                         {fmtMXN(r.amount_mxn)}
                       </td>
@@ -367,6 +426,9 @@ function SupplierPaymentDetailModal({ paymentId, onClose, onReverse }) {
             {(() => {
               const hasPPD = (p.applications || []).some(a => a.metodo_pago_sat === 'PPD')
               if (!p.complements?.length && !hasPPD) return null
+              const repTotal = (p.complements || []).reduce((s, c) => s + parseFloat(c.amount || 0), 0)
+              const sameCurrency = (p.complements || []).every(c => (c.currency || 'MXN') === (p.currency || 'MXN'))
+              const cuadra = p.complements?.length > 0 && sameCurrency && repAmountsClose(repTotal, parseFloat(p.amount))
               return (
                 <div>
                   <p className="text-xs font-bold text-brand-300 uppercase tracking-wider mb-1.5">Complemento de pago (REP)</p>
@@ -381,10 +443,23 @@ function SupplierPaymentDetailModal({ paymentId, onClose, onReverse }) {
                           <span className="font-mono tabular-nums font-semibold">{fmtMXN(c.amount)}</span>
                         </div>
                       ))}
+                      {cuadra ? (
+                        <p className="text-xs text-status-success">✓ Cuadra con el monto del pago.</p>
+                      ) : (
+                        <p className="text-xs text-status-warning">
+                          ≠ No cuadra: {sameCurrency
+                            ? <>los complementos suman <span className="font-mono">{fmtMXN(repTotal)}</span> y el pago fue de <span className="font-mono">{fmtMXN(p.amount)}</span> (dif. <span className="font-mono">{fmtMXN(Math.abs(repTotal - parseFloat(p.amount)))}</span>).</>
+                            : 'el complemento está en otra moneda que el pago — revísalo en Complementos de pago.'}
+                        </p>
+                      )}
+                      {!cuadra && !p.reversed_at && <RequestRepAction payment={p} mode="mismatch" />}
                     </div>
                   ) : (
-                    <div className="border border-status-warning/40 bg-status-warning/5 rounded-xl px-3 py-2 text-sm text-status-warning">
-                      Sin complemento recibido — este pago liquidó factura(s) PPD; el proveedor debe emitirte el REP.
+                    <div className="border border-status-warning/40 bg-status-warning/5 rounded-xl px-3 py-2 flex flex-col gap-1.5">
+                      <p className="text-sm text-status-warning">
+                        Sin complemento recibido — este pago liquidó factura(s) PPD; el proveedor debe emitirte el REP.
+                      </p>
+                      {!p.reversed_at && <RequestRepAction payment={p} mode="missing" />}
                     </div>
                   )}
                 </div>
@@ -407,6 +482,53 @@ function SupplierPaymentDetailModal({ paymentId, onClose, onReverse }) {
       </div>
     </div>,
     document.body
+  )
+}
+
+// Botón "Solicitar REP / corrección" — manda correo al proveedor con el detalle
+// del pago (y la diferencia, si el REP no cuadra). Espejo de "Solicitar factura"
+// de Gastos. Requiere proveedor del catálogo con contactos con correo.
+function RequestRepAction({ payment: p, mode }) {
+  const qc = useQueryClient()
+  const [msg, setMsg] = useState(null)
+  const [err, setErr] = useState(null)
+
+  const mutation = useMutation({
+    mutationFn: () => cxpApi.requestRep(p.id),
+    onSuccess: (r) => {
+      setMsg(`Solicitud enviada a ${(r.sentTo || []).join(', ')}.`)
+      qc.invalidateQueries({ queryKey: ['supplier-payment', p.id] })
+      qc.invalidateQueries({ queryKey: ['pagos-emitidos'] })
+    },
+    onError: (e) => setErr(e.response?.data?.error || e.message || 'Error al enviar la solicitud'),
+  })
+
+  if (!p.partner_id) return null
+
+  const label = mode === 'mismatch'
+    ? (p.rep_requested_at ? 'Volver a solicitar corrección' : 'Solicitar corrección al proveedor')
+    : (p.rep_requested_at ? 'Volver a solicitar REP' : 'Solicitar REP al proveedor')
+
+  return (
+    <div className="flex flex-col gap-1">
+      {p.rep_requested_at && !msg && (
+        <p className="text-[11px] text-ink-muted">
+          Solicitado al proveedor el {fmtDateOnly(p.rep_requested_at)}.
+        </p>
+      )}
+      {msg ? (
+        <p className="text-xs text-brand-300">{msg}</p>
+      ) : (
+        <Can do="purchases:create">
+          <button type="button" className="btn-secondary text-xs self-start"
+            disabled={mutation.isPending}
+            onClick={() => { setErr(null); mutation.mutate() }}>
+            {mutation.isPending ? <Spinner size="sm" /> : `✉️ ${label}`}
+          </button>
+        </Can>
+      )}
+      {err && <p className="field-error">{err}</p>}
+    </div>
   )
 }
 

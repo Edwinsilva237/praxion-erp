@@ -1595,14 +1595,30 @@ router.get('/cxp', checkPermission('purchases', 'read'), async (req, res, next) 
 })
 
 /**
+ * POST /api/purchases/payments/:id/request-rep
+ * Solicita al proveedor (por correo) el REP del pago — o su corrección si el
+ * recibido no cuadra. Mismo criterio de permiso que solicitar factura de un
+ * gasto (create: dispara un correo en nombre de la empresa).
+ */
+router.post('/payments/:id/request-rep', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    const result = await supplierComplementService.requestRepForPayment({
+      tenantId: req.tenant.id, paymentId: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
  * GET /api/purchases/payments — Historial de PAGOS EMITIDOS (a proveedor).
  */
 router.get('/payments', checkPermission('purchases', 'read'), async (req, res, next) => {
   try {
-    const { partnerId, from, to, method, sortBy, sortDir, page, limit } = req.query
+    const { partnerId, from, to, method, rep, sortBy, sortDir, page, limit } = req.query
     const result = await cxpService.listPayments({
       tenantId: req.tenant.id,
-      partnerId, from, to, method, sortBy, sortDir,
+      partnerId, from, to, method, rep, sortBy, sortDir,
       page:  parseInt(page || 1, 10),
       limit: Math.min(parseInt(limit || 50, 10), 100),
     })

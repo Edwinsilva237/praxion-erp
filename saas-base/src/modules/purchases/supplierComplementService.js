@@ -18,6 +18,8 @@
 const { query, withTransaction } = require('../../db')
 const { audit } = require('../../utils/audit')
 const logger = require('../../config/logger')
+const { enqueueEmail } = require('../../queues/emailQueue')
+const { repRequestEmail } = require('../email/templates/sales')
 
 function createError(status, message) { const e = new Error(message); e.status = status; return e }
 function normRfc(r) { return (r || '').toUpperCase().replace(/\s+/g, '').trim() }
@@ -504,8 +506,142 @@ async function countUnknownMethod(tenantId) {
   return parseInt(rows[0].n, 10)
 }
 
+// Etiquetas legibles del método de pago para el correo de solicitud de REP.
+const METHOD_EMAIL_LABEL = {
+  transfer:            'Transferencia',
+  cash:                'Efectivo',
+  check:               'Cheque',
+  credit_card:         'Tarjeta de crédito',
+  advance_application: 'Aplicación de anticipo',
+}
+
+/**
+ * Solicita al proveedor (por correo) el REP de un pago emitido — o su
+ * CORRECCIÓN si el recibido no cuadra. Espejo de requestExpenseInvoice
+ * (solicitar factura de un gasto): manda a los contactos con correo del
+ * proveedor y marca supplier_payments.rep_requested_at (mig 242).
+ *
+ * Candados: el pago debe haber liquidado facturas PPD (las únicas que exigen
+ * REP) y su semáforo debe estar en 'missing' o 'mismatch' — si ya cuadra, 409.
+ */
+async function requestRepForPayment({ tenantId, paymentId, userId, ipAddress, userAgent }) {
+  const { rows } = await query(
+    `SELECT sp.id, sp.partner_id, sp.payment_date, sp.reference, sp.amount,
+            sp.currency, sp.reversed_at, sp.rep_requested_at, sp.method,
+            ba.bank_name, ba.account_number,
+            bp.name AS partner_name, bp.tax_name AS partner_tax_name,
+            t.name AS tenant_name, t.brand_color_primary, t.notification_email
+       FROM supplier_payments sp
+       LEFT JOIN bank_accounts ba ON ba.id = sp.bank_account_id
+       LEFT JOIN business_partners bp ON bp.id = sp.partner_id
+       LEFT JOIN tenants t ON t.id = sp.tenant_id
+      WHERE sp.id = $1 AND sp.tenant_id = $2`,
+    [paymentId, tenantId])
+  if (!rows.length) throw createError(404, 'Pago no encontrado.')
+  const sp = rows[0]
+  if (sp.reversed_at) throw createError(409, 'El pago está reversado — no aplica solicitar REP.')
+  if (!sp.partner_id) throw createError(400, 'El pago no tiene un proveedor del catálogo a quien solicitarle el REP.')
+
+  // Facturas liquidadas (con UUID para el DoctoRelacionado del proveedor).
+  const { rows: apps } = await query(
+    `SELECT si.invoice_number, si.uuid_sat, si.metodo_pago_sat, spa.amount_applied
+       FROM supplier_payment_applications spa
+       JOIN supplier_invoices si ON si.id = spa.supplier_invoice_id
+      WHERE spa.supplier_payment_id = $1
+      ORDER BY si.invoice_number`,
+    [paymentId])
+  const hasPPD = apps.some(a => a.metodo_pago_sat === 'PPD')
+  if (!hasPPD) throw createError(400, 'Este pago no liquidó facturas PPD — no requiere complemento de pago.')
+
+  // REPs ya ligados: decide missing vs mismatch (misma tolerancia del auto-cruce).
+  const { rows: reps } = await query(
+    `SELECT serie, folio, cfdi_uuid, amount, currency
+       FROM supplier_payment_complements
+      WHERE supplier_payment_id = $1 AND tenant_id = $2
+      ORDER BY created_at DESC`,
+    [paymentId, tenantId])
+  const paid = parseFloat(sp.amount)
+  const repTotal = reps.reduce((s, r) => s + parseFloat(r.amount), 0)
+  const sameCurrency = reps.every(r => r.currency === sp.currency)
+  let mode = 'missing'
+  if (reps.length) {
+    if (sameCurrency && amountsClose(repTotal, paid)) {
+      throw createError(409, 'El REP recibido ya cuadra con este pago — no hay nada que solicitar.')
+    }
+    mode = 'mismatch'
+  }
+
+  // Contactos con correo del proveedor (primario primero).
+  const { rows: contacts } = await query(
+    `SELECT email FROM business_partner_contacts
+      WHERE business_partner_id = $1 AND email IS NOT NULL AND email <> ''
+      ORDER BY is_primary DESC NULLS LAST, id ASC`,
+    [sp.partner_id])
+  const recipients = contacts.map(c => c.email).filter(Boolean)
+  if (!recipients.length) {
+    throw createError(400, 'El proveedor no tiene contactos con correo. Captura uno en Socios para poder solicitar el REP.')
+  }
+
+  // Copia/responder-a: notification_email del tenant, o el correo del usuario.
+  let senderEmail = sp.notification_email || null
+  if (!senderEmail && userId) {
+    const { rows: u } = await query(
+      `SELECT email FROM users WHERE id = $1 AND tenant_id = $2`, [userId, tenantId])
+    senderEmail = u[0]?.email || null
+  }
+  if (senderEmail && recipients.includes(senderEmail)) senderEmail = null
+
+  const tenantName = sp.tenant_name || 'Emisor'
+  const first = reps[0] || null
+  // Banco emisor + últimos 4 de la cuenta: lo que el proveedor necesita para
+  // rastrear la transferencia en su estado de cuenta (nunca la cuenta completa).
+  const last4 = sp.account_number ? String(sp.account_number).slice(-4) : null
+  const bankLabel = sp.bank_name ? (last4 ? `${sp.bank_name} (cuenta •••• ${last4})` : sp.bank_name) : null
+  const html = repRequestEmail({
+    tenantName, brandColor: sp.brand_color_primary || null,
+    supplierName: sp.partner_tax_name || sp.partner_name || '',
+    mode,
+    paymentDate: sp.payment_date, amount: paid,
+    currency: sp.currency || 'MXN', reference: sp.reference,
+    method: METHOD_EMAIL_LABEL[sp.method] || null,
+    bankName: bankLabel,
+    invoices: apps.map(a => ({
+      folio: a.invoice_number, uuid: a.uuid_sat,
+      amountApplied: parseFloat(a.amount_applied),
+    })),
+    repReceived: (mode === 'mismatch' && first) ? {
+      folio: [first.serie, first.folio].filter(Boolean).join('-') || null,
+      uuid: first.cfdi_uuid, amount: repTotal,
+    } : null,
+  })
+
+  await enqueueEmail({
+    tenantId, to: recipients,
+    bcc: senderEmail || undefined, replyTo: senderEmail || undefined,
+    subject: mode === 'mismatch'
+      ? `Corrección de complemento de pago (REP) — ${tenantName}`
+      : `Solicitud de complemento de pago (REP) — ${tenantName}`,
+    html, fromName: tenantName,
+  })
+
+  const { rows: upd } = await query(
+    `UPDATE supplier_payments SET rep_requested_at = NOW()
+      WHERE id = $1 AND tenant_id = $2 RETURNING rep_requested_at`,
+    [paymentId, tenantId])
+
+  await audit({
+    tenantId, userId, action: 'supplier_payment.rep_requested',
+    resource: 'supplier_payments', resourceId: paymentId,
+    payload: { mode, sentTo: recipients, repTotal: reps.length ? repTotal : null, paid },
+    ipAddress, userAgent,
+  })
+
+  return { requested_at: upd[0].rep_requested_at, sentTo: recipients, mode }
+}
+
 module.exports = {
   ingestComplement, rematchComplement,
   linkPayment, unlinkPayment, removeComplement,
   listComplements, getComplement, listCompliance,
+  requestRepForPayment,
 }
