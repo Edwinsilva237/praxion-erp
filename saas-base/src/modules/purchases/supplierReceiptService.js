@@ -894,8 +894,101 @@ function createError(status, message) {
   return err
 }
 
+/**
+ * Pide por correo al proveedor la factura de una recepción confirmada sin
+ * CFDI. Espejo de requestExpenseInvoice (Gastos): reusa el mismo template y
+ * marca supplier_receipts.invoice_requested_at (mig 244).
+ */
+async function requestReceiptInvoice({ tenantId, id, userId, ipAddress, userAgent }) {
+  const { enqueueEmail } = require('../../queues/emailQueue')
+  const { expenseInvoiceRequestEmail } = require('../email/templates/sales')
+
+  const { rows } = await query(
+    `SELECT sr.id, sr.status, sr.partner_id, sr.receipt_number, sr.received_date,
+            sr.replacement_return_id, sr.invoice_requested_at,
+            po.order_number AS purchase_order_number,
+            bp.name AS partner_name, bp.tax_name AS partner_tax_name,
+            t.name AS tenant_name, t.brand_color_primary, t.notification_email,
+            COALESCE((SELECT SUM(srl.subtotal) FROM supplier_receipt_lines srl
+                       WHERE srl.supplier_receipt_id = sr.id), 0)::numeric AS receipt_subtotal,
+            -- ¿Ya hay factura REAL activa ligada? (parcial también cuenta como "ya llegó algo")
+            EXISTS (SELECT 1 FROM invoice_receipt_links irl
+                      JOIN supplier_invoices si ON si.id = irl.supplier_invoice_id
+                     WHERE irl.supplier_receipt_id = sr.id
+                       AND si.status <> 'cancelled' AND si.type = 'invoice'
+                       AND si.uuid_sat IS NOT NULL) AS has_real_invoice
+       FROM supplier_receipts sr
+       LEFT JOIN purchase_orders   po ON po.id = sr.purchase_order_id
+       LEFT JOIN business_partners bp ON bp.id = sr.partner_id
+       LEFT JOIN tenants           t  ON t.id  = sr.tenant_id
+      WHERE sr.id = $1 AND sr.tenant_id = $2`,
+    [id, tenantId]
+  )
+  if (!rows.length) throw createError(404, 'Recepción no encontrada.')
+  const rec = rows[0]
+  if (rec.status !== 'confirmed') throw createError(409, 'La recepción debe estar confirmada para solicitar su factura.')
+  if (rec.replacement_return_id) throw createError(409, 'Las reposiciones de devolución no se facturan (la factura vigente es la original).')
+  if (rec.has_real_invoice) throw createError(409, 'Esta recepción ya tiene factura ligada.')
+  if (!rec.partner_id) throw createError(400, 'La recepción no tiene un proveedor del catálogo a quien solicitarle la factura.')
+
+  const { rows: contacts } = await query(
+    `SELECT email FROM business_partner_contacts
+      WHERE business_partner_id = $1 AND email IS NOT NULL AND email <> ''
+      ORDER BY is_primary DESC NULLS LAST, id ASC`,
+    [rec.partner_id]
+  )
+  const recipients = contacts.map(c => c.email).filter(Boolean)
+  if (!recipients.length) {
+    throw createError(400, 'El proveedor no tiene contactos con correo. Captura uno en Socios para poder solicitar la factura.')
+  }
+
+  let senderEmail = rec.notification_email || null
+  if (!senderEmail && userId) {
+    const { rows: u } = await query(`SELECT email FROM users WHERE id = $1 AND tenant_id = $2`, [userId, tenantId])
+    senderEmail = u[0]?.email || null
+  }
+  if (senderEmail && recipients.includes(senderEmail)) senderEmail = null
+
+  const tenantName = rec.tenant_name || 'Emisor'
+  const concept = rec.purchase_order_number
+    ? `Mercancía recibida — recepción ${rec.receipt_number} (OC ${rec.purchase_order_number})`
+    : `Mercancía recibida — recepción ${rec.receipt_number}`
+  const html = expenseInvoiceRequestEmail({
+    tenantName, brandColor: rec.brand_color_primary || null,
+    supplierName: rec.partner_tax_name || rec.partner_name || '',
+    concept,
+    folio: rec.receipt_number,
+    total: rec.receipt_subtotal, currency: 'MXN',
+    expenseDate: rec.received_date,
+  })
+
+  await enqueueEmail({
+    tenantId, to: recipients,
+    bcc: senderEmail || undefined, replyTo: senderEmail || undefined,
+    subject: `Solicitud de factura — ${tenantName}`,
+    html, fromName: tenantName,
+  })
+
+  const { rows: upd } = await query(
+    `UPDATE supplier_receipts SET invoice_requested_at = NOW(), updated_at = NOW()
+      WHERE id = $1 AND tenant_id = $2 RETURNING invoice_requested_at`,
+    [id, tenantId]
+  )
+
+  await audit({
+    tenantId, userId,
+    action: 'supplier_receipt.invoice_requested',
+    resource: 'supplier_receipts', resourceId: id,
+    payload: { recipients, receipt_number: rec.receipt_number },
+    ipAddress, userAgent,
+  })
+
+  return { requested_at: upd[0].invoice_requested_at, sentTo: recipients }
+}
+
 module.exports = {
   listReceipts, getReceipt,
   createReceipt, updateReceipt, confirmReceipt, cancelReceipt,
   uploadEvidence, getEvidenceFile, deleteEvidence,
+  requestReceiptInvoice,
 }

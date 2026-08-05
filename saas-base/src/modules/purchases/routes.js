@@ -680,6 +680,25 @@ router.post('/receipts/:id/remission', checkPermission('purchases', 'create'), a
 })
 
 /**
+ * POST /api/purchases/receipts/:id/request-invoice
+ * Solicita al proveedor (por correo) la factura de una recepción confirmada
+ * sin CFDI. Espejo del request-invoice de Gastos. Mismo permiso que el botón
+ * de CXP sin factura (purchases:create) → sin re-login.
+ */
+router.post('/receipts/:id/request-invoice', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    const result = await supplierReceiptService.requestReceiptInvoice({
+      tenantId: req.tenant.id, id: req.params.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(result)
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+
+/**
  * PUT /api/purchases/receipts/:id
  * Edita una recepción EN BORRADOR (reemplaza líneas + encabezado editable).
  * Body: { warehouseId, receivedDate?, documentType?, documentNumber?, notes?, lines: [...] }

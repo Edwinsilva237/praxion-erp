@@ -386,6 +386,17 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
     onError: (e) => setActErr(e.response?.data?.error || 'Error al generar la CXP'),
   })
 
+  // Solicitar al proveedor (por correo) la factura de la recepción sin CFDI.
+  const [requestMsg, setRequestMsg] = useState(null)
+  const requestInvMutation = useMutation({
+    mutationFn: () => purchasesApi.requestReceiptInvoice(receiptId),
+    onSuccess: (r) => {
+      qc.invalidateQueries({ queryKey: ['receipt-detail', receiptId] })
+      setRequestMsg(`Solicitud enviada a ${(r.sentTo || []).join(', ')}.`)
+    },
+    onError: (e) => setActErr(e.response?.data?.error || 'Error al solicitar la factura'),
+  })
+
   // Desvincular una factura ligada por error a esta recepción → vuelve a gasto.
   const [unlinkTarget, setUnlinkTarget] = useState(null) // { id, folio }
   const unlinkMutation = useMutation({
@@ -705,6 +716,25 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
                   💸 No se espera factura → CXP
                 </button>
               </Can>
+            )}
+            {/* Solicitar al proveedor la factura de la recepción (espejo de Gastos). */}
+            {receipt.status === 'confirmed' && !receipt.invoiced_at && !receipt.replacement_return_id && receipt.partner_id && (
+              requestMsg ? (
+                <span className="text-xs text-brand-300 self-center">{requestMsg}</span>
+              ) : (
+                <Can do="purchases:create">
+                  <button onClick={() => { setActErr(null); requestInvMutation.mutate() }}
+                    disabled={requestInvMutation.isPending}
+                    className="btn-secondary btn-sm text-amber-500 hover:bg-amber-500/10"
+                    title={receipt.invoice_requested_at
+                      ? `Factura solicitada al proveedor el ${fmtDateOnly(receipt.invoice_requested_at)} — volver a enviar el correo`
+                      : 'Pide por correo al proveedor el CFDI de esta recepción'}>
+                    {requestInvMutation.isPending
+                      ? <Spinner size="sm" />
+                      : (receipt.invoice_requested_at ? '📧 Volver a solicitar factura' : '📧 Solicitar factura')}
+                  </button>
+                </Can>
+              )
             )}
             {/* Desvincular una factura REAL ligada por error a esta recepción. */}
             {(() => {
