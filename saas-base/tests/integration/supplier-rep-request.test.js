@@ -143,6 +143,36 @@ test('proveedor sin contactos con correo → 400 accionable', async () => {
     .rejects.toMatchObject({ status: 400, message: expect.stringContaining('contactos con correo') })
 })
 
+test('backfill masivo de metodo_pago_sat: lee el XML guardado, idempotente, reporta sin-XML', async () => {
+  const supplierInvoiceService = require('../../src/modules/purchases/supplierInvoiceService')
+  const xmlPpd = '<?xml version="1.0"?><cfdi:Comprobante Version="4.0" MetodoPago="PPD" FormaPago="03" Total="500"></cfdi:Comprobante>'
+
+  const { rows: conXml } = await withBypass(() => query(
+    `INSERT INTO supplier_invoices
+       (tenant_id, invoice_number, status, partner_id, tax, total, total_mxn,
+        invoice_date, uuid_sat, xml_content)
+     VALUES ($1,'SI-BF-XML','pending',$2,0,500,500,CURRENT_DATE,$3,$4) RETURNING id`,
+    [tenantId, partnerId, randomUUID(), xmlPpd]))
+  await withBypass(() => query(
+    `INSERT INTO supplier_invoices
+       (tenant_id, invoice_number, status, partner_id, tax, total, total_mxn, invoice_date)
+     VALUES ($1,'SI-BF-SINXML','pending',$2,0,700,700,CURRENT_DATE)`,
+    [tenantId, partnerId]))
+
+  const r1 = await supplierInvoiceService.backfillMetodoPagoFromXml({ tenantId, userId })
+  expect(r1.updated).toBe(1)
+  expect(r1.ppd).toBe(1)
+  expect(r1.sinXml).toBeGreaterThanOrEqual(1)
+
+  const { rows: after } = await withBypass(() => query(
+    `SELECT metodo_pago_sat FROM supplier_invoices WHERE id = $1`, [conXml[0].id]))
+  expect(after[0].metodo_pago_sat).toBe('PPD')
+
+  // Idempotente: la segunda corrida ya no encuentra nada actualizable.
+  const r2 = await supplierInvoiceService.backfillMetodoPagoFromXml({ tenantId, userId })
+  expect(r2.updated).toBe(0)
+})
+
 test('pago reversado → 409', async () => {
   const paymentId = await makePaidInvoice({ suffix: 'REV', metodoPago: 'PPD', amount: 800 })
   await withBypass(() => query(

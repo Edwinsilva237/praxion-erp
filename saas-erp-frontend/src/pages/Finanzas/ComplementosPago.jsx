@@ -275,9 +275,23 @@ function RecibidosTab() {
 
 // ── Pestaña: PPD pagadas sin complemento ─────────────────────────────────────
 function VigilarTab() {
+  const qc = useQueryClient()
+  const [backfillResult, setBackfillResult] = useState(null)
   const { data, isLoading, error } = useQuery({
     queryKey: ['complementos-compliance'],
     queryFn:  () => cxpApi.complianceComplements(),
+  })
+
+  // Barrido: lee el XML guardado de las facturas sin PUE/PPD y lo completa.
+  // Al terminar, el tablero y el semáforo REP de Pagos emitidos se recalculan.
+  const backfill = useMutation({
+    mutationFn: () => cxpApi.backfillMetodoPago(),
+    onSuccess: (r) => {
+      setBackfillResult(r)
+      qc.invalidateQueries({ queryKey: ['complementos-compliance'] })
+      qc.invalidateQueries({ queryKey: ['pagos-emitidos'] })
+      qc.invalidateQueries({ queryKey: ['cxp'] })
+    },
   })
 
   const rows = data?.data || []
@@ -291,10 +305,34 @@ function VigilarTab() {
           el SAT puede rechazar la deducción del pago — persíguelas con el proveedor.
         </p>
         {data?.unknownMethodCount > 0 && (
-          <p className="text-xs text-ink-muted mt-2">
-            ⚠ {data.unknownMethodCount} factura{data.unknownMethodCount !== 1 ? 's' : ''} pagada{data.unknownMethodCount !== 1 ? 's' : ''} no
-            se vigilan porque no se conoce su método de pago (PUE/PPD) — son anteriores a esta
-            función. Ábrelas en Gastos y usa "Volver a leer del XML" para incorporarlas.
+          <div className="mt-2 flex flex-col gap-2">
+            <p className="text-xs text-ink-muted">
+              ⚠ {data.unknownMethodCount} factura{data.unknownMethodCount !== 1 ? 's' : ''} pagada{data.unknownMethodCount !== 1 ? 's' : ''} no
+              se vigilan porque no se conoce su método de pago (PUE/PPD) — son anteriores a esta
+              función.
+            </p>
+            <Can do="expenses:create">
+              <button type="button" className="btn-secondary text-xs self-start"
+                disabled={backfill.isPending}
+                onClick={() => { setBackfillResult(null); backfill.mutate() }}>
+                {backfill.isPending
+                  ? <span className="flex items-center gap-2"><Spinner size="sm" /> Leyendo los XML guardados…</span>
+                  : 'Completar PUE/PPD desde los XML guardados'}
+              </button>
+            </Can>
+            {backfill.error && (
+              <p className="field-error">
+                {backfill.error.response?.data?.error || backfill.error.message || 'Error en el barrido'}
+              </p>
+            )}
+          </div>
+        )}
+        {backfillResult && (
+          <p className="text-xs text-brand-300 mt-2">
+            Barrido listo: {backfillResult.updated} factura{backfillResult.updated !== 1 ? 's' : ''} completada{backfillResult.updated !== 1 ? 's' : ''}
+            {' '}({backfillResult.ppd} PPD, {backfillResult.pue} PUE);
+            {' '}{backfillResult.sinXml} sin XML guardado.
+            {backfillResult.remaining > backfillResult.sinXml && ' Quedan más — vuelve a correrlo.'}
           </p>
         )}
       </div>

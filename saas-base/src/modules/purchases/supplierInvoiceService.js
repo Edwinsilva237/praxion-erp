@@ -2170,6 +2170,68 @@ async function getExpenseConceptos({ tenantId, id }) {
 }
 
 /**
+ * BARRIDO: completa supplier_invoices.metodo_pago_sat (PUE/PPD) leyendo el XML
+ * guardado de cada factura que lo tiene en blanco — versión masiva de la parte
+ * de método de "Volver a leer del XML".
+ *
+ * Necesario porque la columna nació en la mig 235: todo lo registrado antes
+ * quedó NULL, y el buzón guarda el XML como ADJUNTO en storage (no en
+ * xml_content), así que un backfill por SQL (mig 243) no lo alcanza —
+ * loadStoredCfdiXml sí lee ambas fuentes. Sin el PPD, el semáforo REP de
+ * Pagos emitidos clasifica esos pagos como «no requiere».
+ *
+ * Solo llena NULLs (idempotente, re-correrlo no pisa nada). Procesa hasta 500
+ * por llamada (descarga de R2 secuencial); `remaining` indica si hay que
+ * volver a correrlo.
+ */
+async function backfillMetodoPagoFromXml({ tenantId, userId, ipAddress, userAgent }) {
+  const { rows } = await query(
+    `SELECT id, xml_content FROM supplier_invoices
+      WHERE tenant_id = $1 AND metodo_pago_sat IS NULL
+        AND status <> 'cancelled' AND type = 'invoice'
+      ORDER BY created_at DESC
+      LIMIT 500`,
+    [tenantId]
+  )
+
+  let updated = 0, ppd = 0, pue = 0, sinXml = 0
+  for (const r of rows) {
+    let xml = null
+    try {
+      xml = await loadStoredCfdiXml({ tenantId, id: r.id, xmlContent: r.xml_content })
+    } catch { /* storage caído para este archivo → cuenta como sin XML */ }
+    const m = xml && /MetodoPago\s*=\s*.(PPD|PUE)/.exec(xml)
+    if (!m) { sinXml++; continue }
+    await query(
+      `UPDATE supplier_invoices SET metodo_pago_sat = $1, updated_at = NOW()
+        WHERE id = $2 AND tenant_id = $3 AND metodo_pago_sat IS NULL`,
+      [m[1], r.id, tenantId]
+    )
+    updated++
+    if (m[1] === 'PPD') ppd++; else pue++
+  }
+
+  const { rows: rem } = await query(
+    `SELECT COUNT(*) AS n FROM supplier_invoices
+      WHERE tenant_id = $1 AND metodo_pago_sat IS NULL
+        AND status <> 'cancelled' AND type = 'invoice'`,
+    [tenantId]
+  )
+
+  await audit({
+    tenantId, userId, action: 'supplier_expense.metodo_pago_backfilled',
+    resource: 'supplier_invoices', resourceId: null,
+    payload: { scanned: rows.length, updated, ppd, pue, sinXml },
+    ipAddress, userAgent,
+  })
+
+  return {
+    scanned: rows.length, updated, ppd, pue, sinXml,
+    remaining: parseInt(rem[0].n, 10),
+  }
+}
+
+/**
  * Vuelve a leer el CFDI (XML guardado) de un gasto y recupera los datos del EMISOR
  * (razón social + RFC) que la ingesta por PDF pudo perder — el caso "Proveedor
  * (correo)" cuando el correo trajo XML+PDF separados y el PDF se procesó primero.
@@ -2327,6 +2389,7 @@ module.exports = {
   registerInvoice, generateReceiptRemission, listInvoices, getInvoice, listExpenses,
   listExpensesSummary, getExpense, updateExpense, cancelExpense, linkExpenseToReceipt,
   assignExpenseSupplier, payExpense, getExpenseConceptos, reReadExpenseFromXml,
+  backfillMetodoPagoFromXml,
   suggestReceiptForExpense, requestExpenseInvoice, registerPayment, reverseSupplierPayment, getSupplierStatement,
   unlinkInvoiceFromReceipt, listSubstituteCandidates, substituteInvoice,
 }

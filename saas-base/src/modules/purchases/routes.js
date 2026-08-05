@@ -928,6 +928,23 @@ router.post('/expenses/import',
 )
 
 /**
+ * POST /api/purchases/expenses/backfill-metodo-pago
+ * BARRIDO: completa metodo_pago_sat (PUE/PPD) de todas las facturas del tenant
+ * que lo tienen en blanco, leyendo su XML guardado (columna o adjunto en
+ * storage). Necesario para cartera pre-mig-235; el semáforo REP depende de él.
+ * Mismo gate que reread-xml.
+ */
+router.post('/expenses/backfill-metodo-pago', checkPermission('expenses', 'create'), async (req, res, next) => {
+  try {
+    const result = await supplierInvoiceService.backfillMetodoPagoFromXml({
+      tenantId: req.tenant.id,
+      userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
+    })
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+/**
  * GET /api/purchases/expenses/summary
  * Totales de gasto por categoría (¿en qué se va el dinero?) + total del período
  * + total sin CFDI. Mismos filtros que el listado. Debe ir ANTES de /expenses/:id.

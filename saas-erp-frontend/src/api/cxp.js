@@ -66,6 +66,11 @@ export const cxpApi = {
   complianceComplements: () =>
     api.get(`${B}/complements/compliance`).then(r => r.data),
 
+  // Barrido: completa PUE/PPD de facturas viejas leyendo su XML guardado
+  // (hasta 500 por llamada; puede descargar muchos archivos → timeout largo).
+  backfillMetodoPago: () =>
+    api.post(`${B}/expenses/backfill-metodo-pago`, {}, { timeout: 300000 }).then(r => r.data),
+
   // Sube el XML del REP a mano (mismo pipeline que el correo).
   uploadComplement: (file) => {
     const form = new FormData()
