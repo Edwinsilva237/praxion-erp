@@ -15,6 +15,17 @@ export const reportsApi = {
     }),
 
   /**
+   * Paquete contable del periodo en ZIP: todos los XML fiscales (emitidos,
+   * recibidos, cancelados) + el Reporte Contable en Excel adentro.
+   * from/to en formato YYYY-MM-DD. `to` es exclusivo.
+   */
+  downloadAccountingPackage: ({ from, to }) =>
+    api.get(`${B}/accounting-package`, {
+      params: { from, to },
+      responseType: 'blob',
+    }),
+
+  /**
    * Snapshot financiero del mes en curso (o el indicado en YYYY-MM).
    * Devuelve { period, sales, iva }. Pensado para refresco frecuente (60s).
    */

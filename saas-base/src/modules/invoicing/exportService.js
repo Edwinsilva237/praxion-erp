@@ -302,4 +302,8 @@ async function generateZip({ tenantId, partnerId, dateFrom, dateTo, includeCance
   return Buffer.from(zipped)
 }
 
-module.exports = { generateExcel, generateZip, MAX_ZIP_DOCS }
+module.exports = {
+  generateExcel, generateZip, MAX_ZIP_DOCS,
+  // Helpers compartidos con el paquete contable (reports/accountingPackage.js)
+  mapLimit, streamToBuffer, facturapiIdFromNotes, safeName,
+}

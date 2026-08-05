@@ -8,6 +8,7 @@ const { checkPermission } = require('../../middleware/checkPermission')
 const requireModule      = require('../../middleware/requireModule')
 const { query } = require('../../db')
 const { generateAccountingWorkbook } = require('./accountingReport')
+const { generateAccountingPackage } = require('./accountingPackage')
 const { getFinancialSnapshot } = require('./financialSnapshot')
 const { getSalesReport, getSalesDetail } = require('./salesReport')
 const { generateSalesWorkbook } = require('./salesReportExcel')
@@ -80,6 +81,52 @@ router.get('/accounting',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
       res.send(Buffer.from(buffer))
+    } catch (err) { next(err) }
+  }
+)
+
+/**
+ * GET /api/reports/accounting-package?from=YYYY-MM-DD&to=YYYY-MM-DD
+ * Paquete contable del periodo: ZIP con todos los XML fiscales (emitidos,
+ * recibidos, cancelados) + Reporte-Contable.xlsx + LEEME/FALTANTES.
+ * `to` es EXCLUSIVO (mismos criterios que /accounting para que cuadren).
+ */
+router.get('/accounting-package',
+  checkPermission('reports', 'accounting'),
+  async (req, res, next) => {
+    try {
+      const { from, to } = req.query
+      if (!isValidDate(from) || !isValidDate(to)) {
+        return res.status(400).json({ error: 'Parámetros from y to en formato YYYY-MM-DD requeridos.' })
+      }
+      if (from >= to) {
+        return res.status(400).json({ error: '"from" debe ser anterior a "to".' })
+      }
+
+      const { rows } = await query(
+        `SELECT COALESCE(display_name, name) AS tenant_name FROM tenants WHERE id = $1`,
+        [req.tenant.id]
+      )
+      const tenantName = rows[0]?.tenant_name || 'Empresa'
+
+      const buffer = await generateAccountingPackage({
+        tenantId: req.tenant.id, from, to, tenantName,
+      })
+
+      try {
+        await audit({
+          tenantId: req.tenant.id,
+          userId:   req.auth?.userId,
+          action:   'accounting_package.downloaded',
+          resource: 'reports',
+          payload:  { from, to },
+        })
+      } catch (_) { /* audit no debe romper la descarga */ }
+
+      const filename = `paquete-contable-${from}-a-${to}.zip`
+      res.setHeader('Content-Type', 'application/zip')
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+      res.send(buffer)
     } catch (err) { next(err) }
   }
 )
