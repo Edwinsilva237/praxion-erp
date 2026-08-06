@@ -17,6 +17,8 @@ export const MOVEMENT_LABELS = {
   scrap_to_regrind:          'Merma → Regrind',
   transfer_in:               'Transferencia entrada',
   transfer_out:              'Transferencia salida',
+  purchase_return:           'Devolución a proveedor',
+  internal_consumption:      'Consumo interno (vale)',
 }
 
 export const MOVEMENT_BADGE = {
@@ -35,6 +37,8 @@ export const MOVEMENT_BADGE = {
   scrap_to_regrind:          'amber',
   transfer_in:               'blue',
   transfer_out:              'amber',
+  purchase_return:           'amber',
+  internal_consumption:      'red',
   default:                   'gray',
 }
 
@@ -56,4 +60,6 @@ export const REFERENCE_LABELS = {
   sales_order:                    'Pedido',
   delivery_note:                  'Remisión',
   invoice:                        'Factura',
+  consumption_voucher:            'Vale de salida',
+  consumption_voucher_reversal:   'Cancelación de vale',
 }

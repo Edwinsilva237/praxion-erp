@@ -963,6 +963,7 @@ const REFERENCE_LABELS = {
   inventory_adjustment_reversal: 'Cancelación de ajuste', production_shift: 'Validación de turno',
   shift_progress: 'Captura de producción', shift_mp_load: 'Carga de MP', shift_scrap: 'Merma de turno',
   quality_release: 'Liberación de 2ª calidad',
+  consumption_voucher: 'Vale de salida', consumption_voucher_reversal: 'Cancelación de vale',
 }
 
 /**
@@ -1038,6 +1039,20 @@ async function resolveMovementSource(m, tenantId) {
       }
       case 'quality_release':
         return { type: rt, label: 'Liberación de 2ª calidad a disponible' }
+      case 'consumption_voucher':
+      case 'consumption_voucher_reversal': {
+        const { rows } = await query(
+          `SELECT cv.voucher_number AS folio, cv.voucher_date AS date, cv.received_by,
+                  a.name AS area_name
+             FROM consumption_vouchers cv
+             JOIN tenant_consumption_areas a ON a.id = cv.area_id
+            WHERE cv.id = $1 AND cv.tenant_id = $2`, [rid, tenantId])
+        if (!rows[0]) break
+        const prefix = rt === 'consumption_voucher_reversal' ? 'Cancelación de vale' : 'Vale de salida'
+        return { type: rt, module: 'inventario', docId: rid, folio: rows[0].folio,
+          date: rows[0].date, note: `Área: ${rows[0].area_name} — recibió ${rows[0].received_by}`,
+          label: `${prefix} ${rows[0].folio}` }
+      }
     }
   } catch (e) {
     console.warn('[inventory] resolveMovementSource falló:', e.message)

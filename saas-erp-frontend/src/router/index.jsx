@@ -27,6 +27,7 @@ const MisTurnos               = lazy(() => import('@/pages/Produccion/MisTurnos'
 const Inventario              = lazy(() => import('@/pages/Inventario'))
 const ConteosLista            = lazy(() => import('@/pages/Inventario/ConteosLista'))
 const ConteoDetalle           = lazy(() => import('@/pages/Inventario/ConteoDetalle'))
+const ValesSalida             = lazy(() => import('@/pages/Inventario/ValesSalida'))
 const Comunicados             = lazy(() => import('@/pages/Comunicados/Comunicados'))
 const ComprasOrdenes          = lazy(() => import('@/pages/Compras/ComprasOrdenes'))
 const ComprasRecepciones      = lazy(() => import('@/pages/Compras/ComprasRecepciones'))
@@ -237,6 +238,7 @@ const router = createBrowserRouter([
       { path: '/inventario',          element: <Inventario /> },
       { path: '/inventario/conteos',     element: <ConteosLista /> },
       { path: '/inventario/conteos/:id', element: <ConteoDetalle /> },
+      { path: '/inventario/vales',       element: <ValesSalida /> },
       { path: '/rh/empleados',        element: <RhEmpleados /> },
       { path: '/rh/vacaciones',       element: <RhVacaciones /> },
       { path: '/rh/vacaciones/:id',   element: <RhVacaciones /> },

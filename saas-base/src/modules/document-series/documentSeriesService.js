@@ -30,6 +30,7 @@ function createError(status, message) {
 const ENTITY_TYPES = [
   'invoice', 'sales_order', 'delivery_note', 'sales_return',
   'quotation', 'purchase_order', 'supplier_receipt', 'inventory_adjustment',
+  'consumption_voucher',
 ]
 
 const ENTITY_LABELS = {
@@ -41,12 +42,13 @@ const ENTITY_LABELS = {
   purchase_order:       'Órdenes de compra',
   supplier_receipt:     'Recepciones de proveedor',
   inventory_adjustment: 'Ajustes de inventario',
+  consumption_voucher:  'Vales de salida (consumo interno)',
 }
 
 const ENTITY_GROUPS = {
   ventas:     ['invoice', 'sales_order', 'delivery_note', 'sales_return', 'quotation'],
   compras:    ['purchase_order', 'supplier_receipt'],
-  inventario: ['inventory_adjustment'],
+  inventario: ['inventory_adjustment', 'consumption_voucher'],
 }
 
 const VALID_CFDI_TYPES = ['I', 'E', 'P', 'N', 'T']

@@ -87,6 +87,7 @@ export const NAV_SECTIONS = [
     items: [
       { label: 'Stock y kardex',  to: '/inventario',         iconKey: 'boxes',     permission: 'inventory:read',     module: 'inventory', end: true },
       { label: 'Conteos físicos', to: '/inventario/conteos', iconKey: 'clipboard', permission: 'inventory:read',     module: 'inventory' },
+      { label: 'Vales de salida', to: '/inventario/vales',   iconKey: 'clipboard', permission: 'inventory:read',     module: 'inventory' },
       { label: 'Productos',       to: '/productos',          iconKey: 'package',   permission: 'products:read',      module: 'inventory' },
       { label: 'Materias primas', to: '/materias-primas',    iconKey: 'flask',     permission: 'raw_materials:read', module: 'inventory' },
     ],

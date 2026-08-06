@@ -9,6 +9,8 @@ const inventoryService        = require('./inventoryService')
 const levelsService           = require('./inventoryLevelsService')
 const countService            = require('./inventoryCountService')
 const suggestionService       = require('./inventoryCountSuggestionService')
+const voucherService          = require('./consumptionVoucherService')
+const { generateConsumptionVoucherPDF } = require('./consumptionVoucherPdfService')
 
 router.use(tenantResolver)
 router.use(authGuard)
@@ -471,6 +473,101 @@ router.post('/counts/:id/cancel', checkPermission('inventory', 'adjust'), async 
       userId:   req.auth.userId,
     })
     res.json(data)
+  } catch (err) { next(err) }
+})
+
+// ═══ Vales de salida (consumo interno a áreas) — migs 245/246 ═════════════════
+// Permisos: reusa inventory:read / inventory:adjust (SIN permiso nuevo).
+
+// Catálogo de áreas de consumo
+router.get('/consumption-areas', checkPermission('inventory', 'read'), async (req, res, next) => {
+  try {
+    res.json(await voucherService.listAreas({
+      tenantId: req.tenant.id,
+      includeInactive: req.query.include_inactive === 'true' || req.query.include_inactive === '1',
+    }))
+  } catch (err) { next(err) }
+})
+
+router.post('/consumption-areas', checkPermission('inventory', 'adjust'), async (req, res, next) => {
+  try {
+    res.status(201).json(await voucherService.createArea({
+      tenantId: req.tenant.id, name: req.body?.name,
+    }))
+  } catch (err) { next(err) }
+})
+
+router.patch('/consumption-areas/:id', checkPermission('inventory', 'adjust'), async (req, res, next) => {
+  try {
+    const { name, isActive, sortOrder } = req.body || {}
+    res.json(await voucherService.updateArea({
+      tenantId: req.tenant.id, areaId: req.params.id, name, isActive, sortOrder,
+    }))
+  } catch (err) { next(err) }
+})
+
+// Vales
+router.get('/consumption-vouchers', checkPermission('inventory', 'read'), async (req, res, next) => {
+  try {
+    const { warehouse_id, area_id, status, date_from, date_to, search, page, limit } = req.query
+    res.json(await voucherService.listVouchers({
+      tenantId:    req.tenant.id,
+      warehouseId: warehouse_id || null,
+      areaId:      area_id      || null,
+      status:      status       || null,
+      dateFrom:    date_from    || null,
+      dateTo:      date_to      || null,
+      search:      search       || null,
+      page:        parseInt(page)  || 1,
+      limit:       Math.min(parseInt(limit) || 25, 100),
+    }))
+  } catch (err) { next(err) }
+})
+
+// Resumen valorizado por área (antes de /:id para que no lo capture)
+router.get('/consumption-vouchers/summary-by-area', checkPermission('inventory', 'read'), async (req, res, next) => {
+  try {
+    res.json(await voucherService.consumptionByArea({
+      tenantId: req.tenant.id,
+      dateFrom: req.query.date_from || null,
+      dateTo:   req.query.date_to   || null,
+    }))
+  } catch (err) { next(err) }
+})
+
+router.get('/consumption-vouchers/:id', checkPermission('inventory', 'read'), async (req, res, next) => {
+  try {
+    const voucher = await voucherService.getVoucher({ tenantId: req.tenant.id, voucherId: req.params.id })
+    if (!voucher) return res.status(404).json({ error: 'Vale no encontrado.' })
+    res.json(voucher)
+  } catch (err) { next(err) }
+})
+
+router.get('/consumption-vouchers/:id/pdf', checkPermission('inventory', 'read'), async (req, res, next) => {
+  try {
+    const buf = await generateConsumptionVoucherPDF({ tenantId: req.tenant.id, voucherId: req.params.id })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="vale-${req.params.id}.pdf"`)
+    res.send(buf)
+  } catch (err) { next(err) }
+})
+
+router.post('/consumption-vouchers', checkPermission('inventory', 'adjust'), async (req, res, next) => {
+  try {
+    const { warehouseId, areaId, receivedBy, notes, lines } = req.body || {}
+    res.status(201).json(await voucherService.createVoucher({
+      tenantId: req.tenant.id, warehouseId, areaId, receivedBy, notes, lines,
+      userId: req.auth.userId,
+    }))
+  } catch (err) { next(err) }
+})
+
+router.post('/consumption-vouchers/:id/cancel', checkPermission('inventory', 'adjust'), async (req, res, next) => {
+  try {
+    res.json(await voucherService.cancelVoucher({
+      tenantId: req.tenant.id, voucherId: req.params.id,
+      reason: req.body?.reason, userId: req.auth.userId,
+    }))
   } catch (err) { next(err) }
 })
 

@@ -92,4 +92,34 @@ export const inventoryApi = {
     api.get(`${BASE}/items/${itemType}/${itemId}/detail`, {
       params: { warehouseId }
     }).then(r => r.data),
+
+  // ── Vales de salida (consumo interno a áreas) ─────────────────────────────
+  listConsumptionAreas: (includeInactive = false) =>
+    api.get(`${BASE}/consumption-areas`, {
+      params: includeInactive ? { include_inactive: 1 } : {},
+    }).then(r => r.data),
+
+  createConsumptionArea: (name) =>
+    api.post(`${BASE}/consumption-areas`, { name }).then(r => r.data),
+
+  updateConsumptionArea: (id, body) =>
+    api.patch(`${BASE}/consumption-areas/${id}`, body).then(r => r.data),
+
+  listConsumptionVouchers: (params) =>
+    api.get(`${BASE}/consumption-vouchers`, { params }).then(r => r.data),
+
+  getConsumptionVoucher: (id) =>
+    api.get(`${BASE}/consumption-vouchers/${id}`).then(r => r.data),
+
+  createConsumptionVoucher: (body) =>
+    api.post(`${BASE}/consumption-vouchers`, body).then(r => r.data),
+
+  cancelConsumptionVoucher: (id, reason) =>
+    api.post(`${BASE}/consumption-vouchers/${id}/cancel`, { reason }).then(r => r.data),
+
+  consumptionByArea: (params) =>
+    api.get(`${BASE}/consumption-vouchers/summary-by-area`, { params }).then(r => r.data),
+
+  getConsumptionVoucherPdf: (id) =>
+    api.get(`${BASE}/consumption-vouchers/${id}/pdf`, { responseType: 'blob' }).then(r => r.data),
 }
