@@ -552,11 +552,25 @@ router.get('/consumption-vouchers/:id/pdf', checkPermission('inventory', 'read')
   } catch (err) { next(err) }
 })
 
+// Firma en pantalla del receptor (opcional). R2 exige proxy:true al servir.
+router.get('/consumption-vouchers/:id/signature', checkPermission('inventory', 'read'), async (req, res, next) => {
+  try {
+    const storage = require('../../utils/storage')
+    const file = await voucherService.getSignatureFile({ tenantId: req.tenant.id, voucherId: req.params.id })
+    if (!file) return res.status(404).json({ error: 'El vale no tiene firma.' })
+    await storage.serve(res, file.storagePath, {
+      mimeType: file.mimetype, filename: 'firma.png',
+      disposition: 'inline', proxy: true,
+    })
+  } catch (err) { next(err) }
+})
+
 router.post('/consumption-vouchers', checkPermission('inventory', 'adjust'), async (req, res, next) => {
   try {
-    const { warehouseId, areaId, receivedBy, notes, lines } = req.body || {}
+    const { warehouseId, areaId, receivedBy, notes, lines, signatureDataUrl } = req.body || {}
     res.status(201).json(await voucherService.createVoucher({
       tenantId: req.tenant.id, warehouseId, areaId, receivedBy, notes, lines,
+      signatureDataUrl: signatureDataUrl || null,
       userId: req.auth.userId,
     }))
   } catch (err) { next(err) }

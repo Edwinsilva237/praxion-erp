@@ -2,13 +2,15 @@
 
 const PDFDocument = require('pdfkit')
 const { query }   = require('../../db')
+const storage     = require('../../utils/storage')
 const { addPraxionFooterPDF } = require('../../utils/praxionWitnessMark')
-const { loadTenantLogo, headerTextX, drawHeaderLogo } = require('../../utils/pdfBranding')
+const { loadTenantLogo, headerTextX, drawHeaderLogo, asPdfImage } = require('../../utils/pdfBranding')
 
 /**
- * PDF del vale de salida (consumo interno) — documento no fiscal de control,
- * mismo look-and-feel que la recepción de compras. Incluye bloque de firmas
- * (Entregó / Recibió) para imprimir y firmar en piso.
+ * PDF del vale de salida (consumo interno) — formato BÁSICO imprimible, estilo
+ * remisión simple: artículo + cantidad, SIN costos (el valor vive solo en BD).
+ * Bloque de firmas Entregó / Recibió; si el receptor firmó en pantalla, la
+ * firma se incrusta sobre su línea.
  */
 async function generateConsumptionVoucherPDF({ tenantId, voucherId }) {
   const { rows: vrows } = await query(
@@ -40,6 +42,15 @@ async function generateConsumptionVoucherPDF({ tenantId, voucherId }) {
   )
 
   const logoBuffer = await loadTenantLogo(v.logo_storage_path)
+
+  // Firma en pantalla del receptor (opcional) — se incrusta sobre su línea.
+  let signatureImg = null
+  if (v.receiver_signature_path) {
+    try {
+      const buf = await storage.fetchBuffer(v.receiver_signature_path)
+      signatureImg = asPdfImage(buf)   // null si no es PNG/JPEG → se omite
+    } catch { /* sin firma legible: queda la línea para firmar en papel */ }
+  }
 
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 40, size: 'LETTER' })
@@ -102,27 +113,23 @@ async function generateConsumptionVoucherPDF({ tenantId, voucherId }) {
     doc.fillColor(negro).fontSize(9).font('Helvetica-Bold')
        .text('MATERIAL ENTREGADO', 40, y)
 
+    // Formato básico estilo remisión simple: artículo + cantidad. SIN costos —
+    // el valor del consumo vive solo en BD para los reportes.
     y += 14
-    const cw = { desc: 290, qty: 90, costo: 70, importe: 72 }
+    const cw = { desc: 380, qty: 142 }
     const drawLinesHeader = () => {
       doc.rect(40, y, W, 16).fill(azul)
       doc.fillColor('white').fontSize(7.5).font('Helvetica-Bold')
       let hx = 45
       doc.text('Artículo', hx, y + 4); hx += cw.desc
-      doc.text('Cantidad', hx, y + 4, { width: cw.qty, align: 'right' }); hx += cw.qty
-      doc.text('Costo prom.', hx, y + 4, { width: cw.costo, align: 'right' }); hx += cw.costo
-      doc.text('Importe', hx, y + 4, { width: cw.importe, align: 'right' })
+      doc.text('Cantidad', hx, y + 4, { width: cw.qty, align: 'right' })
       y += 16
     }
     drawLinesHeader()
 
     const bottomLimit = doc.page.height - 70
-    let total = 0
     lines.forEach((line, i) => {
-      const qty     = Math.abs(parseFloat(line.quantity || 0))
-      const costo   = parseFloat(line.unit_cost || 0)
-      const importe = qty * costo
-      total += importe
+      const qty  = Math.abs(parseFloat(line.quantity || 0))
       const desc = line.item_sku ? `${line.item_name} (${line.item_sku})` : (line.item_name || '—')
 
       doc.fontSize(7.5).font('Helvetica')
@@ -139,21 +146,10 @@ async function generateConsumptionVoucherPDF({ tenantId, voucherId }) {
       doc.fillColor(negro).fontSize(7.5).font('Helvetica')
       let cx = 45
       doc.text(desc, cx, y + 6, { width: cw.desc - 5 }); cx += cw.desc
-      doc.text(`${fmtNum(qty)} ${line.unit || ''}`, cx, y + 6, { width: cw.qty, align: 'right' }); cx += cw.qty
-      doc.text(fmt(costo), cx, y + 6, { width: cw.costo, align: 'right' }); cx += cw.costo
-      doc.text(fmt(importe), cx, y + 6, { width: cw.importe, align: 'right' })
+      doc.text(`${fmtNum(qty)} ${line.unit || ''}`, cx, y + 6, { width: cw.qty, align: 'right' })
       y += rowH
     })
-
-    // ─── TOTAL ─────────────────────────────────────────────────────
     y += 10
-    const tw = 220
-    const tx = 40 + W - tw
-    doc.rect(tx - 5, y, tw + 5, 22).fill(azul)
-    doc.fillColor('white').fontSize(11).font('Helvetica-Bold')
-       .text('VALOR TOTAL', tx, y + 6, { width: tw * 0.55 })
-       .text(`MXN ${fmt(total)}`, tx + tw * 0.55, y + 6, { width: tw * 0.45 - 5, align: 'right' })
-    y += 28
 
     // ─── NOTAS ─────────────────────────────────────────────────────
     if (v.notes) {
@@ -174,7 +170,7 @@ async function generateConsumptionVoucherPDF({ tenantId, voucherId }) {
     doc.fillColor('white').fontSize(8).font('Helvetica-Bold')
        .text('ENTREGA Y RECEPCIÓN', 45, y + 3)
     y += 14
-    const blockH = 80
+    const blockH = signatureImg ? 120 : 80
     doc.rect(40, y, W, blockH).fill(gris)
 
     const half = W / 2
@@ -187,15 +183,23 @@ async function generateConsumptionVoucherPDF({ tenantId, voucherId }) {
     doc.fillColor(grisText).fontSize(7).font('Helvetica')
        .text('Firma', 50, y + blockH - 18, { width: half - 30, align: 'center' })
 
-    // Recibió (área)
+    // Recibió (área) — si firmó en pantalla, la firma va sobre su línea.
     doc.fillColor(grisText).fontSize(8).font('Helvetica')
        .text(`Recibió (${v.area_name || 'área'}):`, 50 + half, y + 8)
     doc.fillColor(negro).fontSize(10).font('Helvetica-Bold')
        .text(v.received_by || '—', 50 + half, y + 20, { width: half - 30 })
+    if (signatureImg) {
+      try {
+        doc.image(signatureImg, 50 + half, y + 30, {
+          fit: [half - 30, blockH - 56], align: 'center', valign: 'bottom',
+        })
+      } catch { /* firma ilegible: queda la línea en blanco */ }
+    }
     doc.moveTo(50 + half, y + blockH - 22).lineTo(30 + W, y + blockH - 22)
        .strokeColor('#999999').lineWidth(0.7).stroke()
     doc.fillColor(grisText).fontSize(7).font('Helvetica')
-       .text('Firma', 50 + half, y + blockH - 18, { width: half - 30, align: 'center' })
+       .text(signatureImg ? 'Firma capturada en pantalla' : 'Firma',
+             50 + half, y + blockH - 18, { width: half - 30, align: 'center' })
 
     y += blockH
 
@@ -219,7 +223,6 @@ async function generateConsumptionVoucherPDF({ tenantId, voucherId }) {
   })
 }
 
-const fmt = (n) => parseFloat(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fmtNum = (n) => parseFloat(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 0, maximumFractionDigits: 3 })
 
 function createError(status, message) {

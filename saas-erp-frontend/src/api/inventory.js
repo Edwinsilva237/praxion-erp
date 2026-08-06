@@ -122,4 +122,7 @@ export const inventoryApi = {
 
   getConsumptionVoucherPdf: (id) =>
     api.get(`${BASE}/consumption-vouchers/${id}/pdf`, { responseType: 'blob' }).then(r => r.data),
+
+  getConsumptionVoucherSignature: (id) =>
+    api.get(`${BASE}/consumption-vouchers/${id}/signature`, { responseType: 'blob' }).then(r => r.data),
 }

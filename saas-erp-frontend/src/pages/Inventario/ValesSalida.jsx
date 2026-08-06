@@ -1,21 +1,23 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { inventoryApi } from '@/api/inventory'
 import Autocomplete from '@/components/ui/Autocomplete'
 import Badge from '@/components/ui/Badge'
 import Spinner from '@/components/ui/Spinner'
+import SignaturePad from '@/components/ui/SignaturePad'
 import Can from '@/components/auth/Can'
-import { fmtMXN, fmtNum, fmtDateOnly, fmtDate } from '@/utils/fmt'
+import { fmtNum, fmtDateOnly, fmtDate } from '@/utils/fmt'
 import { downloadBlob, printBlob } from '@/utils/downloadBlob'
 import { genId } from '@/utils/genId'
 import clsx from 'clsx'
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Vales de salida — consumo interno a áreas (migs 245/246).
+//  Vales de salida — consumo interno a áreas (migs 245/246, firma mig 247).
 //  El almacenista libera material a un área (producción, empaque, mantenimiento)
-//  sin venta de por medio: baja el stock con costo promedio, queda quién recibió
-//  y el consumo se reporta valorizado por área. Espejo ligero de Ajustes.
+//  sin venta de por medio: baja el stock con costo promedio y queda quién recibió
+//  (con firma en pantalla opcional). El VALOR del consumo se guarda en BD para
+//  reportes, pero NO se muestra en pantalla ni en el PDF (pedido del usuario).
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function ValesSalida() {
@@ -110,8 +112,7 @@ export default function ValesSalida() {
                 areaFilter === a.area_id ? 'ring-1 ring-brand-300' : 'hover:bg-surface-elevated/40'
               )}>
               <p className="text-[11px] uppercase tracking-wider text-ink-muted truncate">{a.area_name}</p>
-              <p className="text-base font-bold font-mono text-ink-primary mt-1">{fmtMXN(a.total_value)}</p>
-              <p className="text-[11px] text-ink-muted">{a.vouchers} vale{a.vouchers !== 1 && 's'}</p>
+              <p className="text-base font-bold font-mono text-ink-primary mt-1">{a.vouchers} vale{a.vouchers !== 1 && 's'}</p>
             </button>
           ))}
         </div>
@@ -178,7 +179,6 @@ export default function ValesSalida() {
                   <th>Área</th>
                   <th>Recibió</th>
                   <th className="text-right">Líneas</th>
-                  <th className="text-right">Valor</th>
                   <th>Estado</th>
                 </tr>
               </thead>
@@ -192,7 +192,6 @@ export default function ValesSalida() {
                     <td className="text-xs">{v.area_name}</td>
                     <td className="text-xs">{v.received_by}</td>
                     <td className="text-right text-xs">{v.total_lines}</td>
-                    <td className="text-right font-mono text-xs">{fmtMXN(v.total_value)}</td>
                     <td>
                       <Badge
                         variant={v.status === 'cancelled' ? 'red' : 'green'}
@@ -271,6 +270,8 @@ function NuevoValeModal({ warehouses = [], areas = [], onClose, onSaved }) {
   const [notes, setNotes]             = useState('')
   const [lines, setLines]             = useState([EMPTY_LINE()])
   const [newAreaName, setNewAreaName] = useState('')
+  const [signature, setSignature]     = useState(null)   // data URL PNG (opcional)
+  const [signOpen, setSignOpen]       = useState(false)
   const [serverError, setServerError] = useState(null)
   const [showFieldErrors, setShowFieldErrors] = useState(false)
 
@@ -281,7 +282,7 @@ function NuevoValeModal({ warehouses = [], areas = [], onClose, onSaved }) {
     return data.map(it => ({
       id: it.id,
       label: it.name,
-      sub: `${it.sku ? `SKU ${it.sku} · ` : ''}${it.unit}${warehouseId ? ` · stock: ${fmtNum(it.current_quantity)} · costo: ${fmtMXN(it.avg_cost)}` : ''}`,
+      sub: `${it.sku ? `SKU ${it.sku} · ` : ''}${it.unit}${warehouseId ? ` · stock: ${fmtNum(it.current_quantity)}` : ''}`,
       meta: it,
     }))
   }, [warehouseId])
@@ -312,11 +313,6 @@ function NuevoValeModal({ warehouses = [], areas = [], onClose, onSaved }) {
     return q > parseFloat(l.item.current_quantity || 0)
   }
 
-  const totalValue = useMemo(() => lines.reduce((s, l) => {
-    const q = parseFloat(l.quantity) || 0
-    return s + q * parseFloat(l.item?.avg_cost || 0)
-  }, 0), [lines])
-
   const validation = useMemo(() => {
     const errors = []
     if (!warehouseId) errors.push('Selecciona el almacén de origen.')
@@ -335,6 +331,7 @@ function NuevoValeModal({ warehouses = [], areas = [], onClose, onSaved }) {
       warehouseId, areaId,
       receivedBy: receivedBy.trim(),
       notes: notes.trim() || undefined,
+      signatureDataUrl: signature || undefined,
       lines: lines
         .filter(l => l.item && parseFloat(l.quantity) > 0)
         .map(l => ({
@@ -424,7 +421,6 @@ function NuevoValeModal({ warehouses = [], areas = [], onClose, onSaved }) {
             <div className="flex flex-col gap-3">
               {lines.map((line, idx) => {
                 const warn = lineHasStockWarning(line)
-                const importe = (parseFloat(line.quantity) || 0) * parseFloat(line.item?.avg_cost || 0)
                 return (
                   <div key={line.uid} className={clsx(
                     'border rounded-xl p-3',
@@ -460,8 +456,7 @@ function NuevoValeModal({ warehouses = [], areas = [], onClose, onSaved }) {
                         />
                         {line.item && warehouseId && (
                           <p className="text-[11px] text-ink-muted mt-1 ml-1">
-                            Stock: {fmtNum(line.item.current_quantity)} {line.item.unit} · Costo prom.: {fmtMXN(line.item.avg_cost)}
-                            {importe > 0 && <> · Importe: <span className="font-mono">{fmtMXN(importe)}</span></>}
+                            Stock disponible: {fmtNum(line.item.current_quantity)} {line.item.unit}
                           </p>
                         )}
                       </div>
@@ -486,12 +481,25 @@ function NuevoValeModal({ warehouses = [], areas = [], onClose, onSaved }) {
             </div>
           </div>
 
-          {/* Total estimado */}
-          <div className="border-t border-line-subtle pt-3 mt-4 flex justify-end">
-            <div className="text-right">
-              <p className="text-[10px] uppercase font-semibold text-ink-muted tracking-wider">Valor estimado del vale</p>
-              <p className="text-lg font-bold font-mono text-ink-primary">{fmtMXN(totalValue)}</p>
-              <p className="text-[10px] text-ink-muted">al costo promedio actual — el definitivo se fija al guardar</p>
+          {/* Firma del receptor (opcional) */}
+          <div className="border-t border-line-subtle pt-4 mt-4">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-semibold text-ink-secondary">Firma del receptor <span className="text-ink-muted font-normal text-xs">(opcional)</span></p>
+                <p className="text-[11px] text-ink-muted">Quien recibe puede firmar aquí; la firma sale en el PDF del vale.</p>
+              </div>
+              {!signature ? (
+                <button type="button" className="btn-secondary btn-sm" onClick={() => setSignOpen(true)}>
+                  ✍ Capturar firma
+                </button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <img src={signature} alt="Firma" className="h-12 bg-white rounded border border-line-subtle" />
+                  <button type="button" className="btn-ghost btn-sm text-xs text-ink-muted" onClick={() => setSignature(null)}>
+                    Quitar
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -512,6 +520,55 @@ function NuevoValeModal({ warehouses = [], areas = [], onClose, onSaved }) {
           <button type="button" disabled={mutation.isPending} onClick={handleSubmit}
             className="btn-primary flex-1 disabled:opacity-50">
             {mutation.isPending ? <Spinner size="sm" /> : 'Guardar vale y descontar stock'}
+          </button>
+        </div>
+
+        {signOpen && (
+          <FirmaReceptorModal
+            receiverName={receivedBy}
+            onClose={() => setSignOpen(false)}
+            onSigned={(dataUrl) => { setSignature(dataUrl); setSignOpen(false) }}
+          />
+        )}
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Mini-modal: firma en pantalla del receptor (pad simple, sin componer imagen)
+// ─────────────────────────────────────────────────────────────────────────────
+function FirmaReceptorModal({ receiverName, onClose, onSigned }) {
+  const padRef = useRef(null)
+  const [sigEmpty, setSigEmpty] = useState(true)
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10001] flex items-center justify-center bg-black/50 p-3 sm:p-4">
+      <div className="card w-full max-w-xl p-4 sm:p-5 flex flex-col gap-3"
+        style={{ paddingTop: 'max(1rem, env(safe-area-inset-top))' }}>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-base font-semibold text-ink-primary">Firma del receptor</h3>
+            {receiverName?.trim() && <p className="text-xs text-ink-muted mt-0.5">{receiverName}</p>}
+          </div>
+          <button type="button" onClick={onClose} className="btn-ghost btn-icon text-ink-muted">✕</button>
+        </div>
+        <div className="h-52 sm:h-60">
+          <SignaturePad ref={padRef} onChange={setSigEmpty} />
+        </div>
+        <div className="flex justify-end">
+          <button type="button" onClick={() => padRef.current?.clear()}
+            className="btn-ghost btn-sm text-xs text-ink-muted">Limpiar</button>
+        </div>
+        <div className="flex gap-2">
+          <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancelar</button>
+          <button type="button" disabled={sigEmpty} className="btn-primary flex-1 disabled:opacity-50"
+            onClick={() => {
+              const dataUrl = padRef.current?.toDataURL()
+              if (dataUrl) onSigned(dataUrl)
+            }}>
+            Usar firma
           </button>
         </div>
       </div>
@@ -595,14 +652,11 @@ function ValeDetalleModal({ voucherId, onClose, onCancelled }) {
                     <tr>
                       <th>Artículo</th>
                       <th className="text-right">Cantidad</th>
-                      <th className="text-right">Costo prom.</th>
-                      <th className="text-right">Importe</th>
                     </tr>
                   </thead>
                   <tbody>
                     {(v.lines || []).map(l => {
                       const qty = Math.abs(parseFloat(l.quantity))
-                      const cost = parseFloat(l.unit_cost || 0)
                       return (
                         <tr key={l.id}>
                           <td className="text-xs">
@@ -610,20 +664,14 @@ function ValeDetalleModal({ voucherId, onClose, onCancelled }) {
                             {l.item_sku && <span className="text-ink-muted ml-1">#{l.item_sku}</span>}
                           </td>
                           <td className="text-right text-xs font-mono">{fmtNum(qty)} {l.unit}</td>
-                          <td className="text-right text-xs font-mono">{fmtMXN(cost)}</td>
-                          <td className="text-right text-xs font-mono">{fmtMXN(qty * cost)}</td>
                         </tr>
                       )
                     })}
                   </tbody>
-                  <tfoot>
-                    <tr>
-                      <td colSpan={3} className="text-right text-xs font-semibold">Valor total</td>
-                      <td className="text-right text-sm font-bold font-mono">{fmtMXN(v.total_value)}</td>
-                    </tr>
-                  </tfoot>
                 </table>
               </div>
+
+              {v.receiver_signature_path && <FirmaPreview voucherId={v.id} />}
 
               {v.notes && (
                 <p className="text-xs text-ink-secondary bg-surface-secondary border border-line-subtle rounded-lg px-3 py-2">
@@ -689,6 +737,26 @@ function ValeDetalleModal({ voucherId, onClose, onCancelled }) {
       </div>
     </div>,
     document.body
+  )
+}
+
+// Miniatura de la firma del receptor (el endpoint requiere Bearer → va por
+// axios como blob y se muestra vía object URL).
+function FirmaPreview({ voucherId }) {
+  const { data: url } = useQuery({
+    queryKey: ['voucher-signature', voucherId],
+    queryFn: async () => {
+      const blob = await inventoryApi.getConsumptionVoucherSignature(voucherId)
+      return URL.createObjectURL(blob)
+    },
+    staleTime: Infinity,
+  })
+  if (!url) return null
+  return (
+    <div className="bg-surface-secondary border border-line-subtle rounded-lg px-3 py-2">
+      <p className="text-[10px] uppercase text-ink-muted tracking-wider mb-1">Firma del receptor</p>
+      <img src={url} alt="Firma del receptor" className="h-16 bg-white rounded" />
+    </div>
   )
 }
 

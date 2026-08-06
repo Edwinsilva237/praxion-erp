@@ -3,6 +3,8 @@
 const { query, withTransaction } = require('../../db')
 const { recordMovement } = require('./inventoryService')
 const documentSeriesService = require('../document-series/documentSeriesService')
+const storage = require('../../utils/storage')
+const logger = require('../../config/logger')
 
 /**
  * Vales de salida (consumo interno a áreas) — mig 245/246.
@@ -100,9 +102,24 @@ async function nextVoucherNumber(client, tenantId, opts = {}) {
 
 // ─── Crear vale ───────────────────────────────────────────────────────────────
 
+// Firma en pantalla (opcional): data URL PNG del pad de firma. Tope 2MB
+// decodificados — una firma real pesa unos cuantos KB.
+const SIGNATURE_PREFIX = 'data:image/png;base64,'
+function decodeSignature(signatureDataUrl) {
+  if (!signatureDataUrl) return null
+  if (typeof signatureDataUrl !== 'string' || !signatureDataUrl.startsWith(SIGNATURE_PREFIX)) {
+    throw createError(400, 'La firma debe ser un PNG (data URL).')
+  }
+  const buf = Buffer.from(signatureDataUrl.slice(SIGNATURE_PREFIX.length), 'base64')
+  if (!buf.length) throw createError(400, 'La firma llegó vacía.')
+  if (buf.length > 2 * 1024 * 1024) throw createError(400, 'La firma excede 2MB.')
+  return buf
+}
+
 async function createVoucher({
-  tenantId, warehouseId, areaId, receivedBy, notes, lines = [], userId,
+  tenantId, warehouseId, areaId, receivedBy, notes, lines = [], signatureDataUrl, userId,
 }) {
+  const signatureBuf = decodeSignature(signatureDataUrl)   // valida ANTES de tocar la BD
   if (!warehouseId) throw createError(400, 'warehouseId es requerido.')
   if (!areaId)      throw createError(400, 'areaId (área destino) es requerido.')
   if (!receivedBy || !receivedBy.trim()) {
@@ -191,7 +208,39 @@ async function createVoucher({
       `SELECT * FROM consumption_vouchers WHERE id = $1`, [header.id]
     )
     return finalRows[0]
+  }).then(async (voucher) => {
+    // Firma: se sube DESPUÉS del commit (el vale ya existe). Best-effort — si el
+    // storage falla, el vale queda sin firma y se avisa al caller; el material
+    // ya salió y eso es lo que no puede perderse.
+    if (!signatureBuf) return voucher
+    try {
+      const key = `vouchers/${tenantId}/${voucher.id}-firma.png`
+      await storage.put(key, signatureBuf, { contentType: 'image/png' })
+      await query(
+        `UPDATE consumption_vouchers SET receiver_signature_path = $1
+          WHERE id = $2 AND tenant_id = $3`,
+        [key, voucher.id, tenantId]
+      )
+      return { ...voucher, receiver_signature_path: key }
+    } catch (err) {
+      logger.warn('vales: no se pudo guardar la firma', { voucherId: voucher.id, error: err.message })
+      return { ...voucher, signature_error: 'El vale se guardó, pero la firma no pudo almacenarse.' }
+    }
   })
+}
+
+/** PNG de la firma del receptor (si el vale la tiene). */
+async function getSignatureFile({ tenantId, voucherId }) {
+  const { rows } = await query(
+    `SELECT receiver_signature_path FROM consumption_vouchers
+      WHERE id = $1 AND tenant_id = $2`,
+    [voucherId, tenantId]
+  )
+  if (!rows.length || !rows[0].receiver_signature_path) return null
+  return {
+    storagePath: rows[0].receiver_signature_path,
+    mimetype: 'image/png',
+  }
 }
 
 // ─── Cancelar (reingresa el material) ─────────────────────────────────────────
@@ -341,4 +390,5 @@ async function consumptionByArea({ tenantId, dateFrom, dateTo }) {
 module.exports = {
   listAreas, createArea, updateArea,
   createVoucher, cancelVoucher, listVouchers, getVoucher, consumptionByArea,
+  getSignatureFile,
 }

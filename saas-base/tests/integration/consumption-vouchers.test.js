@@ -133,6 +133,32 @@ describe('Vales de salida — consumo interno', () => {
     expect(sum.body.find(r => r.area_id === areaId)).toBeUndefined()
   })
 
+  test('firma en pantalla (opcional): se guarda, se sirve y sin firma da 404', async () => {
+    // PNG mínimo válido (1×1) como data URL — simula el pad de firma.
+    const png1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    const res = await client.post('/api/inventory/consumption-vouchers', {
+      warehouseId, areaId, receivedBy: 'María López',
+      signatureDataUrl: `data:image/png;base64,${png1x1}`,
+      lines: [{ itemType: 'raw_material', itemId: rmId, quantity: 2 }],
+    }).expect(201)
+    expect(res.body.receiver_signature_path).toBeTruthy()
+
+    const sig = await client.get(`/api/inventory/consumption-vouchers/${res.body.id}/signature`).expect(200)
+    expect(sig.headers['content-type']).toContain('image/png')
+
+    // Formato inválido de firma → 400 y NO descuenta stock.
+    const before = await stockOf(rmId)
+    await client.post('/api/inventory/consumption-vouchers', {
+      warehouseId, areaId, receivedBy: 'María López',
+      signatureDataUrl: 'data:image/jpeg;base64,xxxx',
+      lines: [{ itemType: 'raw_material', itemId: rmId, quantity: 1 }],
+    }).expect(400)
+    expect((await stockOf(rmId)).qty).toBe(before.qty)
+
+    // Un vale sin firma responde 404 en el endpoint de firma.
+    await client.get(`/api/inventory/consumption-vouchers/${voucherId}/signature`).expect(404)
+  })
+
   test('área desactivada ya no acepta vales nuevos', async () => {
     await client.patch(`/api/inventory/consumption-areas/${areaId}`, { isActive: false }).expect(200)
     await client.post('/api/inventory/consumption-vouchers', {
