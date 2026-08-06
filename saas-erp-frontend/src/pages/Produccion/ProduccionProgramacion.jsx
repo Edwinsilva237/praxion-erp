@@ -1233,9 +1233,12 @@ export default function ProduccionProgramacion() {
     queryKey: ['orders-in-progress'],
     queryFn: () => productionApi.listOrders({ status: 'in_progress', limit: 100 }).then(r => r.data || []),
   })
+  // Solo usuarios activos que pueden capturar producción (production:create):
+  // capturistas y supervisores. Sin esto el selector mostraba a TODO el tenant
+  // (ventas, finanzas, etc.).
   const { data: usersData } = useQuery({
-    queryKey: ['users-active'],
-    queryFn: () => api.get('/users', { params: { limit: 100 } }).then(r => r.data),
+    queryKey: ['users-active', 'production-capture'],
+    queryFn: () => api.get('/users', { params: { limit: 100, permission: 'production:create', active: 1 } }).then(r => r.data),
   })
 
   const { data: tenantConfig } = useQuery({

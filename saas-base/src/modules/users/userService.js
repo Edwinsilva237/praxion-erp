@@ -9,15 +9,34 @@ const { assertCanCreateUser } = require('../billing/enforcement')
 const { invitationEmail } = require('../email/templates')
 const logger = require('../../config/logger')
 
-async function listUsers({ tenantId, page = 1, limit = 20, search }) {
+async function listUsers({ tenantId, page = 1, limit = 20, search, permission, activeOnly }) {
   const offset = (page - 1) * limit
   const params = [tenantId, limit, offset]
-  let searchClause = ''
+  const extraClauses = []
 
   if (search) {
     params.push(`%${search}%`)
-    searchClause = `AND (u.email ILIKE $${params.length} OR u.full_name ILIKE $${params.length})`
+    extraClauses.push(`AND (u.email ILIKE $${params.length} OR u.full_name ILIKE $${params.length})`)
   }
+
+  if (activeOnly) {
+    extraClauses.push(`AND u.is_active = true`)
+  }
+
+  // permission = 'resource:action' — solo usuarios cuyo algún rol otorga ese
+  // permiso (p. ej. production:create para armar turnos con capturistas).
+  if (permission) {
+    const [resource, action] = permission.split(':')
+    params.push(resource, action)
+    extraClauses.push(`AND EXISTS (
+      SELECT 1 FROM user_roles urp
+      JOIN role_permissions rp ON rp.role_id = urp.role_id
+      JOIN permissions p       ON p.id = rp.permission_id
+      WHERE urp.user_id = u.id AND p.resource = $${params.length - 1} AND p.action = $${params.length}
+    )`)
+  }
+
+  const whereExtra = extraClauses.join('\n       ')
 
   const { rows } = await query(
     `SELECT u.id, u.email, u.full_name, u.is_active, u.last_login_at, u.created_at,
@@ -28,14 +47,20 @@ async function listUsers({ tenantId, page = 1, limit = 20, search }) {
      FROM users u
      LEFT JOIN user_roles ur ON ur.user_id = u.id
      LEFT JOIN roles r       ON r.id = ur.role_id
-     WHERE u.tenant_id = $1 ${searchClause}
+     WHERE u.tenant_id = $1 ${whereExtra}
      GROUP BY u.id
      ORDER BY u.created_at DESC
      LIMIT $2 OFFSET $3`,
     params
   )
 
-  const { rows: countRows } = await query(`SELECT COUNT(*) FROM users WHERE tenant_id = $1`, [tenantId])
+  // El COUNT usa los mismos filtros (sin limit/offset) para que la paginación cuadre.
+  const countParams = params.slice(0, 1).concat(params.slice(3))
+  const countWhere = whereExtra.replace(/\$(\d+)/g, (_, n) => `$${parseInt(n, 10) - 2}`)
+  const { rows: countRows } = await query(
+    `SELECT COUNT(*) FROM users u WHERE u.tenant_id = $1 ${countWhere}`,
+    countParams
+  )
   return { data: rows, total: parseInt(countRows[0].count, 10), page, limit }
 }
 

@@ -16,12 +16,20 @@ router.use(requireActiveTenant)
 
 router.get('/', checkPermission('users', 'read'), async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, search } = req.query
+    const { page = 1, limit = 20, search, permission, active } = req.query
+    // permission = 'resource:action' (p. ej. production:create) — filtra a
+    // usuarios cuyos roles otorgan ese permiso. Formato estricto para no
+    // inyectar basura en la consulta.
+    if (permission && !/^[a-z_]+:[a-z_]+$/.test(permission)) {
+      return res.status(400).json({ error: 'permission debe tener formato recurso:accion.' })
+    }
     const result = await userService.listUsers({
       tenantId: req.tenant.id,
       page: parseInt(page, 10),
       limit: Math.min(parseInt(limit, 10), 100),
       search,
+      permission: permission || undefined,
+      activeOnly: active === '1' || active === 'true',
     })
     res.json(result)
   } catch (err) { next(err) }
