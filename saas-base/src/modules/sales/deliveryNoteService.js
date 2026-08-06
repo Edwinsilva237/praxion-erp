@@ -427,6 +427,7 @@ async function listDeliveryNotes({ tenantId, type, status, partnerId, from, to, 
             dn.total_mxn, dn.issue_date, dn.credit_due_date,
             dn.receiver_name, dn.delivered_at, dn.synced_at,
             dn.no_invoice, dn.partner_id,
+            (dn.receiver_photo_path IS NOT NULL) AS has_delivery_evidence,
             EXISTS(SELECT 1 FROM document_status_log dsl
                     WHERE dsl.tenant_id = dn.tenant_id
                       AND dsl.entity_type='delivery_note' AND dsl.entity_id = dn.id

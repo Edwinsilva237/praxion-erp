@@ -1822,6 +1822,7 @@ export default function ComprasRecepciones() {
                   <th>Confirmó</th>
                   <SortableHeader sortKey="estatus"   sortBy={sortBy} sortDir={sortDir} onSort={onSort} initialDir="asc">Estado</SortableHeader>
                   <th>Factura</th>
+                  <th>Evidencia</th>
                   <SortableHeader sortKey="fecha"     sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Fecha</SortableHeader>
                   <th className="text-right">Total</th>
                   <th></th>
@@ -1831,16 +1832,7 @@ export default function ComprasRecepciones() {
                 {receipts.map(r => (
                   <tr key={r.id} className="cursor-pointer" onClick={() => setDetailId(r.id)}>
                     <td>
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-mono text-sm font-semibold text-brand-300">{r.receipt_number}</span>
-                        {r.evidence_filename && (
-                          <span title={`Evidencia: ${r.evidence_filename}`}>
-                            <svg className="w-3.5 h-3.5 text-ink-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
-                            </svg>
-                          </span>
-                        )}
-                      </div>
+                      <span className="font-mono text-sm font-semibold text-brand-300">{r.receipt_number}</span>
                     </td>
                     <td className="font-mono text-xs text-ink-muted">
                       {r.purchase_order_number
@@ -1892,6 +1884,19 @@ export default function ComprasRecepciones() {
                         <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-status-warning/15 text-status-warning">
                           <span className="w-1.5 h-1.5 rounded-full bg-status-warning shrink-0" />
                           Sin factura
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      {r.evidence_filename ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-status-success/15 text-status-success"
+                          title={`Evidencia: ${r.evidence_filename}`}>
+                          📎 Sí
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-status-warning/15 text-status-warning"
+                          title="Sin evidencia adjunta — súbela desde el detalle de la recepción">
+                          Sin evidencia
                         </span>
                       )}
                     </td>

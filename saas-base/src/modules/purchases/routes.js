@@ -1150,7 +1150,9 @@ router.post('/expenses/:id/link-receipt',
   async (req, res, next) => {
     try {
       // Acepta una sola recepción (receiptId/receiptLineIds) o VARIAS (receipts[]).
-      const { receiptId, receiptLineIds, receipts } = req.body || {}
+      // allowPartnerMismatch: la factura viene de OTRA razón social del mismo
+      // proveedor comercial — el usuario confirma el cruce explícitamente.
+      const { receiptId, receiptLineIds, receipts, allowPartnerMismatch } = req.body || {}
       if (!receiptId && !(Array.isArray(receipts) && receipts.length)) {
         return res.status(400).json({ error: 'receiptId o receipts[] es requerido.' })
       }
@@ -1158,6 +1160,7 @@ router.post('/expenses/:id/link-receipt',
         tenantId: req.tenant.id, expenseId: req.params.id, receiptId,
         receiptLineIds: Array.isArray(receiptLineIds) ? receiptLineIds : [],
         receipts: Array.isArray(receipts) ? receipts : null,
+        allowPartnerMismatch: allowPartnerMismatch === true,
         userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
       })
       res.json(result)

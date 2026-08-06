@@ -506,6 +506,9 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const [cancelReason, setCancelReason] = useState('')
   const [requestMsg, setRequestMsg] = useState(null)
   const [linkOpen, setLinkOpen] = useState(false)
+  // Vínculo cruzado: la factura llegó con OTRA razón social del mismo proveedor
+  // comercial → buscar recepciones pendientes de TODOS los proveedores.
+  const [crossPartner, setCrossPartner] = useState(false)
   const [pickedReceipts, setPickedReceipts] = useState({}) // { receiptId: bool } selección (paso 1 manual, multi)
   const [linkReceiptId, setLinkReceiptId] = useState('')   // 1 sola recepción → paso 2 (líneas, parcial)
   const [checkedLines, setCheckedLines] = useState({})     // { lineId: bool }
@@ -643,9 +646,10 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const conceptos = conceptosData?.lines || []
 
   // Recepciones pendientes de factura del proveedor (para elegir manualmente).
+  // Con crossPartner activo se piden las de TODOS los proveedores (razón social distinta).
   const { data: pendingReceipts } = useQuery({
-    queryKey: ['pending-invoice-receipts', exp?.partner_id],
-    queryFn:  () => purchasesApi.listPendingInvoiceReceipts(exp.partner_id),
+    queryKey: ['pending-invoice-receipts', crossPartner ? 'all' : exp?.partner_id],
+    queryFn:  () => purchasesApi.listPendingInvoiceReceipts(crossPartner ? undefined : exp.partner_id),
     enabled:  linkOpen && !!exp?.partner_id,
   })
 
@@ -666,7 +670,12 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
 
   const linkReceipt = useMutation({
     mutationFn: ({ receiptId, lineIds, receipts }) =>
-      purchasesApi.linkExpenseToReceipt(id, { receiptId, receiptLineIds: lineIds, receipts }),
+      purchasesApi.linkExpenseToReceipt(id, {
+        receiptId, receiptLineIds: lineIds, receipts,
+        // El usuario activó "otra razón social" — el backend exige este flag
+        // para aceptar recepciones de un proveedor distinto al de la factura.
+        allowPartnerMismatch: crossPartner || undefined,
+      }),
     onSuccess: () => {
       // El gasto se volvió factura de compra → sale del listado de Gastos.
       qc.invalidateQueries({ queryKey: ['expenses'] })
@@ -752,7 +761,7 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
   const amountCoverage  = Math.min(expSubtotal, Math.max(remainingAmount, 0))
   const remainingAfter  = +(remainingAmount - amountCoverage).toFixed(2)
   const amountOvershoot = +(expSubtotal - amountCoverage).toFixed(2)   // factura > saldo restante
-  const resetLink = () => { setLinkOpen(false); setLinkReceiptId(''); setPickedReceipts({}); setCheckedLines({}) }
+  const resetLink = () => { setLinkOpen(false); setLinkReceiptId(''); setPickedReceipts({}); setCheckedLines({}); setCrossPartner(false) }
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">
@@ -1074,9 +1083,22 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
                         ) : pendingReceipts === undefined ? (
                           <Spinner size="sm" />
                         ) : pendingReceipts.length === 0 ? (
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-xs text-ink-muted">Este proveedor no tiene recepciones pendientes de factura.</p>
-                            <button type="button" className="btn-ghost text-xs" onClick={resetLink}>Cerrar</button>
+                          <div className="flex flex-col gap-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-xs text-ink-muted">
+                                {crossPartner
+                                  ? 'No hay recepciones pendientes de factura de ningún proveedor.'
+                                  : 'Este proveedor no tiene recepciones pendientes de factura.'}
+                              </p>
+                              <button type="button" className="btn-ghost text-xs" onClick={resetLink}>Cerrar</button>
+                            </div>
+                            {!crossPartner && (
+                              <button type="button" className="btn-secondary text-xs self-start"
+                                onClick={() => { setPickedReceipts({}); setCrossPartner(true) }}
+                                title="El proveedor entregó la mercancía pero factura con otra entidad legal">
+                                ¿Te facturó con otra razón social? → Buscar en todos los proveedores
+                              </button>
+                            )}
                           </div>
                         ) : (() => {
                           const pickedIds = Object.keys(pickedReceipts).filter(k => pickedReceipts[k])
@@ -1087,6 +1109,20 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
                               Marca una o <strong>varias</strong> recepciones que cubre esta factura.
                               Con una sola podrás elegir líneas (parcial); con varias se vinculan completas.
                             </p>
+                            {crossPartner && (
+                              <div className="bg-status-warning/10 border border-status-warning/40 rounded-lg px-3 py-2 text-[11px] text-status-warning">
+                                ⚠ Estás viendo recepciones de <strong>todos los proveedores</strong> porque la factura
+                                llegó con otra razón social ({exp.partner_name || 'el emisor del CFDI'}). La CxP y el
+                                pago quedarán con quien facturó; la recepción conserva a quien entregó. El cruce queda
+                                registrado en auditoría.
+                              </div>
+                            )}
+                            {!crossPartner && (
+                              <button type="button" className="btn-ghost text-[11px] self-start text-ink-muted underline decoration-dotted"
+                                onClick={() => { setPickedReceipts({}); setCrossPartner(true) }}>
+                                ¿Te facturó con otra razón social? → Buscar en todos los proveedores
+                              </button>
+                            )}
                             <div className="flex flex-col gap-1 max-h-44 overflow-y-auto">
                               {pendingReceipts.map(r => (
                                 <label key={r.id} className="flex items-center gap-2 text-xs cursor-pointer">
@@ -1094,6 +1130,9 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
                                     checked={!!pickedReceipts[r.id]} onChange={() => togglePick(r.id)} />
                                   <span className="flex-1 text-ink-secondary truncate">
                                     {r.receipt_number} · {fmtDateOnly(r.received_date)}
+                                    {crossPartner && r.partner_name && (
+                                      <span className="text-ink-muted"> · {r.partner_name}</span>
+                                    )}
                                   </span>
                                   <span className="tabular-nums text-ink-primary">{fmtMXN(r.total_mxn)}</span>
                                 </label>
@@ -1126,6 +1165,13 @@ function GastoDetalleModal({ id, categories, onClose, onSaved }) {
                       <p className="text-xs text-ink-secondary">
                         Marca qué líneas de <strong>{receiptDetail.receipt_number}</strong> cubre esta factura:
                       </p>
+                      {crossPartner && receiptDetail.partner_id && receiptDetail.partner_id !== exp.partner_id && (
+                        <div className="bg-status-warning/10 border border-status-warning/40 rounded-lg px-3 py-2 text-[11px] text-status-warning">
+                          ⚠ Vínculo cruzado: la recepción es de <strong>{receiptDetail.partner_name || 'otro proveedor'}</strong> y
+                          la factura la emite <strong>{exp.partner_name || 'otra razón social'}</strong>. Confirma solo si es el
+                          mismo proveedor comercial facturando con otra entidad legal.
+                        </div>
+                      )}
                       <div className="flex flex-col gap-1 max-h-44 overflow-y-auto">
                         {receiptDetail.lines.map(ln => ln.invoice_pending ? (
                           <label key={ln.id} className="flex items-center gap-2 text-xs cursor-pointer">

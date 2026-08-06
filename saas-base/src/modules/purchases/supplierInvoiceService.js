@@ -1376,7 +1376,7 @@ async function cancelExpense({ tenantId, id, userId, reason, ipAddress, userAgen
  * fuente de verdad) pero aplicado a una supplier_invoice que YA existe (no crea
  * una nueva → no choca con el anti-dup por UUID). Si las dos divergen, cuadrarlas.
  */
-async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLineIds = [], receipts = null, userId, ipAddress, userAgent }) {
+async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLineIds = [], receipts = null, allowPartnerMismatch = false, userId, ipAddress, userAgent }) {
   // Normalizar a una LISTA de recepciones. Compat hacia atrás: si llega
   // `receiptId`/`receiptLineIds` (una sola), se envuelve. `receipts` es
   // [{ receiptId, lineIds? }] para vincular a VARIAS de una vez.
@@ -1420,7 +1420,13 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLin
 
     // 2. Por cada recepción: validar (confirmada, mismo proveedor) y recolectar
     //    las líneas / el monto a cubrir.
+    //    `allowPartnerMismatch`: el proveedor facturó con OTRA razón social (otra
+    //    entidad legal del mismo proveedor comercial). El cruce se permite SOLO
+    //    con el flag explícito del usuario y queda en auditoría. La CxP se queda
+    //    con quien emitió el CFDI (verdad fiscal); la recepción conserva a quien
+    //    entregó (verdad operativa).
     const perReceipt = []
+    const partnerMismatches = []
     for (const rr of reqReceipts) {
       const { rows: rc } = await client.query(
         `SELECT sr.id, sr.partner_id, sr.status FROM supplier_receipts sr
@@ -1429,7 +1435,12 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLin
       )
       if (!rc.length) throw createError(404, 'Recepción no encontrada.')
       if (rc[0].status !== 'confirmed') throw createError(409, 'Una recepción seleccionada no está confirmada.')
-      if (rc[0].partner_id !== e.partner_id) throw createError(400, 'Una recepción seleccionada es de otro proveedor.')
+      if (rc[0].partner_id !== e.partner_id) {
+        if (!allowPartnerMismatch) {
+          throw createError(400, 'Una recepción seleccionada es de otro proveedor. Si te facturó con otra razón social, usa la opción de vínculo cruzado y confírmalo.')
+        }
+        partnerMismatches.push({ receiptId: rr.receiptId, receiptPartnerId: rc[0].partner_id })
+      }
 
       if (rr.lineIds.length > 0) {
         // ── Cobertura por LÍNEAS explícitas (materiales distintos) ──
@@ -1580,7 +1591,11 @@ async function linkExpenseToReceipt({ tenantId, expenseId, receiptId, receiptLin
     await audit({
       tenantId, userId, action: 'supplier_expense.linked_to_receipt',
       resource: 'supplier_invoices', resourceId: expenseId,
-      payload: { receiptIds: affectedReceiptIds, coverageSubtotal, reconStatus, reconDiff, replacedRemissionIds },
+      payload: {
+        receiptIds: affectedReceiptIds, coverageSubtotal, reconStatus, reconDiff, replacedRemissionIds,
+        // Vínculo cruzado: factura de una razón social distinta a la de la recepción.
+        ...(partnerMismatches.length ? { partnerMismatches, invoicePartnerId: e.partner_id } : {}),
+      },
       ipAddress, userAgent,
     })
 

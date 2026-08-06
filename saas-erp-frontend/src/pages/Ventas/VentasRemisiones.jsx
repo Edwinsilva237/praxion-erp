@@ -93,6 +93,23 @@ function InvoiceChip({ note }) {
   return <span className={t.cls} title={t.title}>{t.label}</span>
 }
 
+// Marcador de evidencia de entrega (foto/firma del receptor). Solo aplica a
+// remisiones ya entregadas — antes de la entrega no hay nada que evidenciar.
+function EvidenceChip({ note }) {
+  if (!note.delivered_at || note.status === 'cancelled') return null
+  return note.has_delivery_evidence ? (
+    <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-status-success/15 text-status-success"
+      title="Entrega con evidencia (foto/firma del receptor)">
+      📎 Evidencia
+    </span>
+  ) : (
+    <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-status-warning/15 text-status-warning"
+      title="Entregada SIN evidencia — puedes adjuntarla desde el detalle">
+      Sin evidencia
+    </span>
+  )
+}
+
 export default function VentasRemisiones() {
   const [statusFilter, setStatusFilter] = useState('')
   const [search, setSearch]             = useState('')
@@ -281,7 +298,7 @@ export default function VentasRemisiones() {
                       {n.partner_tax_name && n.partner_tax_name !== n.partner_name && (
                         <p className="text-[11px] text-ink-muted truncate">{n.partner_tax_name}</p>
                       )}
-                      <div className="mt-1"><InvoiceChip note={n} /></div>
+                      <div className="mt-1 flex items-center gap-1.5 flex-wrap"><InvoiceChip note={n} /><EvidenceChip note={n} /></div>
                     </button>
                   ))}
                 </div>
@@ -342,6 +359,7 @@ export default function VentasRemisiones() {
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <Badge status={n.status} />
                           <InvoiceChip note={n} />
+                          <EvidenceChip note={n} />
                           {n.price_adjusted && (
                             <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-status-info/15 text-status-info">
                               Precio corregido
@@ -386,6 +404,7 @@ export default function VentasRemisiones() {
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <Badge status={n.status} />
                         <InvoiceChip note={n} />
+                        <EvidenceChip note={n} />
                         {n.price_adjusted && (
                           <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-status-info/15 text-status-info">
                             Precio corregido

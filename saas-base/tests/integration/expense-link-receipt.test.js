@@ -255,6 +255,50 @@ test('recepción de OTRO proveedor → 400', async () => {
     .rejects.toMatchObject({ status: 400 })
 })
 
+// ── Vínculo CRUZADO: el proveedor facturó con OTRA razón social (2026-08-06) ──
+test('con allowPartnerMismatch SÍ vincula recepción de otra razón social y queda en auditoría', async () => {
+  const entregó = await makeSupplier()   // quien entregó la mercancía (recepción/OC)
+  const facturó = await makeSupplier()   // la razón social que emitió el CFDI
+  const rid = await makeReceipt({ partnerId: entregó })          // subtotal 1000
+  const gasto = await makeExpense({ supplierId: facturó, subtotal: 1000, tax: 160 })
+
+  const r = await linkExpenseToReceipt({
+    tenantId, expenseId: gasto.id, receiptId: rid, allowPartnerMismatch: true, userId,
+  })
+  expect(r.receiptId).toBe(rid)
+  expect(r.reconciliation_status).toBe('reconciled')
+
+  // La factura conserva a QUIEN FACTURÓ (verdad fiscal) y la recepción a quien entregó.
+  const { rows: si } = await withBypass(() => query(
+    `SELECT partner_id, is_expense FROM supplier_invoices WHERE id = $1`, [gasto.id]))
+  expect(si[0].partner_id).toBe(facturó)
+  expect(si[0].is_expense).toBe(false)
+  const { rows: rc } = await withBypass(() => query(
+    `SELECT partner_id, invoiced_at FROM supplier_receipts WHERE id = $1`, [rid]))
+  expect(rc[0].partner_id).toBe(entregó)
+  expect(rc[0].invoiced_at).not.toBeNull()
+
+  // El cruce quedó en auditoría con ambos proveedores.
+  const { rows: aud } = await withBypass(() => query(
+    `SELECT payload FROM audit_logs
+      WHERE tenant_id = $1 AND action = 'supplier_expense.linked_to_receipt'
+        AND resource_id = $2 ORDER BY created_at DESC LIMIT 1`, [tenantId, gasto.id]))
+  expect(aud.length).toBe(1)
+  const payload = aud[0].payload
+  expect(payload.invoicePartnerId).toBe(facturó)
+  expect(payload.partnerMismatches).toEqual([{ receiptId: rid, receiptPartnerId: entregó }])
+})
+
+test('allowPartnerMismatch NO abre la puerta a mezclas silenciosas: sin flag sigue el 400', async () => {
+  const sid = await makeSupplier()
+  const other = await makeSupplier()
+  const rid = await makeReceipt({ partnerId: other })
+  const gasto = await makeExpense({ supplierId: sid, subtotal: 1000, tax: 160 })
+  await expect(linkExpenseToReceipt({
+    tenantId, expenseId: gasto.id, receiptId: rid, allowPartnerMismatch: false, userId,
+  })).rejects.toMatchObject({ status: 400 })
+})
+
 // ── Cobertura por MONTO: 2+ facturas dividen el MISMO material de una recepción ──
 describe('facturación parcial por MONTO (mismo material)', () => {
   const covered = (rid) => withBypass(() => query(
