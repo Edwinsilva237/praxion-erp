@@ -43,7 +43,10 @@ export const purchasesApi = {
   // Fase 2: "no se espera factura" → genera CXP sin factura (remisión no fiscal).
   generateReceiptRemission: (id, body) => api.post(`${B}/receipts/${id}/remission`, body || {}).then(r => r.data),
   // Pide por correo al proveedor la factura de una recepción confirmada sin CFDI.
-  requestReceiptInvoice: (id) => api.post(`${B}/receipts/${id}/request-invoice`).then(r => r.data),
+  // body opcional: { toEmails: [..] } — destinatarios elegidos en el modal.
+  requestReceiptInvoice: (id, body) => api.post(`${B}/receipts/${id}/request-invoice`, body || {}).then(r => r.data),
+  // Contexto del modal: correos del proveedor, buzón de facturas y resumen del correo.
+  receiptInvoiceRequestContext: (id) => api.get(`${B}/receipts/${id}/invoice-request-context`).then(r => r.data),
   listPendingInvoiceReceipts: (partnerId) =>
     api.get(`${B}/receipts/pending-invoice`, { params: partnerId ? { partner_id: partnerId } : {} }).then(r => r.data),
 

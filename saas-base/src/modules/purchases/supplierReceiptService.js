@@ -899,14 +899,15 @@ function createError(status, message) {
  * CFDI. Espejo de requestExpenseInvoice (Gastos): reusa el mismo template y
  * marca supplier_receipts.invoice_requested_at (mig 244).
  */
-async function requestReceiptInvoice({ tenantId, id, userId, ipAddress, userAgent }) {
-  const { enqueueEmail } = require('../../queues/emailQueue')
-  const { expenseInvoiceRequestEmail } = require('../email/templates/sales')
+const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
+/** Query base compartida por el envío y el contexto del modal (elegir correo). */
+async function fetchReceiptForInvoiceRequest({ tenantId, id }) {
   const { rows } = await query(
     `SELECT sr.id, sr.status, sr.partner_id, sr.receipt_number, sr.received_date,
             sr.replacement_return_id, sr.invoice_requested_at,
             po.order_number AS purchase_order_number,
+            po.subtotal_mxn AS po_subtotal, po.tax_mxn AS po_tax,
             bp.name AS partner_name, bp.tax_name AS partner_tax_name,
             t.name AS tenant_name, t.brand_color_primary, t.notification_email,
             COALESCE((SELECT SUM(srl.subtotal) FROM supplier_receipt_lines srl
@@ -932,14 +933,69 @@ async function requestReceiptInvoice({ tenantId, id, userId, ipAddress, userAgen
   if (!rec.partner_id) throw createError(400, 'La recepción no tiene un proveedor del catálogo a quien solicitarle la factura.')
 
   const { rows: contacts } = await query(
-    `SELECT email FROM business_partner_contacts
+    `SELECT name, email, is_primary FROM business_partner_contacts
       WHERE business_partner_id = $1 AND email IS NOT NULL AND email <> ''
       ORDER BY is_primary DESC NULLS LAST, id ASC`,
     [rec.partner_id]
   )
-  const recipients = contacts.map(c => c.email).filter(Boolean)
-  if (!recipients.length) {
-    throw createError(400, 'El proveedor no tiene contactos con correo. Captura uno en Socios para poder solicitar la factura.')
+
+  // Total con IVA: aplicamos a las líneas recibidas la tasa efectiva de la OC
+  // (cubre recepciones parciales). Sin OC — o con OC en $0 — usamos 16%.
+  const subtotal = parseFloat(rec.receipt_subtotal || 0)
+  const poSubtotal = parseFloat(rec.po_subtotal || 0)
+  const taxRate = poSubtotal > 0 ? parseFloat(rec.po_tax || 0) / poSubtotal : 0.16
+  const totalWithTax = Math.round(subtotal * (1 + taxRate) * 100) / 100
+
+  return { rec, contacts, totalWithTax }
+}
+
+/**
+ * Contexto para el modal de "Solicitar factura": correos candidatos del
+ * proveedor, dirección del buzón de facturas y el resumen que llevará el correo.
+ */
+async function getReceiptInvoiceRequestContext({ tenantId, id }) {
+  const { getInboxAddress } = require('../inbound/inboundEmailService')
+  const { rec, contacts, totalWithTax } = await fetchReceiptForInvoiceRequest({ tenantId, id })
+
+  let inbox = null
+  try {
+    const info = await getInboxAddress(tenantId)
+    if (info.token && info.active) inbox = info.address
+  } catch { /* sin buzón: el correo usará reply-to del remitente */ }
+
+  return {
+    contacts,
+    inboxAddress: inbox,
+    receipt: {
+      receipt_number: rec.receipt_number,
+      purchase_order_number: rec.purchase_order_number,
+      received_date: rec.received_date,
+      total_with_tax: totalWithTax,
+      partner_name: rec.partner_tax_name || rec.partner_name || '',
+      invoice_requested_at: rec.invoice_requested_at,
+    },
+  }
+}
+
+async function requestReceiptInvoice({ tenantId, id, toEmails, userId, ipAddress, userAgent }) {
+  const { enqueueEmail } = require('../../queues/emailQueue')
+  const { expenseInvoiceRequestEmail } = require('../email/templates/sales')
+  const { getInboxAddress } = require('../inbound/inboundEmailService')
+
+  const { rec, contacts, totalWithTax } = await fetchReceiptForInvoiceRequest({ tenantId, id })
+
+  // Destinatarios: los que eligió el usuario en el modal, o (fallback) todos
+  // los contactos con correo del proveedor.
+  let recipients
+  if (Array.isArray(toEmails) && toEmails.length) {
+    recipients = [...new Set(toEmails.map(e => String(e).trim().toLowerCase()).filter(Boolean))]
+    const bad = recipients.filter(e => !EMAIL_RX.test(e))
+    if (bad.length) throw createError(400, `Correo(s) inválido(s): ${bad.join(', ')}`)
+  } else {
+    recipients = contacts.map(c => c.email).filter(Boolean)
+    if (!recipients.length) {
+      throw createError(400, 'El proveedor no tiene contactos con correo. Captura uno en Socios para poder solicitar la factura.')
+    }
   }
 
   let senderEmail = rec.notification_email || null
@@ -949,22 +1005,36 @@ async function requestReceiptInvoice({ tenantId, id, userId, ipAddress, userAgen
   }
   if (senderEmail && recipients.includes(senderEmail)) senderEmail = null
 
+  // Reply-To: el buzón de facturas del tenant (si está activo), para que el
+  // XML/PDF que responda el proveedor entre solo al sistema. Si no hay buzón,
+  // cae al correo del remitente como antes.
+  let inboxAddress = null
+  try {
+    const info = await getInboxAddress(tenantId)
+    if (info.token && info.active) inboxAddress = info.address
+  } catch { /* tenant sin buzón */ }
+
   const tenantName = rec.tenant_name || 'Emisor'
-  const concept = rec.purchase_order_number
-    ? `Mercancía recibida — recepción ${rec.receipt_number} (OC ${rec.purchase_order_number})`
-    : `Mercancía recibida — recepción ${rec.receipt_number}`
+  const concept = `Mercancía recibida — recepción ${rec.receipt_number}`
   const html = expenseInvoiceRequestEmail({
     tenantName, brandColor: rec.brand_color_primary || null,
     supplierName: rec.partner_tax_name || rec.partner_name || '',
     concept,
+    orderNumber: rec.purchase_order_number || null,
     folio: rec.receipt_number,
-    total: rec.receipt_subtotal, currency: 'MXN',
+    total: totalWithTax, currency: 'MXN',
+    totalLabel: 'Total (IVA incluido)',
     expenseDate: rec.received_date,
+    dateLabel: 'Fecha de recepción',
+    replyNote: inboxAddress
+      ? `Por favor respondan a este correo adjuntando el XML y el PDF del comprobante — su respuesta llegará directo a nuestro buzón de facturas (${inboxAddress}). ¡Gracias!`
+      : 'Pueden responder a este correo con el XML y el PDF del comprobante. ¡Gracias!',
   })
 
   await enqueueEmail({
     tenantId, to: recipients,
-    bcc: senderEmail || undefined, replyTo: senderEmail || undefined,
+    bcc: senderEmail || undefined,
+    replyTo: inboxAddress || senderEmail || undefined,
     subject: `Solicitud de factura — ${tenantName}`,
     html, fromName: tenantName,
   })
@@ -990,5 +1060,5 @@ module.exports = {
   listReceipts, getReceipt,
   createReceipt, updateReceipt, confirmReceipt, cancelReceipt,
   uploadEvidence, getEvidenceFile, deleteEvidence,
-  requestReceiptInvoice,
+  requestReceiptInvoice, getReceiptInvoiceRequestContext,
 }

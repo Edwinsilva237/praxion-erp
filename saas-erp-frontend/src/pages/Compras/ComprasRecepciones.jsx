@@ -387,15 +387,9 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
   })
 
   // Solicitar al proveedor (por correo) la factura de la recepción sin CFDI.
+  // El modal deja elegir el/los correos destino antes de enviar.
   const [requestMsg, setRequestMsg] = useState(null)
-  const requestInvMutation = useMutation({
-    mutationFn: () => purchasesApi.requestReceiptInvoice(receiptId),
-    onSuccess: (r) => {
-      qc.invalidateQueries({ queryKey: ['receipt-detail', receiptId] })
-      setRequestMsg(`Solicitud enviada a ${(r.sentTo || []).join(', ')}.`)
-    },
-    onError: (e) => setActErr(e.response?.data?.error || 'Error al solicitar la factura'),
-  })
+  const [requestOpen, setRequestOpen] = useState(false)
 
   // Desvincular una factura ligada por error a esta recepción → vuelve a gasto.
   const [unlinkTarget, setUnlinkTarget] = useState(null) // { id, folio }
@@ -723,15 +717,12 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
                 <span className="text-xs text-brand-300 self-center">{requestMsg}</span>
               ) : (
                 <Can do="purchases:create">
-                  <button onClick={() => { setActErr(null); requestInvMutation.mutate() }}
-                    disabled={requestInvMutation.isPending}
+                  <button onClick={() => { setActErr(null); setRequestOpen(true) }}
                     className="btn-secondary btn-sm text-amber-500 hover:bg-amber-500/10"
                     title={receipt.invoice_requested_at
                       ? `Factura solicitada al proveedor el ${fmtDateOnly(receipt.invoice_requested_at)} — volver a enviar el correo`
                       : 'Pide por correo al proveedor el CFDI de esta recepción'}>
-                    {requestInvMutation.isPending
-                      ? <Spinner size="sm" />
-                      : (receipt.invoice_requested_at ? '📧 Volver a solicitar factura' : '📧 Solicitar factura')}
+                    {receipt.invoice_requested_at ? '📧 Volver a solicitar factura' : '📧 Solicitar factura'}
                   </button>
                 </Can>
               )
@@ -817,6 +808,135 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
           </div>,
           document.body
         )}
+
+        {/* Modal: elegir correo(s) y enviar la solicitud de factura */}
+        {requestOpen && (
+          <SolicitarFacturaModal
+            receiptId={receiptId}
+            onClose={() => setRequestOpen(false)}
+            onSent={(sentTo) => {
+              qc.invalidateQueries({ queryKey: ['receipt-detail', receiptId] })
+              setRequestMsg(`Solicitud enviada a ${sentTo.join(', ')}.`)
+              setRequestOpen(false)
+            }}
+          />
+        )}
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// ── Modal solicitar factura (elige correos destino antes de enviar) ───────────
+function SolicitarFacturaModal({ receiptId, onClose, onSent }) {
+  const [selected, setSelected] = useState(null)   // null = aún no inicializado con los contactos
+  const [extraEmail, setExtraEmail] = useState('')
+  const [error, setError] = useState(null)
+
+  const { data: ctx, isLoading, error: ctxError } = useQuery({
+    queryKey: ['receipt-invoice-request-ctx', receiptId],
+    queryFn: () => purchasesApi.receiptInvoiceRequestContext(receiptId),
+  })
+
+  // Al cargar los contactos, preseleccionar todos (comportamiento anterior).
+  useEffect(() => {
+    if (ctx && selected === null) {
+      setSelected(new Set((ctx.contacts || []).map(c => c.email)))
+    }
+  }, [ctx, selected])
+
+  const mutation = useMutation({
+    mutationFn: (toEmails) => purchasesApi.requestReceiptInvoice(receiptId, { toEmails }),
+    onSuccess: (r) => onSent(r.sentTo || []),
+    onError: (e) => setError(e.response?.data?.error || 'Error al solicitar la factura'),
+  })
+
+  const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  const extra = extraEmail.trim().toLowerCase()
+  const recipients = [...(selected || [])]
+  if (extra) recipients.push(extra)
+  const extraInvalid = !!extra && !EMAIL_RX.test(extra)
+  const canSend = recipients.length > 0 && !extraInvalid && !mutation.isPending
+
+  function toggle(email) {
+    setSelected(prev => {
+      const next = new Set(prev || [])
+      if (next.has(email)) next.delete(email); else next.add(email)
+      return next
+    })
+  }
+
+  const r = ctx?.receipt
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4"
+      onClick={() => { if (!mutation.isPending) onClose() }}>
+      <div className="card w-full max-w-md p-5 space-y-4" onClick={e => e.stopPropagation()}>
+        <h2 className="text-base font-semibold text-ink-primary">📧 Solicitar factura al proveedor</h2>
+
+        {isLoading && <div className="py-6 flex justify-center"><Spinner /></div>}
+        {ctxError && (
+          <div className="rounded-lg bg-status-danger/10 border border-status-danger/40 px-3 py-2 text-sm text-status-danger">
+            {ctxError.response?.data?.error || 'No se pudo cargar la información del proveedor.'}
+          </div>
+        )}
+
+        {ctx && (
+          <>
+            {/* Resumen de lo que llevará el correo */}
+            <div className="rounded-lg bg-surface-secondary border border-line-subtle px-3 py-2 text-sm space-y-1">
+              <div className="flex justify-between gap-3"><span className="text-ink-muted">Recepción</span><strong>{r.receipt_number}</strong></div>
+              {r.purchase_order_number && (
+                <div className="flex justify-between gap-3"><span className="text-ink-muted">Orden de compra</span><strong>{r.purchase_order_number}</strong></div>
+              )}
+              <div className="flex justify-between gap-3"><span className="text-ink-muted">Fecha de recepción</span><strong>{fmtDateOnly(r.received_date)}</strong></div>
+              <div className="flex justify-between gap-3"><span className="text-ink-muted">Total (IVA incluido)</span><strong className="font-mono">{fmtMXN(r.total_with_tax)}</strong></div>
+            </div>
+
+            {/* Correos del proveedor */}
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-ink-secondary">Enviar la solicitud a:</p>
+              {(ctx.contacts || []).length === 0 && (
+                <p className="text-xs text-status-warning">El proveedor no tiene contactos con correo — captura uno abajo o en Socios.</p>
+              )}
+              {(ctx.contacts || []).map(c => (
+                <label key={c.email} className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" checked={selected?.has(c.email) || false} onChange={() => toggle(c.email)} />
+                  <span className="truncate">{c.email}</span>
+                  {c.name && <span className="text-xs text-ink-muted truncate">({c.name}{c.is_primary ? ' · principal' : ''})</span>}
+                </label>
+              ))}
+              <input type="email" value={extraEmail} onChange={e => setExtraEmail(e.target.value)}
+                placeholder="Otro correo (opcional)" className="input input-sm w-full" />
+              {extraInvalid && <p className="text-xs text-status-danger">Ese correo no parece válido.</p>}
+            </div>
+
+            {ctx.inboxAddress ? (
+              <p className="text-xs text-ink-muted">
+                El correo pedirá al proveedor responder con el XML y PDF; la respuesta llegará directo al
+                buzón de facturas (<span className="font-mono">{ctx.inboxAddress}</span>).
+              </p>
+            ) : (
+              <p className="text-xs text-ink-muted">
+                El proveedor podrá responder al correo con el XML y PDF del comprobante.
+              </p>
+            )}
+          </>
+        )}
+
+        {error && (
+          <div className="rounded-lg bg-status-danger/10 border border-status-danger/40 px-3 py-2 text-sm text-status-danger">
+            {error}
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <button onClick={onClose} disabled={mutation.isPending} className="btn-secondary flex-1">Cancelar</button>
+          <button onClick={() => { setError(null); mutation.mutate(recipients) }}
+            disabled={!canSend} className="btn-primary flex-1">
+            {mutation.isPending ? <Spinner size="sm" /> : `Enviar solicitud${recipients.length > 1 ? ` (${recipients.length})` : ''}`}
+          </button>
+        </div>
       </div>
     </div>,
     document.body

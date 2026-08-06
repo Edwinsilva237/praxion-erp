@@ -680,15 +680,34 @@ router.post('/receipts/:id/remission', checkPermission('purchases', 'create'), a
 })
 
 /**
+ * GET /api/purchases/receipts/:id/invoice-request-context
+ * Datos para el modal de "Solicitar factura": correos candidatos del proveedor,
+ * buzón de facturas del tenant y resumen (OC, fecha, total con IVA) del correo
+ * que se enviará. Mismo permiso que el envío.
+ */
+router.get('/receipts/:id/invoice-request-context', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    res.json(await supplierReceiptService.getReceiptInvoiceRequestContext({
+      tenantId: req.tenant.id, id: req.params.id,
+    }))
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+
+/**
  * POST /api/purchases/receipts/:id/request-invoice
  * Solicita al proveedor (por correo) la factura de una recepción confirmada
  * sin CFDI. Espejo del request-invoice de Gastos. Mismo permiso que el botón
  * de CXP sin factura (purchases:create) → sin re-login.
+ * Body opcional: { toEmails: [..] } — destinatarios elegidos en el modal.
  */
 router.post('/receipts/:id/request-invoice', checkPermission('purchases', 'create'), async (req, res, next) => {
   try {
     const result = await supplierReceiptService.requestReceiptInvoice({
       tenantId: req.tenant.id, id: req.params.id,
+      toEmails: req.body?.toEmails,
       userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
     })
     res.json(result)

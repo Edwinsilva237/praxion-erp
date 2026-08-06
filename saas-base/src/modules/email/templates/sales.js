@@ -216,10 +216,19 @@ function purchaseOrderEmail({ tenantName, brandColor, supplierName, docNumber, t
  * Email para SOLICITAR la factura (CFDI) a un proveedor por un gasto registrado
  * sin comprobante. Lo manda el módulo de Gastos.
  */
-function expenseInvoiceRequestEmail({ tenantName, brandColor, supplierName, concept, folio, total, currency, expenseDate }) {
+function expenseInvoiceRequestEmail({
+  tenantName, brandColor, supplierName, concept, folio, total, currency, expenseDate,
+  // Opcionales para el flujo de Recepciones (Compras). Los defaults conservan
+  // el correo de Gastos tal cual estaba.
+  dateLabel = 'Fecha del gasto',
+  orderNumber = null,
+  totalLabel = 'Total',
+  replyNote = 'Pueden responder a este correo con el XML y el PDF del comprobante. ¡Gracias!',
+}) {
   const summaryRows = []
   if (concept)     summaryRows.push(['Concepto', concept])
-  if (expenseDate) summaryRows.push(['Fecha del gasto', fmtDate(expenseDate)])
+  if (orderNumber) summaryRows.push(['Orden de compra', orderNumber])
+  if (expenseDate) summaryRows.push([dateLabel, fmtDate(expenseDate)])
   if (folio)       summaryRows.push(['Nuestra referencia', folio])
 
   const rowsHTML = summaryRows.map(([k, v]) =>
@@ -237,9 +246,9 @@ function expenseInvoiceRequestEmail({ tenantName, brandColor, supplierName, conc
       <p>Les solicitamos amablemente la <strong>factura (CFDI)</strong> correspondiente al siguiente gasto, para poder registrarla en nuestra contabilidad:</p>
       <div class="summary">
         ${rowsHTML}
-        <div class="row total"><span>Total</span><span>${fmtCurrency(total, currency)}</span></div>
+        <div class="row total"><span>${escapeHTML(totalLabel)}</span><span>${fmtCurrency(total, currency)}</span></div>
       </div>
-      <p style="font-size:13px;color:#6b7280;">Pueden responder a este correo con el XML y el PDF del comprobante. ¡Gracias!</p>
+      <p style="font-size:13px;color:#6b7280;">${escapeHTML(replyNote)}</p>
     `,
   })
 }
