@@ -6,6 +6,7 @@ import { inventoryApi } from '@/api/inventory'
 import Spinner from '@/components/ui/Spinner'
 import Badge from '@/components/ui/Badge'
 import QuickLevelsModal from './QuickLevelsModal'
+import { MOVEMENT_LABELS } from '@/config/inventoryLabels'
 import clsx from 'clsx'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -28,24 +29,6 @@ function fmtDateShort(d) {
   if (isToday) return `hoy ${time}`
   if (isYesterday) return `ayer ${time}`
   return date.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
-}
-
-const MOVEMENT_LABELS = {
-  purchase_entry:               'Compra',
-  production_mp_consumption:    'Consumo MP',
-  production_mp_reserve:        'MP → WIP',
-  production_mp_return:         'Devolución MP',
-  production_pt_entry:          'Entrada PT',
-  production_wip_entry:         'Entrada WIP',
-  production_wip_to_pt:         'WIP → PT',
-  sale_exit:                    'Venta',
-  adjustment_in:                'Ajuste +',
-  adjustment_out:               'Ajuste −',
-  scrap_entry:                  'Merma',
-  scrap_disposal:               'Baja merma',
-  scrap_to_regrind:             'Merma → Regrind',
-  transfer_in:                  'Transferencia +',
-  transfer_out:                 'Transferencia −',
 }
 
 const STATUS_CONFIG = {
