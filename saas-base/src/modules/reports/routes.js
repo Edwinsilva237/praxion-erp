@@ -20,6 +20,8 @@ const { getInventoryReport } = require('./inventoryReport')
 const { generateInventoryWorkbook } = require('./inventoryReportExcel')
 const { generateInventoryPdf } = require('./inventoryReportPdf')
 const { getAccountStatement, getPartnerStatement, getDocumentLines, getDocumentPayments } = require('./accountStatementReport')
+const { getPurchaseTraceability } = require('./purchaseTraceability')
+const { generatePurchaseTraceabilityWorkbook } = require('./purchaseTraceabilityExcel')
 const { generateAccountStatementWorkbook } = require('./accountStatementExcel')
 const { generateAccountStatementPdf } = require('./accountStatementPdf')
 const { enqueueEmail } = require('../../queues/emailQueue')
@@ -367,6 +369,59 @@ router.get('/inventory/pdf',
       res.setHeader('Content-Type', 'application/pdf')
       res.setHeader('Content-Disposition', `attachment; filename="reporte-inventario-${suffix}.pdf"`)
       res.send(buffer)
+    } catch (err) { next(err) }
+  }
+)
+
+// ─── Trazabilidad de compras — expediente OC → factura → pagos → REP ────────
+
+/**
+ * GET /api/reports/purchase-traceability?from&to&partnerId
+ * Expediente completo de cada factura de compra del periodo: OC, recepciones,
+ * devoluciones y su resolución (NC/cancelación/sustitución/reposición), pagos
+ * (y reversas) y REPs con su estado de cruce. `to` exclusivo.
+ */
+router.get('/purchase-traceability',
+  checkPermission('reports', 'cxp'),
+  async (req, res, next) => {
+    try {
+      const { from, to, partnerId } = req.query
+      if (!isValidDate(from) || !isValidDate(to)) {
+        return res.status(400).json({ error: 'from y to en formato YYYY-MM-DD requeridos.' })
+      }
+      if (from >= to) {
+        return res.status(400).json({ error: '"from" debe ser anterior a "to".' })
+      }
+      const data = await getPurchaseTraceability({
+        tenantId: req.tenant.id, from, to, partnerId: partnerId || null,
+      })
+      res.json(data)
+    } catch (err) { next(err) }
+  }
+)
+
+/** GET /api/reports/purchase-traceability/excel — Excel de la cadena documental. */
+router.get('/purchase-traceability/excel',
+  checkPermission('reports', 'cxp'),
+  async (req, res, next) => {
+    try {
+      const { from, to, partnerId } = req.query
+      if (!isValidDate(from) || !isValidDate(to)) {
+        return res.status(400).json({ error: 'from y to en formato YYYY-MM-DD requeridos.' })
+      }
+      const { rows } = await query(
+        `SELECT COALESCE(display_name, name) AS tenant_name FROM tenants WHERE id = $1`,
+        [req.tenant.id]
+      )
+      const tenantName = rows[0]?.tenant_name || 'Empresa'
+      const buffer = await generatePurchaseTraceabilityWorkbook({
+        tenantId: req.tenant.id, from, to, tenantName, partnerId: partnerId || null,
+      })
+      const filename = `trazabilidad-compras-${from}-a-${to}.xlsx`
+      res.setHeader('Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+      res.send(Buffer.from(buffer))
     } catch (err) { next(err) }
   }
 )

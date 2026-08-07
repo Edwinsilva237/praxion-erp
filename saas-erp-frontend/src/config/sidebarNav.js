@@ -53,6 +53,7 @@ export const NAV_SECTIONS = [
       { label: 'Producción',          to: '/reportes/produccion',         iconKey: 'chartLine', permission: 'reports:production',  modules: ['reports', 'production'] },
       { label: 'Cuentas por cobrar',  to: '/reportes/cuentas-por-cobrar', iconKey: 'card',      permission: 'reports:cxc',         modules: ['reports', 'sales'] },
       { label: 'Cuentas por pagar',   to: '/reportes/cuentas-por-pagar',  iconKey: 'money',     permission: 'reports:cxp',         modules: ['reports', 'purchases'] },
+      { label: 'Trazabilidad de compras', to: '/reportes/trazabilidad-compras', iconKey: 'history', permission: 'reports:cxp',    modules: ['reports', 'purchases'] },
       { label: 'Contable',            to: '/finanzas/reporte-contable',   iconKey: 'book',      permission: 'reports:accounting',  module: 'reports' },
     ],
   },

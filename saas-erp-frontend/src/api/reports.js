@@ -85,6 +85,20 @@ export const reportsApi = {
   downloadInventoryPdf: (countId = null) =>
     api.get(`${B}/inventory/pdf`, { params: countId ? { countId } : {}, responseType: 'blob' }),
 
+  // ── Trazabilidad de compras — expediente OC → factura → pagos → REP ──────
+  /** Expedientes del periodo con todos sus eventos. `to` exclusivo. */
+  getPurchaseTraceability: ({ from, to, partnerId }) =>
+    api.get(`${B}/purchase-traceability`, {
+      params: { from, to, ...(partnerId ? { partnerId } : {}) },
+    }).then(r => r.data),
+
+  /** Excel de la cadena documental (una fila por evento). */
+  downloadPurchaseTraceabilityExcel: ({ from, to, partnerId }) =>
+    api.get(`${B}/purchase-traceability/excel`, {
+      params: { from, to, ...(partnerId ? { partnerId } : {}) },
+      responseType: 'blob',
+    }),
+
   // ── Estado de cuenta — CXC / CXP ────────────────────────────────────────
   // `direction` debe ser 'cuentas-por-cobrar' o 'cuentas-por-pagar'.
   // `filters`: { partnerId, statusFilter, search } — todos opcionales.

@@ -48,6 +48,7 @@ const NotasCredito            = lazy(() => import('@/pages/Finanzas/NotasCredito
 const ReporteContable         = lazy(() => import('@/pages/Finanzas/ReporteContable'))
 const ReportesVentas          = lazy(() => import('@/pages/Reportes/ReportesVentas'))
 const ReportesInventario      = lazy(() => import('@/pages/Reportes/ReportesInventario'))
+const TrazabilidadCompras     = lazy(() => import('@/pages/Reportes/TrazabilidadCompras'))
 const ReportesProduccion      = lazy(() => import('@/pages/Reportes/ReportesProduccion'))
 const EstadoDeCuenta          = lazy(() => import('@/pages/Reportes/EstadoDeCuenta'))
 const RhEmpleados             = lazy(() => import('@/pages/RH/Empleados'))
@@ -229,6 +230,7 @@ const router = createBrowserRouter([
       { path: '/reportes/produccion',       element: <ReportesProduccion /> },
       { path: '/reportes/cuentas-por-cobrar', element: <EstadoDeCuenta direction="cuentas-por-cobrar" /> },
       { path: '/reportes/cuentas-por-pagar',  element: <EstadoDeCuenta direction="cuentas-por-pagar" /> },
+      { path: '/reportes/trazabilidad-compras', element: <TrazabilidadCompras /> },
       { path: '/cxc',                 element: <CuentasPorCobrar /> },
       { path: '/cxp',                 element: <CuentasPorPagar /> },
       { path: '/pagos-recibidos',     element: <PagosRecibidos /> },
