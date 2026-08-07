@@ -1653,15 +1653,34 @@ router.get('/cxp', checkPermission('purchases', 'read'), async (req, res, next) 
 })
 
 /**
+ * GET /api/purchases/payments/:id/rep-request-context
+ * Datos para el modal de "Solicitar REP": correos candidatos del proveedor,
+ * buzón de facturas del tenant y resumen del pago (fecha, monto, método,
+ * banco/cuenta emisora) que llevará el correo. Mismo permiso que el envío.
+ */
+router.get('/payments/:id/rep-request-context', checkPermission('purchases', 'create'), async (req, res, next) => {
+  try {
+    res.json(await supplierComplementService.getRepRequestContext({
+      tenantId: req.tenant.id, paymentId: req.params.id,
+    }))
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+
+/**
  * POST /api/purchases/payments/:id/request-rep
  * Solicita al proveedor (por correo) el REP del pago — o su corrección si el
  * recibido no cuadra. Mismo criterio de permiso que solicitar factura de un
  * gasto (create: dispara un correo en nombre de la empresa).
+ * Body opcional: { toEmails: [..] } — destinatarios elegidos en el modal.
  */
 router.post('/payments/:id/request-rep', checkPermission('purchases', 'create'), async (req, res, next) => {
   try {
     const result = await supplierComplementService.requestRepForPayment({
       tenantId: req.tenant.id, paymentId: req.params.id,
+      toEmails: req.body?.toEmails,
       userId: req.auth.userId, ipAddress: req.ip, userAgent: req.get('user-agent'),
     })
     res.json(result)

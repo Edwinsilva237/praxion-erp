@@ -173,6 +173,45 @@ test('backfill masivo de metodo_pago_sat: lee el XML guardado, idempotente, repo
   expect(r2.updated).toBe(0)
 })
 
+test('toEmails del modal: manda solo a los elegidos, deduplicados y en minúsculas', async () => {
+  const paymentId = await makePaidInvoice({ suffix: 'PICK', metodoPago: 'PPD', amount: 1200 })
+
+  const res = await supplierComplementService.requestRepForPayment({
+    tenantId, paymentId, userId,
+    toEmails: ['Facturas@Prov.local', 'facturas@prov.local', 'extra@otro.local'],
+  })
+  expect(res.sentTo).toEqual(['facturas@prov.local', 'extra@otro.local'])
+
+  const call = enqueueEmail.mock.calls[0][0]
+  expect(call.to).toEqual(['facturas@prov.local', 'extra@otro.local'])
+})
+
+test('toEmails con correo inválido → 400 y no envía', async () => {
+  const paymentId = await makePaidInvoice({ suffix: 'BADMAIL', metodoPago: 'PPD', amount: 900 })
+  await expect(supplierComplementService.requestRepForPayment({
+    tenantId, paymentId, userId, toEmails: ['no-es-correo'],
+  })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('inválido') })
+  expect(enqueueEmail).not.toHaveBeenCalled()
+})
+
+test('contexto del modal: contactos del proveedor + resumen con banco emisor', async () => {
+  const paymentId = await makePaidInvoice({
+    suffix: 'CTX', metodoPago: 'PPD', amount: 1500, bankId: bankAccountId,
+  })
+
+  const ctx = await supplierComplementService.getRepRequestContext({ tenantId, paymentId })
+  expect(ctx.mode).toBe('missing')
+  expect(ctx.contacts).toEqual([
+    expect.objectContaining({ email: 'cobranza@prov.local', is_primary: true }),
+  ])
+  expect(ctx.payment.method).toBe('Transferencia')
+  expect(ctx.payment.bank_label).toBe('BBVA Test (cuenta •••• 7891)')
+  expect(ctx.payment.invoices).toEqual(['SI-RREQ-CTX'])
+  expect(ctx.payment.amount).toBe(1500)
+  // No expone la cuenta completa ni al contexto del modal.
+  expect(JSON.stringify(ctx)).not.toContain('001234567891')
+})
+
 test('pago reversado → 409', async () => {
   const paymentId = await makePaidInvoice({ suffix: 'REV', metodoPago: 'PPD', amount: 800 })
   await withBypass(() => query(

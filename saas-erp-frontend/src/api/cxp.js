@@ -26,9 +26,15 @@ export const cxpApi = {
   reversePayment: (paymentId, reason) =>
     api.post(`${B}/payments/${paymentId}/reverse`, { reason }).then(r => r.data),
 
+  // Contexto para el modal de solicitar REP: contactos del proveedor, buzón y
+  // resumen del pago (fecha, monto, método, banco/cuenta emisora).
+  repRequestContext: (paymentId) =>
+    api.get(`${B}/payments/${paymentId}/rep-request-context`).then(r => r.data),
+
   // Solicita al proveedor por correo el REP del pago (o su corrección si no cuadra).
-  requestRep: (paymentId) =>
-    api.post(`${B}/payments/${paymentId}/request-rep`).then(r => r.data),
+  // Body opcional: { toEmails: [..] } — destinatarios elegidos en el modal.
+  requestRep: (paymentId, body) =>
+    api.post(`${B}/payments/${paymentId}/request-rep`, body).then(r => r.data),
 
   // ── Evidencias (attachments) de la factura proveedor ──────────────────
   // El :id acepta supplier_invoice.id O accounts_payable.id

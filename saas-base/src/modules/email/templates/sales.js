@@ -270,6 +270,7 @@ function repRequestEmail({
   paymentDate, amount, currency, reference,
   method = null, bankName = null,
   invoices = [], repReceived = null,
+  replyNote = null,
 }) {
   const summaryRows = [['Fecha del pago', fmtDate(paymentDate)]]
   if (method)    summaryRows.push(['Método de pago', method])
@@ -325,7 +326,7 @@ function repRequestEmail({
       </div>
       ${mismatchBlock}
       ${invoicesBlock}
-      <p style="font-size:13px;color:#6b7280;margin-top:16px;">Pueden responder a este correo con el XML y el PDF del complemento. ¡Gracias!</p>
+      <p style="font-size:13px;color:#6b7280;margin-top:16px;">${escapeHTML(replyNote || 'Pueden responder a este correo con el XML y el PDF del complemento. ¡Gracias!')}</p>
     `,
   })
 }

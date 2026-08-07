@@ -515,16 +515,15 @@ const METHOD_EMAIL_LABEL = {
   advance_application: 'Aplicación de anticipo',
 }
 
+const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
 /**
- * Solicita al proveedor (por correo) el REP de un pago emitido — o su
- * CORRECCIÓN si el recibido no cuadra. Espejo de requestExpenseInvoice
- * (solicitar factura de un gasto): manda a los contactos con correo del
- * proveedor y marca supplier_payments.rep_requested_at (mig 242).
- *
- * Candados: el pago debe haber liquidado facturas PPD (las únicas que exigen
- * REP) y su semáforo debe estar en 'missing' o 'mismatch' — si ya cuadra, 409.
+ * Query base + candados compartidos por el envío y el contexto del modal
+ * (elegir correos): el pago debe haber liquidado facturas PPD (las únicas que
+ * exigen REP) y su semáforo debe estar en 'missing' o 'mismatch' — si el REP
+ * recibido ya cuadra, 409.
  */
-async function requestRepForPayment({ tenantId, paymentId, userId, ipAddress, userAgent }) {
+async function fetchPaymentForRepRequest({ tenantId, paymentId }) {
   const { rows } = await query(
     `SELECT sp.id, sp.partner_id, sp.payment_date, sp.reference, sp.amount,
             sp.currency, sp.reversed_at, sp.rep_requested_at, sp.method,
@@ -573,13 +572,76 @@ async function requestRepForPayment({ tenantId, paymentId, userId, ipAddress, us
 
   // Contactos con correo del proveedor (primario primero).
   const { rows: contacts } = await query(
-    `SELECT email FROM business_partner_contacts
+    `SELECT name, email, is_primary FROM business_partner_contacts
       WHERE business_partner_id = $1 AND email IS NOT NULL AND email <> ''
       ORDER BY is_primary DESC NULLS LAST, id ASC`,
     [sp.partner_id])
-  const recipients = contacts.map(c => c.email).filter(Boolean)
-  if (!recipients.length) {
-    throw createError(400, 'El proveedor no tiene contactos con correo. Captura uno en Socios para poder solicitar el REP.')
+
+  // Banco emisor + últimos 4 de la cuenta: lo que el proveedor necesita para
+  // rastrear la transferencia en su estado de cuenta (nunca la cuenta completa).
+  const last4 = sp.account_number ? String(sp.account_number).slice(-4) : null
+  const bankLabel = sp.bank_name ? (last4 ? `${sp.bank_name} (cuenta •••• ${last4})` : sp.bank_name) : null
+
+  return { sp, apps, reps, contacts, mode, paid, repTotal, bankLabel }
+}
+
+/**
+ * Contexto para el modal de "Solicitar REP": correos candidatos del proveedor,
+ * buzón de facturas del tenant y el resumen que llevará el correo (incluido el
+ * banco/cuenta emisora, para que el usuario vea qué se enviará).
+ */
+async function getRepRequestContext({ tenantId, paymentId }) {
+  const { getInboxAddress } = require('../inbound/inboundEmailService')
+  const { sp, apps, contacts, mode, paid, bankLabel } = await fetchPaymentForRepRequest({ tenantId, paymentId })
+
+  let inbox = null
+  try {
+    const info = await getInboxAddress(tenantId)
+    if (info.token && info.active) inbox = info.address
+  } catch { /* sin buzón: el correo usará reply-to del remitente */ }
+
+  return {
+    contacts,
+    inboxAddress: inbox,
+    mode,
+    payment: {
+      payment_date:     sp.payment_date,
+      amount:           paid,
+      currency:         sp.currency || 'MXN',
+      reference:        sp.reference,
+      method:           METHOD_EMAIL_LABEL[sp.method] || null,
+      bank_label:       bankLabel,
+      partner_name:     sp.partner_tax_name || sp.partner_name || '',
+      rep_requested_at: sp.rep_requested_at,
+      invoices:         apps.map(a => a.invoice_number).filter(Boolean),
+    },
+  }
+}
+
+/**
+ * Solicita al proveedor (por correo) el REP de un pago emitido — o su
+ * CORRECCIÓN si el recibido no cuadra. Espejo de requestReceiptInvoice
+ * (solicitar factura de una recepción): destinatarios elegidos en el modal
+ * (toEmails) o fallback a todos los contactos con correo del proveedor, y
+ * marca supplier_payments.rep_requested_at (mig 242).
+ */
+async function requestRepForPayment({ tenantId, paymentId, toEmails, userId, ipAddress, userAgent }) {
+  const { getInboxAddress } = require('../inbound/inboundEmailService')
+  const { sp, apps, reps, mode, paid, repTotal, contacts, bankLabel } =
+    await fetchPaymentForRepRequest({ tenantId, paymentId })
+
+  // Destinatarios: los que eligió el usuario en el modal, o (fallback) todos
+  // los contactos con correo del proveedor.
+  let recipients
+  if (Array.isArray(toEmails) && toEmails.length) {
+    recipients = [...new Set(toEmails.map(e => String(e).trim().toLowerCase()).filter(Boolean))]
+    const bad = recipients.filter(e => !EMAIL_RX.test(e))
+    if (bad.length) throw createError(400, `Correo(s) inválido(s): ${bad.join(', ')}`)
+  } else {
+    recipients = contacts.map(c => c.email).filter(Boolean)
+    if (!recipients.length) {
+      throw createError(400, 'El proveedor no tiene contactos con correo. Captura uno en Socios para poder solicitar el REP.')
+    }
   }
 
   // Copia/responder-a: notification_email del tenant, o el correo del usuario.
@@ -591,12 +653,17 @@ async function requestRepForPayment({ tenantId, paymentId, userId, ipAddress, us
   }
   if (senderEmail && recipients.includes(senderEmail)) senderEmail = null
 
+  // Reply-To: el buzón de facturas del tenant (si está activo) — el buzón ya
+  // procesa CFDI tipo P, así que el REP que responda el proveedor entra solo
+  // al sistema. Sin buzón, cae al correo del remitente como antes.
+  let inboxAddress = null
+  try {
+    const info = await getInboxAddress(tenantId)
+    if (info.token && info.active) inboxAddress = info.address
+  } catch { /* tenant sin buzón */ }
+
   const tenantName = sp.tenant_name || 'Emisor'
   const first = reps[0] || null
-  // Banco emisor + últimos 4 de la cuenta: lo que el proveedor necesita para
-  // rastrear la transferencia en su estado de cuenta (nunca la cuenta completa).
-  const last4 = sp.account_number ? String(sp.account_number).slice(-4) : null
-  const bankLabel = sp.bank_name ? (last4 ? `${sp.bank_name} (cuenta •••• ${last4})` : sp.bank_name) : null
   const html = repRequestEmail({
     tenantName, brandColor: sp.brand_color_primary || null,
     supplierName: sp.partner_tax_name || sp.partner_name || '',
@@ -613,11 +680,15 @@ async function requestRepForPayment({ tenantId, paymentId, userId, ipAddress, us
       folio: [first.serie, first.folio].filter(Boolean).join('-') || null,
       uuid: first.cfdi_uuid, amount: repTotal,
     } : null,
+    replyNote: inboxAddress
+      ? `Por favor respondan a este correo adjuntando el XML y el PDF del complemento — su respuesta llegará directo a nuestro buzón de facturas (${inboxAddress}). ¡Gracias!`
+      : null,
   })
 
   await enqueueEmail({
     tenantId, to: recipients,
-    bcc: senderEmail || undefined, replyTo: senderEmail || undefined,
+    bcc: senderEmail || undefined,
+    replyTo: inboxAddress || senderEmail || undefined,
     subject: mode === 'mismatch'
       ? `Corrección de complemento de pago (REP) — ${tenantName}`
       : `Solicitud de complemento de pago (REP) — ${tenantName}`,
@@ -643,5 +714,5 @@ module.exports = {
   ingestComplement, rematchComplement,
   linkPayment, unlinkPayment, removeComplement,
   listComplements, getComplement, listCompliance,
-  requestRepForPayment,
+  getRepRequestContext, requestRepForPayment,
 }

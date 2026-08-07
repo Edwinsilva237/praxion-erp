@@ -485,23 +485,13 @@ function SupplierPaymentDetailModal({ paymentId, onClose, onReverse }) {
   )
 }
 
-// Botón "Solicitar REP / corrección" — manda correo al proveedor con el detalle
-// del pago (y la diferencia, si el REP no cuadra). Espejo de "Solicitar factura"
-// de Gastos. Requiere proveedor del catálogo con contactos con correo.
+// Botón "Solicitar REP / corrección" — abre el modal para elegir correo(s) y
+// manda al proveedor el detalle del pago (y la diferencia, si el REP no
+// cuadra). Espejo de "Solicitar factura" de Recepciones/Gastos.
 function RequestRepAction({ payment: p, mode }) {
   const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
   const [msg, setMsg] = useState(null)
-  const [err, setErr] = useState(null)
-
-  const mutation = useMutation({
-    mutationFn: () => cxpApi.requestRep(p.id),
-    onSuccess: (r) => {
-      setMsg(`Solicitud enviada a ${(r.sentTo || []).join(', ')}.`)
-      qc.invalidateQueries({ queryKey: ['supplier-payment', p.id] })
-      qc.invalidateQueries({ queryKey: ['pagos-emitidos'] })
-    },
-    onError: (e) => setErr(e.response?.data?.error || e.message || 'Error al enviar la solicitud'),
-  })
 
   if (!p.partner_id) return null
 
@@ -521,14 +511,158 @@ function RequestRepAction({ payment: p, mode }) {
       ) : (
         <Can do="purchases:create">
           <button type="button" className="btn-secondary text-xs self-start"
-            disabled={mutation.isPending}
-            onClick={() => { setErr(null); mutation.mutate() }}>
-            {mutation.isPending ? <Spinner size="sm" /> : `✉️ ${label}`}
+            onClick={() => setOpen(true)}>
+            ✉️ {label}
           </button>
         </Can>
       )}
-      {err && <p className="field-error">{err}</p>}
+      {open && (
+        <SolicitarRepModal
+          payment={p}
+          onClose={() => setOpen(false)}
+          onSent={(sentTo) => {
+            setMsg(`Solicitud enviada a ${sentTo.join(', ')}.`)
+            setOpen(false)
+            qc.invalidateQueries({ queryKey: ['supplier-payment', p.id] })
+            qc.invalidateQueries({ queryKey: ['pagos-emitidos'] })
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+// ── Modal solicitar REP (elige correos destino antes de enviar) ──────────────
+function SolicitarRepModal({ payment: p, onClose, onSent }) {
+  const [selected, setSelected] = useState(null)   // null = aún no inicializado con los contactos
+  const [extraEmail, setExtraEmail] = useState('')
+  const [error, setError] = useState(null)
+
+  const { data: ctx, isLoading, error: ctxError } = useQuery({
+    queryKey: ['rep-request-ctx', p.id],
+    queryFn: () => cxpApi.repRequestContext(p.id),
+  })
+
+  // Al cargar los contactos, preseleccionar todos (comportamiento anterior).
+  useEffect(() => {
+    if (ctx && selected === null) {
+      setSelected(new Set((ctx.contacts || []).map(c => c.email)))
+    }
+  }, [ctx, selected])
+
+  const mutation = useMutation({
+    mutationFn: (toEmails) => cxpApi.requestRep(p.id, { toEmails }),
+    onSuccess: (r) => onSent(r.sentTo || []),
+    onError: (e) => setError(e.response?.data?.error || 'Error al solicitar el REP'),
+  })
+
+  const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  const extra = extraEmail.trim().toLowerCase()
+  const recipients = [...(selected || [])]
+  if (extra) recipients.push(extra)
+  const extraInvalid = !!extra && !EMAIL_RX.test(extra)
+  const canSend = recipients.length > 0 && !extraInvalid && !mutation.isPending
+
+  function toggle(email) {
+    setSelected(prev => {
+      const next = new Set(prev || [])
+      if (next.has(email)) next.delete(email); else next.add(email)
+      return next
+    })
+  }
+
+  const pay = ctx?.payment
+  const isMismatch = ctx?.mode === 'mismatch'
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4"
+      onClick={() => { if (!mutation.isPending) onClose() }}>
+      <div className="card w-full max-w-md p-5 space-y-4" onClick={e => e.stopPropagation()}>
+        <h2 className="text-base font-semibold text-ink-primary">
+          ✉️ {isMismatch ? 'Solicitar corrección del REP' : 'Solicitar REP al proveedor'}
+        </h2>
+
+        {isLoading && <div className="py-6 flex justify-center"><Spinner /></div>}
+        {ctxError && (
+          <div className="rounded-lg bg-status-danger/10 border border-status-danger/40 px-3 py-2 text-sm text-status-danger">
+            {ctxError.response?.data?.error || 'No se pudo cargar la información del proveedor.'}
+          </div>
+        )}
+
+        {ctx && (
+          <>
+            {/* Resumen de lo que llevará el correo */}
+            <div className="rounded-lg bg-surface-secondary border border-line-subtle px-3 py-2 text-sm space-y-1">
+              <div className="flex justify-between gap-3"><span className="text-ink-muted">Fecha del pago</span><strong>{fmtDateOnly(pay.payment_date)}</strong></div>
+              <div className="flex justify-between gap-3"><span className="text-ink-muted">Monto pagado</span><strong className="font-mono">{fmtMXN(pay.amount)}{pay.currency !== 'MXN' ? ` ${pay.currency}` : ''}</strong></div>
+              {pay.method && (
+                <div className="flex justify-between gap-3"><span className="text-ink-muted">Método</span><strong>{pay.method}</strong></div>
+              )}
+              {pay.bank_label && (
+                <div className="flex justify-between gap-3"><span className="text-ink-muted">Banco emisor</span><strong className="text-right">{pay.bank_label}</strong></div>
+              )}
+              {pay.reference && (
+                <div className="flex justify-between gap-3"><span className="text-ink-muted">Referencia</span><strong className="truncate">{pay.reference}</strong></div>
+              )}
+              {(pay.invoices || []).length > 0 && (
+                <div className="flex justify-between gap-3"><span className="text-ink-muted">Facturas</span><strong className="truncate">{pay.invoices.join(', ')}</strong></div>
+              )}
+            </div>
+            {!pay.bank_label && (
+              <p className="text-xs text-ink-muted">
+                El pago no tiene cuenta bancaria ligada — el correo saldrá sin el banco emisor. Puedes
+                editar el pago y asignarle la cuenta para que el proveedor rastree la transferencia más fácil.
+              </p>
+            )}
+
+            {/* Correos del proveedor */}
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-ink-secondary">Enviar la solicitud a:</p>
+              {(ctx.contacts || []).length === 0 && (
+                <p className="text-xs text-status-warning">El proveedor no tiene contactos con correo — captura uno abajo o en Socios.</p>
+              )}
+              {(ctx.contacts || []).map(c => (
+                <label key={c.email} className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" checked={selected?.has(c.email) || false} onChange={() => toggle(c.email)} />
+                  <span className="truncate">{c.email}</span>
+                  {c.name && <span className="text-xs text-ink-muted truncate">({c.name}{c.is_primary ? ' · principal' : ''})</span>}
+                </label>
+              ))}
+              <input type="email" value={extraEmail} onChange={e => setExtraEmail(e.target.value)}
+                placeholder="Otro correo (opcional)" className="input input-sm w-full" />
+              {extraInvalid && <p className="text-xs text-status-danger">Ese correo no parece válido.</p>}
+            </div>
+
+            {ctx.inboxAddress ? (
+              <p className="text-xs text-ink-muted">
+                El correo pedirá al proveedor responder con el XML y PDF del complemento; la respuesta
+                llegará directo al buzón de facturas (<span className="font-mono">{ctx.inboxAddress}</span>)
+                y se cruzará sola con este pago.
+              </p>
+            ) : (
+              <p className="text-xs text-ink-muted">
+                El proveedor podrá responder al correo con el XML y PDF del complemento.
+              </p>
+            )}
+          </>
+        )}
+
+        {error && (
+          <div className="rounded-lg bg-status-danger/10 border border-status-danger/40 px-3 py-2 text-sm text-status-danger">
+            {error}
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <button onClick={onClose} disabled={mutation.isPending} className="btn-secondary flex-1">Cancelar</button>
+          <button onClick={() => { setError(null); mutation.mutate(recipients) }}
+            disabled={!canSend} className="btn-primary flex-1">
+            {mutation.isPending ? <Spinner size="sm" /> : `Enviar solicitud${recipients.length > 1 ? ` (${recipients.length})` : ''}`}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
   )
 }
 
