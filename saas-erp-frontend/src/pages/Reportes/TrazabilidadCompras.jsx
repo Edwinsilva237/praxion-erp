@@ -41,6 +41,67 @@ const REP_BADGE = {
   not_required:    { label: 'PUE',            variant: 'gray'  },
 }
 
+// Franja lateral: el estado del expediente se lee de un vistazo, sin depender
+// solo del texto de los badges.
+function edgeTone(c) {
+  if (c.flags.cancelled) return 'border-l-ink-muted'
+  if (['missing', 'mismatch'].includes(c.flags.rep_status)) return 'border-l-status-danger'
+  if (!c.flags.paid || c.flags.has_nc) return 'border-l-status-warning'
+  return 'border-l-status-success'
+}
+
+/**
+ * Notas contables del expediente: explican en español qué implica cada
+ * incidencia para el IVA y la cuenta por pagar. Es lo que evita que el contador
+ * tenga que preguntar qué pasó con esta factura.
+ */
+function accountingNotes(c) {
+  const notes = []
+  const has = (t) => c.events.some(e => e.type === t)
+
+  if (['missing', 'mismatch'].includes(c.flags.rep_status)) {
+    notes.push({
+      tone: 'danger',
+      text: c.flags.rep_status === 'missing'
+        ? `Factura en parcialidades ya pagada sin complemento de pago. Hasta recibirlo, su IVA de ${money(c.invoice.tax_mxn)} no es acreditable.`
+        : `El complemento recibido no cuadra con lo pagado. Mientras no se corrija, el IVA de ${money(c.invoice.tax_mxn)} queda en revisión.`,
+    })
+  }
+  if (c.flags.cancelled) {
+    notes.push({
+      tone: 'danger',
+      text: has('substituted')
+        ? 'Factura cancelada y sustituida: su IVA sale del acreditable y lo toma la factura sustituta.'
+        : 'Factura cancelada: su IVA sale del acreditable del mes. Lo que se hubiera pagado queda como saldo a favor del proveedor.',
+    })
+  }
+  if (c.flags.has_nc) {
+    notes.push({
+      tone: 'info',
+      text: 'La nota de crédito reduce la cuenta por pagar como pago no-efectivo; su IVA se resta del acreditable y no cuenta como IVA pagado.',
+    })
+  }
+  if (has('replacement')) {
+    notes.push({
+      tone: 'info',
+      text: 'Reposición en especie: sin nota de crédito ni cancelación — la factura sigue vigente porque la mercancía se recibió completa.',
+    })
+  }
+  if (c.invoice.type === 'remission') {
+    notes.push({
+      tone: 'warn',
+      text: 'Cuenta por pagar sin CFDI: el gasto no es deducible ni genera IVA acreditable. Aparece para cuadrar el control interno contra el flujo de efectivo.',
+    })
+  }
+  return notes
+}
+
+const NOTE_TONE = {
+  danger: 'border-status-danger/60 bg-status-danger/10 text-status-danger',
+  warn:   'border-status-warning/60 bg-status-warning/10 text-status-warning',
+  info:   'border-status-info/60 bg-status-info/10 text-ink-secondary',
+}
+
 export default function TrazabilidadCompras() {
   const now = new Date()
   const [year, setYear]   = useState(now.getFullYear())
@@ -106,10 +167,16 @@ export default function TrazabilidadCompras() {
           Expediente completo de cada factura: orden de compra, recepciones, devoluciones y su resolución
           fiscal, pagos y complementos (REP). Cada eslabón con su folio y UUID para conciliar en contabilidad.
         </p>
+        <p className="text-sm text-ink-secondary mt-1">
+          Periodo: <strong>{MONTHS_ES[month]} {year}</strong>
+          {partnerId && suppliers.find(p => p.id === partnerId)
+            ? <> · Proveedor: <strong>{suppliers.find(p => p.id === partnerId).name}</strong></>
+            : null}
+        </p>
       </div>
 
-      {/* Filtros */}
-      <div className="card p-4 flex flex-wrap items-end gap-3">
+      {/* Filtros — se ocultan al imprimir: en papel el periodo ya va en el título. */}
+      <div className="card p-4 flex flex-wrap items-end gap-3 print:hidden">
         <div>
           <label className="label">Mes</label>
           <select className="select w-40" value={month} onChange={e => setMonth(Number(e.target.value))}>
@@ -140,13 +207,26 @@ export default function TrazabilidadCompras() {
       ) : (
         <>
           {/* Resumen */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
             <Kpi label="Expedientes"      value={s?.chains ?? 0} />
+            <Kpi label="Comprado neto"    value={money(s?.net_purchased_mxn ?? 0)} small />
             <Kpi label="Pagados"          value={s?.paid ?? 0}      tone="text-status-success" />
             <Kpi label="Con nota de crédito" value={s?.with_nc ?? 0} tone="text-status-info" />
             <Kpi label="REP pendiente"    value={s?.rep_missing ?? 0} tone={s?.rep_missing ? 'text-status-danger' : undefined} />
             <Kpi label="OCs sin factura"  value={s?.pending_ocs ?? 0} tone={s?.pending_ocs ? 'text-status-warning' : undefined} />
           </div>
+
+          {/* Aviso de IVA en espera de complemento — lo primero que revisa el
+              contador al cierre del mes. */}
+          {s?.iva_pending_rep_mxn > 0.005 && (
+            <div className="rounded-lg border border-status-danger/50 bg-status-danger/10 px-4 py-3 text-sm">
+              <strong className="text-status-danger">IVA en espera de complemento de pago: {money(s.iva_pending_rep_mxn)}</strong>
+              <p className="text-ink-secondary mt-0.5">
+                Corresponde a {s.rep_missing} factura{s.rep_missing === 1 ? '' : 's'} en parcialidades ya pagada
+                {s.rep_missing === 1 ? '' : 's'} cuyo REP no ha llegado o no cuadra. Ese IVA no es acreditable hasta resolverlo.
+              </p>
+            </div>
+          )}
 
           {/* Expedientes */}
           <div className="flex flex-col gap-2">
@@ -159,7 +239,7 @@ export default function TrazabilidadCompras() {
               const open = expanded.has(c.invoice.id)
               const rep = REP_BADGE[c.flags.rep_status]
               return (
-                <div key={c.invoice.id} className="card overflow-hidden">
+                <div key={c.invoice.id} className={clsx('card overflow-hidden border-l-[3px]', edgeTone(c))}>
                   <button onClick={() => toggle(c.invoice.id)}
                     className="w-full text-left px-4 py-3 hover:bg-surface-elevated/40 flex flex-wrap items-center gap-x-3 gap-y-1">
                     <span className="text-ink-muted text-xs w-4">{open ? '▾' : '▸'}</span>
@@ -206,6 +286,12 @@ export default function TrazabilidadCompras() {
                           )
                         })}
                       </ol>
+
+                      {accountingNotes(c).map((n, i) => (
+                        <p key={i} className={clsx('mt-2 rounded border-l-2 px-3 py-2 text-xs', NOTE_TONE[n.tone])}>
+                          {n.text}
+                        </p>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -252,11 +338,13 @@ export default function TrazabilidadCompras() {
   )
 }
 
-function Kpi({ label, value, tone }) {
+function Kpi({ label, value, tone, small }) {
   return (
     <div className="card p-3">
       <p className="text-[10px] uppercase tracking-wider text-ink-muted">{label}</p>
-      <p className={clsx('text-2xl font-bold tabular-nums', tone || 'text-ink-primary')}>{value}</p>
+      <p className={clsx('font-bold tabular-nums', small ? 'text-lg' : 'text-2xl', tone || 'text-ink-primary')}>
+        {value}
+      </p>
     </div>
   )
 }

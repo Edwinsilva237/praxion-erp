@@ -30,13 +30,28 @@ async function generatePurchaseTraceabilityWorkbook({ tenantId, from, to, tenant
   rs.addRow([`Periodo: ${from} a ${to} (exclusivo)`]).font = { italic: true, color: { argb: 'FF606060' } }
   rs.addRow([])
   const s = data.summary
-  const kpi = (label, val) => { const r = rs.addRow([label, val]); r.getCell(1).font = { bold: false }; return r }
+  const kpi = (label, val, money = false) => {
+    const r = rs.addRow([label, val])
+    if (money) r.getCell(2).numFmt = '$#,##0.00'
+    return r
+  }
   kpi('Expedientes (facturas del periodo)', s.chains)
   kpi('  · Pagados por completo', s.paid)
   kpi('  · Cancelados', s.cancelled)
   kpi('  · Con nota de crédito', s.with_nc)
   kpi('  · Con REP faltante o que no cuadra', s.rep_missing)
   kpi('OCs del periodo aún sin factura', s.pending_ocs)
+  rs.addRow([])
+  kpi('Comprado neto (vigente, menos notas de crédito)', s.net_purchased_mxn, true)
+  kpi('  · Notas de crédito recibidas', s.credit_notes_mxn, true)
+  const ivaRow = kpi('IVA en espera de complemento (no acreditable aún)', s.iva_pending_rep_mxn, true)
+  if (s.iva_pending_rep_mxn > 0.005) {
+    ivaRow.getCell(1).font = { bold: true, color: { argb: 'FF9E3232' } }
+    ivaRow.getCell(2).font = { bold: true, color: { argb: 'FF9E3232' } }
+  }
+  rs.addRow([])
+  rs.addRow(['Los importes cancelados no suman: una factura cancelada no compra ni acredita IVA.'])
+    .font = { italic: true, size: 10, color: { argb: 'FF606060' } }
 
   // ── Cadena documental (una fila por evento) ──────────────────────────────
   const ws = wb.addWorksheet('Cadena documental')

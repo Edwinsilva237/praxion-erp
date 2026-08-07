@@ -56,7 +56,7 @@ async function getPurchaseTraceability({ tenantId, from, to, partnerId = null })
 
   const { rows: invoices } = await query(`
     SELECT si.id, si.invoice_number, si.type, si.status, si.uuid_sat, si.serie, si.folio,
-           si.invoice_date, si.due_date, si.total_mxn, si.balance, si.metodo_pago_sat,
+           si.invoice_date, si.due_date, si.total_mxn, si.total, si.tax, si.balance, si.metodo_pago_sat,
            si.is_expense, si.replaced_by_invoice_id, si.partner_id, si.generic_supplier,
            si.supplier_receipt_id, si.purchase_order_id,
            bp.name AS partner_name, bp.tax_name AS partner_tax_name, bp.rfc AS partner_rfc,
@@ -282,6 +282,9 @@ async function getPurchaseTraceability({ tenantId, from, to, partnerId = null })
         id: inv.id, number: inv.invoice_number, type: inv.type, status: inv.status,
         uuid: inv.uuid_sat, invoice_date: toISODate(inv.invoice_date), due_date: toISODate(inv.due_date),
         total_mxn: parseFloat(inv.total_mxn || 0), balance: parseFloat(inv.balance || 0),
+        // IVA en MXN: `tax` viene en la moneda del CFDI, se prorratea igual que
+        // en el reporte contable para que cuadre en facturas en USD.
+        tax_mxn: ivaMxn(inv),
         metodo_pago: inv.metodo_pago_sat, is_expense: inv.is_expense,
         expense_category: inv.expense_category || null,
       },
@@ -329,6 +332,17 @@ async function getPurchaseTraceability({ tenantId, from, to, partnerId = null })
      ORDER BY po.created_at ASC
   `, ocParams)
 
+  // Totales del periodo: solo expedientes VIGENTES (una factura cancelada no
+  // compra ni acredita IVA). A lo comprado se le restan las notas de crédito
+  // recibidas, que es lo que realmente quedó a cargo del proveedor.
+  const live = chains.filter(c => !c.flags.cancelled)
+  const ncTotal = live.reduce((s, c) =>
+    s + c.events.filter(e => e.type === 'credit_note').reduce((x, e) => x + (e.amount || 0), 0), 0)
+  const grossTotal = live.reduce((s, c) => s + c.invoice.total_mxn, 0)
+  const ivaPendingRep = live
+    .filter(c => ['missing', 'mismatch'].includes(c.flags.rep_status))
+    .reduce((s, c) => s + c.invoice.tax_mxn, 0)
+
   return {
     period: { from, to },
     summary: {
@@ -338,6 +352,9 @@ async function getPurchaseTraceability({ tenantId, from, to, partnerId = null })
       with_nc: chains.filter(c => c.flags.has_nc).length,
       rep_missing: chains.filter(c => ['missing', 'mismatch'].includes(c.flags.rep_status)).length,
       pending_ocs: pendingOcs.length,
+      net_purchased_mxn: round2(grossTotal - ncTotal),
+      credit_notes_mxn:  round2(ncTotal),
+      iva_pending_rep_mxn: round2(ivaPendingRep),
     },
     chains,
     pending_ocs: pendingOcs.map(o => ({
@@ -360,5 +377,19 @@ const REP_METHODS = new Set(['transfer', 'cash', 'check', 'credit_card'])
 function paymentIdsOf(apps) {
   return [...new Set((apps || []).filter(p => !p.reversed_date).map(p => p.payment_id))]
 }
+
+// IVA del comprobante en MXN. `tax`/`total` están en la moneda del CFDI, así que
+// se prorratea sobre total_mxn (mismo criterio que el reporte contable) para no
+// inflar el IVA de una factura en USD.
+function ivaMxn(inv) {
+  const tax      = parseFloat(inv.tax || 0)
+  const total    = parseFloat(inv.total || 0)
+  const totalMxn = parseFloat(inv.total_mxn || 0)
+  if (!tax) return 0
+  if (!total || Math.abs(total - totalMxn) < 0.005) return round2(tax)
+  return round2(totalMxn * (tax / total))
+}
+
+const round2 = (n) => Math.round(n * 100) / 100
 
 module.exports = { getPurchaseTraceability, EVENT_LABELS }
