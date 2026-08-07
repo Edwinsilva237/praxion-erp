@@ -6,11 +6,11 @@ const PDFDocument = require('pdfkit')
 const { query }   = require('../../db')
 const config      = require('../../config')
 const { addPraxionFooterPDF } = require('../../utils/praxionWitnessMark')
-const { loadTenantLogo, headerTextX, drawHeaderLogo } = require('../../utils/pdfBranding')
 
 /**
  * Genera el PDF de una remisión (representación impresa, NO fiscal).
- * Mantiene el mismo look-and-feel que el PDF de factura para consistencia visual.
+ * Formato simple imprimible: media carta (5.5×8.5"), blanco y negro, sin
+ * rellenos de color — mismo estilo que el vale de salida.
  *
  * Incluye al pie la foto de evidencia de entrega cuando existe.
  *
@@ -31,8 +31,7 @@ async function generateRemisionPDF({ tenantId, noteId, showPrices = true }) {
             da.zip_code AS delivery_zip,
             COALESCE(fp.rfc, tfi.rfc) AS emisor_rfc, COALESCE(fp.tax_name, tfi.razon_social) AS emisor_nombre,
             COALESCE(fp.tax_regime, tfi.tax_regime) AS emisor_regime, COALESCE(fp.zip_code, tfi.zip_code) AS emisor_zip,
-            t.name AS tenant_name,
-            t.brand_color_primary, t.brand_color_secondary, t.logo_storage_path
+            t.name AS tenant_name
      FROM delivery_notes dn
      JOIN business_partners bp ON bp.id = dn.partner_id
      LEFT JOIN sales_orders so      ON so.id = dn.sales_order_id
@@ -81,149 +80,138 @@ async function generateRemisionPDF({ tenantId, noteId, showPrices = true }) {
     if (fs.existsSync(candidate)) photoFullPath = candidate
   }
 
-  const logoBuffer = await loadTenantLogo(note.logo_storage_path)
-
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 40, size: 'LETTER' })
+    // Media carta (statement): 5.5 × 8.5 pulgadas = 396 × 612 pt, vertical.
+    const M = 28
+    const doc = new PDFDocument({ margin: M, size: [396, 612] })
     const buffers = []
     doc.on('data', chunk => buffers.push(chunk))
     doc.on('end', () => resolve(Buffer.concat(buffers)))
     doc.on('error', reject)
 
-    const W = doc.page.width - 80
-    const gris     = '#F5F5F5'
-    const azul     = note.brand_color_primary   || '#5E9F32'
-    const acento   = note.brand_color_secondary || azul
-    const negro    = '#222222'
-    const grisText = '#666666'
+    const W = doc.page.width - M * 2
+    const negro = '#000000'
+    const gris  = '#555555'
+    const bottomLimit = doc.page.height - 40
 
-    // ─── ENCABEZADO ────────────────────────────────────────────────
-    const htx = headerTextX(!!logoBuffer)
-    doc.rect(40, 40, W, 70).fill(azul)
-    drawHeaderLogo(doc, logoBuffer)
-
-    // Nombre del emisor en UNA sola línea: si la razón social es larga, encogemos
-    // la fuente (18 → 10) hasta que entre, en vez de dejar que envuelva a una 2ª
-    // línea que se encimaría con el RFC de abajo (y=74). El ellipsis es la red de
-    // seguridad para nombres absurdamente largos.
-    const emisorName  = note.emisor_nombre || note.tenant_name || 'EMISOR'
-    const emisorNameW = W * 0.6 - (htx - 55)
-    let emisorSize = 18
-    doc.font('Helvetica-Bold')
-    while (emisorSize > 10 && doc.fontSize(emisorSize).widthOfString(emisorName) > emisorNameW) {
-      emisorSize -= 0.5
-    }
-    doc.fillColor('white').fontSize(emisorSize).font('Helvetica-Bold')
-       .text(emisorName, htx, 52, { width: emisorNameW, lineBreak: false, ellipsis: true })
-
-    doc.fontSize(9).font('Helvetica')
-    if (note.emisor_rfc) {
-      doc.text(`RFC: ${note.emisor_rfc}`, htx, 74)
-         .text(`Régimen: ${note.emisor_regime || '-'}  |  CP: ${note.emisor_zip || '-'}`, htx, 86)
-    }
-
-    doc.fontSize(20).font('Helvetica-Bold')
-       .text('REMISIÓN', 55 + W * 0.6, 50, { width: W * 0.4 - 15, align: 'right' })
-    doc.fontSize(12).font('Helvetica-Bold')
-       .text(note.document_number, 55 + W * 0.6, 74, { width: W * 0.4 - 15, align: 'right' })
-    doc.fontSize(8).font('Helvetica')
-       .text(showPrices ? 'Documento no fiscal' : 'Documento no fiscal · sin precios',
-             55 + W * 0.6, 92, { width: W * 0.4 - 15, align: 'right' })
-
-    // ─── DATOS GENERALES ───────────────────────────────────────────
-    let y = 125
-    doc.fillColor(negro).fontSize(9).font('Helvetica-Bold')
-       .text('DATOS DE LA REMISIÓN', 40, y)
-
-    y += 14
-    doc.rect(40, y, W, 38).fill(gris)
-
-    const col1 = 50, col2 = 220, col3 = 380, col4 = 500
-    doc.fillColor(grisText).fontSize(8).font('Helvetica')
-    doc.text('Fecha emisión:', col1, y + 5)
-    doc.text('Pedido:',        col2, y + 5)
-    doc.text('OC del cliente:', col3, y + 5)
-    doc.text('Moneda:',        col4, y + 5)
-
+    // ─── ENCABEZADO (solo texto, sin color) ────────────────────────
+    let y = M
+    const emisorName = note.emisor_nombre || note.tenant_name || 'EMISOR'
     doc.fillColor(negro).font('Helvetica-Bold')
+    let nameSize = 12
+    while (nameSize > 8 && doc.fontSize(nameSize).widthOfString(emisorName) > W * 0.58) {
+      nameSize -= 0.5
+    }
+    doc.fontSize(nameSize).text(emisorName, M, y + 2, { width: W * 0.58, lineBreak: false, ellipsis: true })
+
+    doc.fontSize(11).text('REMISIÓN', M + W * 0.58, y, { width: W * 0.42, align: 'right' })
+    doc.fontSize(9).text(note.document_number, M + W * 0.58, y + 14, { width: W * 0.42, align: 'right' })
+    doc.fontSize(6.5).font('Helvetica').fillColor(gris)
+       .text(showPrices ? 'Documento no fiscal' : 'Documento no fiscal · sin precios',
+             M + W * 0.58, y + 26, { width: W * 0.42, align: 'right' })
+
+    if (note.emisor_rfc) {
+      doc.fontSize(7).fillColor(gris)
+         .text(`RFC: ${note.emisor_rfc}   ·   Régimen: ${note.emisor_regime || '—'}   ·   CP: ${note.emisor_zip || '—'}`,
+               M, y + nameSize + 6, { width: W * 0.58 })
+    }
+
+    y += 38
+    doc.moveTo(M, y).lineTo(M + W, y).strokeColor(negro).lineWidth(1).stroke()
+    y += 8
+
+    // ─── DATOS GENERALES (dos columnas de etiqueta:valor) ──────────
     const fechaStr = note.issue_date
       ? new Date(note.issue_date).toLocaleDateString('es-MX', { year: 'numeric', month: '2-digit', day: '2-digit' })
-      : '-'
-    doc.text(fechaStr, col1, y + 17)
-    doc.text(note.order_number || '-', col2, y + 17)
-    doc.text(note.sales_order_po || '-', col3, y + 17)
-    doc.text(note.currency, col4, y + 17)
+      : '—'
+    const half = W / 2
+    const datoRow = (k1, v1, k2, v2) => {
+      doc.fontSize(7.5)
+      doc.fillColor(gris).font('Helvetica').text(`${k1}:`, M, y, { width: 62, lineBreak: false })
+      doc.fillColor(negro).font('Helvetica-Bold').text(v1, M + 64, y, { width: half - 68, lineBreak: false, ellipsis: true })
+      if (k2) {
+        doc.fillColor(gris).font('Helvetica').text(`${k2}:`, M + half, y, { width: 62, lineBreak: false })
+        doc.fillColor(negro).font('Helvetica-Bold').text(v2, M + half + 64, y, { width: half - 68, lineBreak: false, ellipsis: true })
+      }
+      y += 11
+    }
+    datoRow('Fecha emisión', fechaStr, 'Moneda', note.currency || 'MXN')
+    if (note.order_number || note.sales_order_po) {
+      datoRow('Pedido', note.order_number || '—', 'OC del cliente', note.sales_order_po || '—')
+    }
+    y += 4
 
-    // ─── CLIENTE / DESTINO ─────────────────────────────────────────
-    y += 50
-    const halfW = (W - 10) / 2
+    // ─── CLIENTE / DESTINO (dos columnas, solo texto) ──────────────
+    doc.fillColor(gris).fontSize(7).font('Helvetica-Bold').text('CLIENTE', M, y)
+    doc.text('ENTREGA EN', M + half + 5, y)
+    y += 9
+    const yCliente = y
+    doc.fillColor(negro).fontSize(7.5).font('Helvetica-Bold')
+       .text(note.partner_tax_name || note.partner_name || '', M, y, { width: half - 10 })
+    doc.fillColor(gris).font('Helvetica').fontSize(7)
+       .text(`RFC: ${note.partner_rfc || '—'}`, M, doc.y + 1, { width: half - 10 })
+    const cityLine = `${note.partner_city || ''}${note.partner_state ? `, ${note.partner_state}` : ''} ${note.partner_zip || ''}`.trim()
+    if (cityLine) doc.text(cityLine, M, doc.y + 1, { width: half - 10 })
+    const yEndCliente = doc.y
 
-    doc.rect(40, y, halfW, 14).fill(azul)
-    doc.fillColor('white').fontSize(8).font('Helvetica-Bold')
-       .text('CLIENTE', 45, y + 3)
+    doc.fillColor(negro).fontSize(7.5).font('Helvetica-Bold')
+       .text(note.address_alias || 'Domicilio principal', M + half + 5, yCliente, { width: half - 5 })
+    doc.fillColor(gris).font('Helvetica').fontSize(7)
+       .text(note.delivery_address || note.partner_address || '—', M + half + 5, doc.y + 1, { width: half - 5 })
+    const destCity = `${note.delivery_city || note.partner_city || ''}${(note.delivery_state || note.partner_state) ? `, ${note.delivery_state || note.partner_state}` : ''} ${note.delivery_zip || note.partner_zip || ''}`.trim()
+    if (destCity) doc.text(destCity, M + half + 5, doc.y + 1, { width: half - 5 })
 
-    doc.rect(40, y + 14, halfW, 52).fill(gris)
-    doc.fillColor(negro).fontSize(8).font('Helvetica-Bold')
-       .text(note.partner_tax_name || note.partner_name || '', 45, y + 18, { width: halfW - 10, lineBreak: false, ellipsis: true })
-    doc.font('Helvetica').fillColor(grisText)
-       .text(`RFC: ${note.partner_rfc || '-'}`, 45, y + 30)
-       .text(`${note.partner_city || ''} ${note.partner_state ? `, ${note.partner_state}` : ''} ${note.partner_zip || ''}`.trim() || '-',
-             45, y + 41, { width: halfW - 10 })
-
-    const rx = 40 + halfW + 10
-    doc.rect(rx, y, halfW, 14).fill(azul)
-    doc.fillColor('white').fontSize(8).font('Helvetica-Bold')
-       .text('ENTREGA EN', rx + 5, y + 3)
-
-    doc.rect(rx, y + 14, halfW, 52).fill(gris)
-    doc.fillColor(negro).fontSize(8).font('Helvetica-Bold')
-       .text(note.address_alias || 'Domicilio principal', rx + 5, y + 18, { width: halfW - 10, lineBreak: false, ellipsis: true })
-    doc.font('Helvetica').fillColor(grisText)
-       .text(note.delivery_address || note.partner_address || '-', rx + 5, y + 30, { width: halfW - 10 })
-       .text(`${note.delivery_city || note.partner_city || ''} ${note.delivery_state || note.partner_state ? `, ${note.delivery_state || note.partner_state}` : ''} ${note.delivery_zip || note.partner_zip || ''}`.trim() || '',
-             rx + 5, y + 52, { width: halfW - 10 })
+    y = Math.max(yEndCliente, doc.y) + 8
 
     // ─── CONCEPTOS ─────────────────────────────────────────────────
-    y += 82
-    doc.fillColor(negro).fontSize(9).font('Helvetica-Bold')
-       .text('CONCEPTOS', 40, y)
-
-    y += 14
-    doc.rect(40, y, W, 16).fill(azul)
-    doc.fillColor('white').fontSize(7.5).font('Helvetica-Bold')
-    // Anchos de columna. Deben sumar <= 522 (de cx=45 al borde de la tabla en
-    // x≈567) para que "Importe" NO se salga del margen derecho de la hoja.
-    // Sin precios, la descripción absorbe el espacio de P. Unitario / Importe.
+    // Anchos de columna (suman W=340). Sin precios, la descripción absorbe
+    // el espacio de P. Unitario / Importe.
     const cw = showPrices
-      ? { sku: 58, desc: 216, cant: 48, unit: 46, precio: 70, importe: 84 }
-      : { sku: 70, desc: 330, cant: 60, unit: 62 }
-    let cx = 45
-    doc.text('SKU', cx, y + 4); cx += cw.sku
-    doc.text('Descripción', cx, y + 4); cx += cw.desc
-    doc.text('Cant.', cx, y + 4, { width: cw.cant, align: 'right' }); cx += cw.cant
-    doc.text('Unidad', cx, y + 4); cx += cw.unit
-    if (showPrices) {
-      doc.text('P. Unitario', cx, y + 4, { width: cw.precio, align: 'right' }); cx += cw.precio
-      doc.text('Importe', cx, y + 4, { width: cw.importe, align: 'right' })
+      ? { sku: 42, desc: 117, cant: 34, unit: 33, precio: 52, importe: 62 }
+      : { sku: 55, desc: 185, cant: 50, unit: 50 }
+    const drawLinesHeader = () => {
+      doc.fillColor(negro).fontSize(7).font('Helvetica-Bold')
+      let hx = M
+      doc.text('SKU', hx, y, { lineBreak: false }); hx += cw.sku
+      doc.text('DESCRIPCIÓN', hx, y, { lineBreak: false }); hx += cw.desc
+      doc.text('CANT.', hx, y, { width: cw.cant, align: 'right' }); hx += cw.cant
+      doc.text('UNIDAD', hx, y + (showPrices ? 0 : 0), { width: cw.unit, align: 'right' }); hx += cw.unit
+      if (showPrices) {
+        doc.text('P. UNIT.', hx, y, { width: cw.precio, align: 'right' }); hx += cw.precio
+        doc.text('IMPORTE', hx, y, { width: cw.importe, align: 'right' })
+      }
+      y += 10
+      doc.moveTo(M, y).lineTo(M + W, y).strokeColor(negro).lineWidth(0.8).stroke()
+      y += 4
     }
+    drawLinesHeader()
 
-    y += 16
-    lines.forEach((line, i) => {
-      const rowH = 20
+    lines.forEach((line) => {
       const lineSubtotal = parseFloat(line.quantity_delivered) * parseFloat(line.unit_price) *
                            (1 - (parseFloat(line.discount_pct) || 0) / 100)
-      doc.rect(40, y, W, rowH).fill(i % 2 === 0 ? 'white' : gris)
-      doc.fillColor(negro).fontSize(7.5).font('Helvetica')
-      cx = 45
-      doc.text(line.sku || '', cx, y + 6, { width: cw.sku - 5 }); cx += cw.sku
-      doc.text(line.product_name || '', cx, y + 6, { width: cw.desc - 5 }); cx += cw.desc
-      doc.text(parseFloat(line.quantity_delivered).toFixed(2), cx, y + 6, { width: cw.cant, align: 'right' }); cx += cw.cant
-      doc.text(line.unit || '', cx, y + 6, { width: cw.unit }); cx += cw.unit
+      doc.fontSize(7).font('Helvetica')
+      const descH = doc.heightOfString(line.product_name || '', { width: cw.desc - 6 })
+      const skuH  = doc.heightOfString(line.sku || '', { width: cw.sku - 4 })
+      const rowH  = Math.max(descH, skuH, 8) + 6
+
+      if (y + rowH > bottomLimit) {
+        doc.addPage()
+        y = M
+        drawLinesHeader()
+      }
+
+      doc.fillColor(negro).fontSize(7).font('Helvetica')
+      let cx = M
+      doc.text(line.sku || '', cx, y, { width: cw.sku - 4 }); cx += cw.sku
+      doc.text(line.product_name || '', cx, y, { width: cw.desc - 6 }); cx += cw.desc
+      doc.text(parseFloat(line.quantity_delivered).toFixed(2), cx, y, { width: cw.cant, align: 'right' }); cx += cw.cant
+      doc.text(line.unit || '', cx, y, { width: cw.unit, align: 'right' }); cx += cw.unit
       if (showPrices) {
-        doc.text(fmt(line.unit_price), cx, y + 6, { width: cw.precio, align: 'right' }); cx += cw.precio
-        doc.text(fmt(lineSubtotal), cx, y + 6, { width: cw.importe, align: 'right' })
+        doc.text(fmt(line.unit_price), cx, y, { width: cw.precio, align: 'right' }); cx += cw.precio
+        doc.text(fmt(lineSubtotal), cx, y, { width: cw.importe, align: 'right' })
       }
       y += rowH
+      doc.moveTo(M, y - 3).lineTo(M + W, y - 3).strokeColor('#DDDDDD').lineWidth(0.4).stroke()
     })
 
     // ─── TOTALES ───────────────────────────────────────────────────
@@ -231,24 +219,21 @@ async function generateRemisionPDF({ tenantId, noteId, showPrices = true }) {
     // agrega cuando se emite el CFDI. Se omite por completo en la versión
     // sin precios (remisión de entrega).
     if (showPrices) {
-      y += 10
-      const tw = 200
-      const tx = 40 + W - tw
-
+      y += 4
+      if (y + 30 > bottomLimit) { doc.addPage(); y = M }
       // Usamos subtotal como total (tax = 0 después de la migración 094).
       const totalRem = parseFloat(note.subtotal_mxn || note.total_mxn || 0)
-
-      doc.rect(tx - 5, y, tw + 5, 22).fill(azul)
-      doc.fillColor('white').fontSize(11).font('Helvetica-Bold')
-         .text('TOTAL', tx, y + 6, { width: tw * 0.5 })
-         .text(`${note.currency} ${fmt(totalRem)}`, tx + tw * 0.5, y + 6, { width: tw * 0.5 - 5, align: 'right' })
-      y += 26
-
-      // Leyenda IVA al facturar
-      doc.fillColor(grisText).fontSize(7.5).font('Helvetica-Oblique')
-         .text('* El IVA (16%) se calcula automáticamente al emitir la factura (CFDI).',
-                40, y, { width: W - 10, align: 'left' })
-      y += 4
+      doc.moveTo(M + W - 160, y).lineTo(M + W, y).strokeColor(negro).lineWidth(0.8).stroke()
+      y += 5
+      doc.fillColor(negro).fontSize(9.5).font('Helvetica-Bold')
+         .text('TOTAL', M + W - 160, y, { width: 70, lineBreak: false })
+         .text(`${note.currency} ${fmt(totalRem)}`, M + W - 160 + 60, y, { width: 100, align: 'right' })
+      y += 14
+      doc.fillColor(gris).fontSize(6.5).font('Helvetica-Oblique')
+         .text('* El IVA (16%) se calcula automáticamente al emitir la factura (CFDI).', M, y, { width: W })
+      y += 12
+    } else {
+      y += 8
     }
 
     // ─── DATOS ADICIONALES ─────────────────────────────────────────
@@ -260,90 +245,77 @@ async function generateRemisionPDF({ tenantId, noteId, showPrices = true }) {
         const d = new Date(usdRateDate).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
         tcText += ` (${d})`
       }
-      extras.push(['TC aplicado:', tcText])
+      extras.push(['TC aplicado', tcText])
     }
     if (note.credit_due_date) {
       const d = new Date(note.credit_due_date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
-      extras.push(['Vence el:', d])
+      extras.push(['Vence el', d])
     }
-    if (note.notes) extras.push(['Notas:', note.notes])
+    if (note.notes) extras.push(['Notas', note.notes])
 
     if (extras.length > 0) {
-      y += 30
-      const headerH = 14
-      doc.rect(40, y, W, headerH).fill(azul)
-      doc.fillColor('white').fontSize(8).font('Helvetica-Bold')
-         .text('DATOS ADICIONALES', 45, y + 3)
-      y += headerH
-      const bodyH = extras.length * 14 + 6
-      doc.rect(40, y, W, bodyH).fill(gris)
-      let exY = y + 4
+      if (y + 14 + extras.length * 11 > bottomLimit) { doc.addPage(); y = M }
+      doc.fillColor(gris).fontSize(7).font('Helvetica-Bold').text('DATOS ADICIONALES', M, y)
+      y += 10
       extras.forEach(([label, value]) => {
-        doc.fillColor(grisText).fontSize(8).font('Helvetica-Bold').text(label, 50, exY, { width: 110 })
-        doc.fillColor(negro).font('Helvetica').text(value, 160, exY, { width: W - 125 })
-        exY += 14
+        doc.fillColor(gris).fontSize(7).font('Helvetica').text(`${label}:`, M, y, { width: 70, lineBreak: false })
+        doc.fillColor(negro).font('Helvetica-Bold').text(value, M + 72, y, { width: W - 72 })
+        y = Math.max(y + 11, doc.y + 2)
       })
-      y += bodyH
+      y += 4
     }
 
     // ─── EVIDENCIA DE ENTREGA ──────────────────────────────────────
     if (note.status === 'delivered' || note.status === 'invoiced') {
-      y += 20
-      // Si no cabe el bloque, salto de página
-      if (y > 600) { doc.addPage(); y = 40 }
+      const evidenceH = photoFullPath ? 120 : 34
+      if (y + evidenceH + 14 > bottomLimit) { doc.addPage(); y = M }
+      y += 6
+      doc.fillColor(gris).fontSize(7).font('Helvetica-Bold').text('EVIDENCIA DE ENTREGA', M, y)
+      y += 10
 
-      doc.rect(40, y, W, 14).fill(azul)
-      doc.fillColor('white').fontSize(8).font('Helvetica-Bold')
-         .text('EVIDENCIA DE ENTREGA', 45, y + 3)
-      y += 14
-
-      const evidenceH = photoFullPath ? 180 : 60
-      doc.rect(40, y, W, evidenceH).fill(gris)
-
-      doc.fillColor(grisText).fontSize(8).font('Helvetica').text('Recibido por:', 50, y + 8)
-      doc.fillColor(negro).fontSize(10).font('Helvetica-Bold')
-         .text(note.receiver_name || '-', 50, y + 20)
-
+      doc.fillColor(gris).fontSize(7).font('Helvetica').text('Recibido por:', M, y, { width: 60, lineBreak: false })
+      doc.fillColor(negro).fontSize(8.5).font('Helvetica-Bold')
+         .text(note.receiver_name || '—', M + 62, y, { width: half - 62 })
       if (note.delivered_at) {
         const dlv = new Date(note.delivered_at)
         const dlvStr = dlv.toLocaleString('es-MX', {
           day: '2-digit', month: '2-digit', year: 'numeric',
           hour: '2-digit', minute: '2-digit',
         })
-        doc.fillColor(grisText).font('Helvetica').fontSize(8).text(`Fecha: ${dlvStr}`, 50, y + 38)
+        doc.fillColor(gris).font('Helvetica').fontSize(7).text(`Fecha: ${dlvStr}`, M, y + 13)
       }
 
       if (photoFullPath) {
         try {
           // Foto a la derecha del bloque
-          doc.image(photoFullPath, 280, y + 8, {
-            fit: [W - 250, evidenceH - 16],
+          doc.image(photoFullPath, M + half + 5, y, {
+            fit: [half - 5, evidenceH - 8],
             align: 'right',
             valign: 'top',
           })
         } catch {
-          doc.fillColor(grisText).fontSize(7).text('(No se pudo incluir la foto)', 280, y + 10)
+          doc.fillColor(gris).fontSize(6.5).text('(No se pudo incluir la foto)', M + half + 5, y)
         }
       }
       y += evidenceH
     }
 
     // ─── PIE ───────────────────────────────────────────────────────
-    y += 20
-    if (y > 720) { doc.addPage(); y = 40 }
-    doc.fillColor(grisText).fontSize(7).font('Helvetica')
+    y += 12
+    if (y > doc.page.height - 50) { doc.addPage(); y = M }
+    doc.fillColor(gris).fontSize(6.5).font('Helvetica')
        .text('Este documento es una remisión no fiscal. Para efectos fiscales se emite el CFDI correspondiente.',
-             40, y, { width: W, align: 'center' })
+             M, y, { width: W, align: 'center' })
 
     if (note.status === 'cancelled') {
       doc.save()
       doc.rotate(-45, { origin: [doc.page.width / 2, doc.page.height / 2] })
-      doc.fillColor('#DDDDDD').fontSize(60).font('Helvetica-Bold').opacity(0.3)
-         .text('CANCELADA', 0, doc.page.height / 2 - 30, { width: doc.page.width, align: 'center' })
+      doc.fillColor('#BBBBBB').fontSize(44).font('Helvetica-Bold').opacity(0.3)
+         .text('CANCELADA', 0, doc.page.height / 2 - 22, { width: doc.page.width, align: 'center' })
       doc.restore()
     }
 
-    addPraxionFooterPDF(doc)
+    addPraxionFooterPDF(doc, { bottomOffset: 18 })
     doc.end()
   })
 }
