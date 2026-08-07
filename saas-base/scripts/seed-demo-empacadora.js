@@ -208,6 +208,7 @@ async function configureTenant(tenantId) {
     cost_method:            'weighted_avg',
     operation_mode:         'small',
     allow_negative_stock:   false,
+    expenses_enabled:       true,
   }
   const cols = Object.keys(flags)
   const vals = Object.values(flags)
