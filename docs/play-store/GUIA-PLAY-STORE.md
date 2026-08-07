@@ -3,6 +3,9 @@
 > Generado 2026-06-05. Acompaña al AAB firmado y a los gráficos de `docs/play-store/assets/`.
 > El AAB de release está en el **Escritorio**: `Praxion-release.aab` (y en
 > `saas-erp-frontend/android/app/build/outputs/bundle/release/app-release.aab`).
+> **AAB recompilado 2026-06-10** (frontend al día: paquetes de productos, búsqueda server-side,
+> facturación parcial, etc.). Sigue siendo versionCode 1 — primera subida. Firma verificada
+> (`jarsigner -verify` → jar verified).
 
 ---
 
