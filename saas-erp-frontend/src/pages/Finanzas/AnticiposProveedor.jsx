@@ -16,6 +16,7 @@ const METHOD_LABEL = {
   check:               'Cheque',
   credit_card:         'Tarjeta de crédito',
   advance_application: 'Aplicación',
+  credit_note:         'Nota de crédito',   // saldo a favor por resolución de devolución
 }
 
 const PAGE_SIZE = 30

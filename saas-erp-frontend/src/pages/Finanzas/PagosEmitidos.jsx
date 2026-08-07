@@ -17,6 +17,7 @@ const METHOD_OPTS = [
   ['cash',        'Efectivo'],
   ['check',       'Cheque'],
   ['credit_card', 'Tarjeta de crédito'],
+  ['credit_note', 'Nota de crédito'],
 ]
 
 const METHOD_LABEL = {
@@ -25,6 +26,7 @@ const METHOD_LABEL = {
   check:               'Cheque',
   credit_card:         'Tarjeta de crédito',
   advance_application: 'Aplicación de anticipo',
+  credit_note:         'Nota de crédito',   // pago no-efectivo por resolución de devolución
 }
 
 const methodLabel = (m) => METHOD_LABEL[m] || m || '—'
