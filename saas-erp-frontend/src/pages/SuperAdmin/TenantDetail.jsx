@@ -19,6 +19,9 @@ const MODULE_LABELS = {
   sales:       { title: 'Ventas',       desc: 'Pedidos, remisiones, precios por cliente, CXC.' },
   petty_cash:  { title: 'Caja chica',   desc: 'Cajas, salidas con comprobante, categorías.' },
   reports:     { title: 'Reportes',     desc: 'Ventas, producción, contable, estado de cuenta.' },
+  communications: { title: 'Comunicados',   desc: 'Avisos por correo a clientes, proveedores y personal.' },
+  traceability:   { title: 'Trazabilidad',  desc: 'Rastreo de lotes y vencimientos (requiere lotes activos).' },
+  rh:             { title: 'Recursos Humanos', desc: 'Empleados y periodos vacacionales.' },
 }
 
 const SUB_LABELS = {

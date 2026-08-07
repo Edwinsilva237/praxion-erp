@@ -3,6 +3,9 @@
 // Cada tab tiene una `key` estable que es la que se guarda en
 // roles.mobile_tabs como JSON. Si cambian etiqueta/ruta/permiso, la key
 // no se debe tocar — eso rompería los roles ya configurados.
+//
+// `module` espeja el gating del sidebar: si el tenant tiene ese módulo
+// apagado, el tab se oculta aunque el rol lo tenga configurado.
 
 export const MOBILE_TABS = [
   {
@@ -19,6 +22,7 @@ export const MOBILE_TABS = [
     to:          '/produccion/captura',
     permission:  'production:create',
     iconKey:     'capture',
+    module:      'production',
   },
   {
     key:         'production-orders',
@@ -26,6 +30,7 @@ export const MOBILE_TABS = [
     to:          '/produccion/ordenes',
     permission:  'production:read_orders',
     iconKey:     'orders',
+    module:      'production',
   },
   {
     key:         'production-schedule',
@@ -33,6 +38,7 @@ export const MOBILE_TABS = [
     to:          '/produccion/programacion',
     permission:  'production:read',
     iconKey:     'calendar',
+    module:      'production',
   },
   {
     key:         'production-history',
@@ -40,6 +46,7 @@ export const MOBILE_TABS = [
     to:          '/produccion/historico',
     permission:  'production:read',
     iconKey:     'history',
+    module:      'production',
   },
   {
     key:         'sales',
@@ -47,6 +54,7 @@ export const MOBILE_TABS = [
     to:          '/ventas',
     permission:  'sales:read',
     iconKey:     'sales',
+    module:      'sales',
   },
   {
     key:         'sales-quotations',
@@ -54,6 +62,7 @@ export const MOBILE_TABS = [
     to:          '/cotizaciones',
     permission:  'sales:read',
     iconKey:     'sales',
+    module:      'quotations',
   },
   {
     key:         'sales-delivery-notes',
@@ -61,6 +70,7 @@ export const MOBILE_TABS = [
     to:          '/remisiones',
     permission:  'sales:read',
     iconKey:     'sales',
+    module:      'sales',
   },
   {
     key:         'invoicing',
@@ -68,6 +78,7 @@ export const MOBILE_TABS = [
     to:          '/facturacion',
     permission:  'invoicing:read',
     iconKey:     'sales',
+    module:      'invoicing',
   },
   {
     key:         'purchases',
@@ -75,6 +86,7 @@ export const MOBILE_TABS = [
     to:          '/compras/ordenes',
     permission:  'purchases:read',
     iconKey:     'purchase',
+    module:      'purchases',
   },
   {
     key:         'finance',
@@ -82,6 +94,7 @@ export const MOBILE_TABS = [
     to:          '/cxc',
     permission:  'financials:read',
     iconKey:     'finance',
+    module:      'sales',
   },
   {
     key:         'cxp',
@@ -89,6 +102,7 @@ export const MOBILE_TABS = [
     to:          '/cxp',
     permission:  'financials:read',
     iconKey:     'finance',
+    module:      'purchases',
   },
   {
     key:         'inventory',
@@ -96,6 +110,7 @@ export const MOBILE_TABS = [
     to:          '/inventario',
     permission:  'inventory:read',
     iconKey:     'inventory',
+    module:      'inventory',
   },
   {
     key:         'petty-cash',
@@ -103,6 +118,7 @@ export const MOBILE_TABS = [
     to:          '/caja-chica',
     permission:  'petty_cash:read',
     iconKey:     'finance',
+    module:      'petty_cash',
   },
 ]
 

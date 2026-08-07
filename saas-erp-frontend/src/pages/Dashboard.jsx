@@ -85,6 +85,18 @@ export default function Dashboard() {
   const canReadSales     = can('sales', 'read')
   const canReadPurchases = can('purchases', 'read')
 
+  // Branding + módulos del tenant. Si Ventas está apagado (panel super-admin),
+  // el dashboard esconde sus widgets — un tenant solo-compras no debe ver
+  // "Últimas órdenes de venta" ni el acumulado de ventas del mes.
+  const storeTenant = useAuthStore((s) => s.tenant)
+  const { data: tenantInfo } = useQuery({
+    queryKey: ['tenant', 'current'],
+    queryFn:  tenantsApi.getCurrent,
+    staleTime: 5 * 60 * 1000,
+  })
+  const tenantModules = tenantInfo?.modules || storeTenant?.modules || {}
+  const salesEnabled  = tenantModules.sales !== false
+
   const { data: recentOrders, isLoading: loadingOrders } = useQuery({
     queryKey: ['dashboard-recent-orders'],
     queryFn:  () => salesApi.listOrders({ limit: 5 }).then(r =>
@@ -96,7 +108,7 @@ export default function Dashboard() {
       }))
     ),
     staleTime: 2 * 60 * 1000,
-    enabled:   canReadSales,
+    enabled:   canReadSales && salesEnabled,
   })
 
   const { data: recentPurchases, isLoading: loadingPurchases } = useQuery({
@@ -114,11 +126,6 @@ export default function Dashboard() {
   })
 
   // Branding del tenant — logo + nombre comercial para el hero del dashboard.
-  const { data: tenantInfo } = useQuery({
-    queryKey: ['tenant', 'current'],
-    queryFn:  tenantsApi.getCurrent,
-    staleTime: 5 * 60 * 1000,
-  })
   const tenantLogo   = tenantInfo?.logo_url
   const companyName  = tenantInfo?.display_name || tenantInfo?.name || 'tu empresa'
   const accentColor  = tenantInfo?.brand_color_primary || '#5E9F32'
@@ -169,17 +176,19 @@ export default function Dashboard() {
       </section>
 
       {/* Tarjetas financieras del mes — tiempo real */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <SalesMonthCard data={snapshot?.sales} loading={loadingSnapshot} month={snapshot?.period?.month} />
+      <div className={`grid grid-cols-1 gap-4 ${salesEnabled ? 'md:grid-cols-2' : ''}`}>
+        {salesEnabled && (
+          <SalesMonthCard data={snapshot?.sales} loading={loadingSnapshot} month={snapshot?.period?.month} />
+        )}
         <IvaMonthCard   data={snapshot?.iva}   loading={loadingSnapshot} month={snapshot?.period?.month} />
       </div>
 
       {/* Tablas recientes */}
-      {(canReadSales || canReadPurchases) && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {((canReadSales && salesEnabled) || canReadPurchases) && (
+        <div className={`grid grid-cols-1 gap-4 ${canReadSales && salesEnabled && canReadPurchases ? 'md:grid-cols-2' : ''}`}>
 
           {/* Ventas */}
-          {canReadSales && (
+          {canReadSales && salesEnabled && (
             <div className="card">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-semibold text-ink-primary">Últimas órdenes de venta</h3>

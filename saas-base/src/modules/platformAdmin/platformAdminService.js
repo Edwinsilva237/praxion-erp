@@ -15,6 +15,9 @@ const SUPPORTED_MODULES = [
   'sales',
   'petty_cash',
   'reports',
+  'communications',
+  'traceability',
+  'rh',
 ]
 
 const VALID_PLANS = ['free', 'starter', 'pro', 'enterprise', 'owner']

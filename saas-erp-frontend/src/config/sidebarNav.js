@@ -32,7 +32,7 @@ export const NAV_SECTIONS = [
       { label: 'Notas de crédito',    to: '/notas-credito',   iconKey: 'invoice',  permission: 'invoicing:read',          module: 'invoicing' },
       { label: 'Cuentas por cobrar',  to: '/cxc',             iconKey: 'card',     permission: 'financials:read',         module: 'sales' },
       { label: 'Pagos recibidos',     to: '/pagos-recibidos', iconKey: 'card',     permission: 'financials:read',         module: 'sales' },
-      { label: 'Precios por cliente', to: '/precios-cliente', iconKey: 'tag',      permission: 'business_partners:read' },
+      { label: 'Precios por cliente', to: '/precios-cliente', iconKey: 'tag',      permission: 'business_partners:read', module: 'sales' },
       { label: 'Paquetes',            to: '/paquetes',        iconKey: 'package',  permission: 'products:read',          module: 'sales' },
       { label: 'Socios de negocio',   to: '/socios',          iconKey: 'partners', permission: 'business_partners:read' },
     ],
@@ -118,8 +118,8 @@ export const NAV_SECTIONS = [
   {
     label: 'Recursos Humanos',
     items: [
-      { label: 'Empleados',   to: '/rh/empleados',   iconKey: 'partners',  permission: 'hr:read' },
-      { label: 'Vacaciones',  to: '/rh/vacaciones',  iconKey: 'calendar',  permission: 'hr:read' },
+      { label: 'Empleados',   to: '/rh/empleados',   iconKey: 'partners',  permission: 'hr:read', module: 'rh' },
+      { label: 'Vacaciones',  to: '/rh/vacaciones',  iconKey: 'calendar',  permission: 'hr:read', module: 'rh' },
     ],
   },
   {

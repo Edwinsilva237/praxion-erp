@@ -1,5 +1,7 @@
 import { NavLink } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import useAuthStore from '@/store/useAuthStore'
+import { tenantsApi } from '@/api/tenants'
 import { MOBILE_TABS, MOBILE_TABS_BY_KEY, MAX_MOBILE_TABS } from '@/config/mobileTabs'
 import clsx from 'clsx'
 
@@ -59,8 +61,19 @@ export default function BottomNav() {
   const { can } = useAuthStore()
   const permissions = useAuthStore((s) => s.permissions)
   const user        = useAuthStore((s) => s.user)
+  const tenant      = useAuthStore((s) => s.tenant)
   const mobileTabs  = useAuthStore((s) => s.uiPrefs?.mobile_tabs)
   const isSuperAdmin = user?.roles?.includes?.('super_admin') || permissions.includes('*')
+
+  // Módulos apagados del tenant — mismo gating que el Sidebar. Un tab cuyo
+  // módulo está apagado se oculta aunque el rol lo tenga en mobile_tabs.
+  const { data: tenantInfo } = useQuery({
+    queryKey: ['tenant', 'current'],
+    queryFn:  tenantsApi.getCurrent,
+    staleTime: 5 * 60 * 1000,
+  })
+  const tenantModules = tenantInfo?.modules || tenant?.modules || {}
+  const moduleOn = (t) => !t.module || tenantModules[t.module] !== false
 
   // Si el rol del usuario tiene mobile_tabs configurado, respetamos esa lista
   // (orden incluido). Sino, filtramos el catálogo por permiso y dejamos los
@@ -70,11 +83,13 @@ export default function BottomNav() {
     visibleTabs = mobileTabs
       .map(key => MOBILE_TABS_BY_KEY[key])
       .filter(Boolean)
+      .filter(moduleOn)
       .map(withIcon)
       .slice(0, MAX_MOBILE_TABS)
   } else {
     visibleTabs = MOBILE_TABS
       .filter(t => !t.permission || isSuperAdmin || can(...t.permission.split(':')))
+      .filter(moduleOn)
       .slice(0, MAX_MOBILE_TABS)
       .map(withIcon)
   }
