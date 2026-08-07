@@ -295,7 +295,7 @@ async function setReplacementExpected({ tenantId, returnId, expected, userId, ip
  * precargar: devolvible restante (recibido − ya devuelto, topado al saldo del
  * lote si existe), costo de la recepción, almacén y lote sugerido.
  */
-async function listCandidateReceipts({ tenantId, partnerId, itemType, itemId, limit = 15 }) {
+async function listCandidateReceipts({ tenantId, partnerId, itemType, itemId, search, limit = 30 }) {
   if (!partnerId) throw badReq('El proveedor (partnerId) es requerido.')
   const params = [tenantId, partnerId]
 
@@ -304,9 +304,17 @@ async function listCandidateReceipts({ tenantId, partnerId, itemType, itemId, li
     params.push(itemType, itemId)
     itemFilter = `AND EXISTS (SELECT 1 FROM supplier_receipt_lines fl
                     WHERE fl.supplier_receipt_id = r.id
-                      AND fl.item_type = $3 AND fl.item_id = $4)`
+                      AND fl.item_type = $${params.length - 1} AND fl.item_id = $${params.length})`
   }
-  params.push(Math.min(parseInt(limit, 10) || 15, 50))
+
+  // Búsqueda por folio de recepción o documento del proveedor: rescata
+  // recepciones viejas que quedan fuera de la ventana de "últimas N".
+  let searchFilter = ''
+  if (search && String(search).trim()) {
+    params.push(`%${String(search).trim()}%`)
+    searchFilter = `AND (r.receipt_number ILIKE $${params.length} OR r.document_number ILIKE $${params.length})`
+  }
+  params.push(Math.min(parseInt(limit, 10) || 30, 50))
 
   const { rows } = await query(
     `SELECT r.id, r.receipt_number, r.received_date, r.document_number,
@@ -341,6 +349,7 @@ async function listCandidateReceipts({ tenantId, partnerId, itemType, itemId, li
        LEFT JOIN warehouses w ON w.id = r.warehouse_id
       WHERE r.tenant_id = $1 AND r.partner_id = $2 AND r.status = 'confirmed'
         ${itemFilter}
+        ${searchFilter}
       ORDER BY r.received_date DESC, r.receipt_number DESC
       LIMIT $${params.length}`,
     params

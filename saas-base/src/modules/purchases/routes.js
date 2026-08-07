@@ -123,6 +123,7 @@ router.get('/returns/candidates', checkPermission('purchases', 'return'), async 
       partnerId: req.query.partnerId,
       itemType: req.query.itemType || null,
       itemId: req.query.itemId || null,
+      search: req.query.search || null,
       limit: req.query.limit,
     }))
   } catch (err) { retErr(res, next)(err) }

@@ -149,6 +149,7 @@ function NewReturnModal({ onClose, onSaved }) {
   const [replacementExpected, setReplacementExpected] = useState(false)
   const [lines, setLines] = useState([])  // { lotId, label, material, warehouseId, itemId, itemType, unitCost, remaining, quantity, receiptLineId }
   const [item, setItem] = useState(null)  // filtro opcional { id, label, itemType }
+  const [receiptSearch, setReceiptSearch] = useState('')  // filtro opcional por folio
   const [sourceReceiptId, setSourceReceiptId] = useState(null)
   const [error, setError] = useState(null)
 
@@ -169,9 +170,10 @@ function NewReturnModal({ onClose, onSaved }) {
   // Últimas recepciones confirmadas del proveedor (acotadas al artículo si se
   // eligió): identifica de qué compra viene lo que se va a devolver.
   const { data: candidates = [], isFetching: searching } = useQuery({
-    queryKey: ['return-candidate-receipts', partnerId, item?.id],
+    queryKey: ['return-candidate-receipts', partnerId, item?.id, receiptSearch],
     queryFn: () => purchasesApi.listReturnCandidates({
       partnerId, itemType: item?.itemType || undefined, itemId: item?.id || undefined,
+      search: receiptSearch.trim() || undefined,
     }),
     enabled: !!partnerId && lines.length === 0,
   })
@@ -269,21 +271,32 @@ function NewReturnModal({ onClose, onSaved }) {
 
           {partnerId && lines.length === 0 && (
             <>
-              <div>
-                <label className="label">Artículo (opcional)</label>
-                <Autocomplete value={item} onChange={setItem} onSearch={searchItems}
-                  placeholder="Acota por material o producto devuelto..." />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Artículo (opcional)</label>
+                  <Autocomplete value={item} onChange={setItem} onSearch={searchItems}
+                    placeholder="Acota por material o producto devuelto..." />
+                </div>
+                <div>
+                  <label className="label">Folio de recepción (opcional)</label>
+                  <input type="text" className="input" value={receiptSearch}
+                    onChange={e => setReceiptSearch(e.target.value)}
+                    placeholder="REC-… o remisión del proveedor" />
+                </div>
               </div>
 
-              <div className="border border-line-subtle rounded-lg overflow-hidden">
+              {/* shrink-0: dentro del flex-col con overflow del modal, un bloque
+                  overflow-hidden se COMPRIME y corta filas sin scrollbar (gotcha
+                  conocido) — la recepción de abajo quedaba invisible. */}
+              <div className="border border-line-subtle rounded-lg overflow-hidden shrink-0">
                 <div className="px-3 py-2 bg-surface-elevated/40 text-xs font-medium text-ink-secondary border-b border-line-subtle">
-                  Últimas recepciones confirmadas{item ? ` con ${item.label}` : ''}
+                  {receiptSearch.trim() ? 'Recepciones que coinciden con el folio' : `Últimas recepciones confirmadas${item ? ` con ${item.label}` : ''}`}
                 </div>
                 {searching ? (
                   <div className="flex justify-center py-6"><Spinner size="sm" /></div>
                 ) : candidates.length === 0 ? (
                   <p className="px-3 py-4 text-sm text-ink-muted">
-                    Sin recepciones confirmadas{item ? ' con ese artículo' : ''} de este proveedor.
+                    Sin recepciones confirmadas{item ? ' con ese artículo' : ''}{receiptSearch.trim() ? ' con ese folio' : ''} de este proveedor.
                   </p>
                 ) : (
                   <ul className="divide-y divide-line-subtle max-h-64 overflow-y-auto">
