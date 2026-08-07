@@ -46,11 +46,13 @@ export const NAV_SECTIONS = [
   {
     label: 'Reportes',
     items: [
-      { label: 'Ventas',              to: '/reportes/ventas',             iconKey: 'chartBar',  permission: 'reports:sales',       module: 'reports' },
-      { label: 'Inventario',          to: '/reportes/inventario',         iconKey: 'boxes',     permission: 'reports:inventory',   module: 'reports' },
-      { label: 'Producción',          to: '/reportes/produccion',         iconKey: 'chartLine', permission: 'reports:production',  module: 'reports' },
-      { label: 'Cuentas por cobrar',  to: '/reportes/cuentas-por-cobrar', iconKey: 'card',      permission: 'reports:cxc',         module: 'reports' },
-      { label: 'Cuentas por pagar',   to: '/reportes/cuentas-por-pagar',  iconKey: 'money',     permission: 'reports:cxp',         module: 'reports' },
+      // Cada reporte exige el módulo de reportes Y el módulo del que se
+      // alimenta — un tenant sin ventas/producción no ve esos reportes.
+      { label: 'Ventas',              to: '/reportes/ventas',             iconKey: 'chartBar',  permission: 'reports:sales',       modules: ['reports', 'sales'] },
+      { label: 'Inventario',          to: '/reportes/inventario',         iconKey: 'boxes',     permission: 'reports:inventory',   modules: ['reports', 'inventory'] },
+      { label: 'Producción',          to: '/reportes/produccion',         iconKey: 'chartLine', permission: 'reports:production',  modules: ['reports', 'production'] },
+      { label: 'Cuentas por cobrar',  to: '/reportes/cuentas-por-cobrar', iconKey: 'card',      permission: 'reports:cxc',         modules: ['reports', 'sales'] },
+      { label: 'Cuentas por pagar',   to: '/reportes/cuentas-por-pagar',  iconKey: 'money',     permission: 'reports:cxp',         modules: ['reports', 'purchases'] },
       { label: 'Contable',            to: '/finanzas/reporte-contable',   iconKey: 'book',      permission: 'reports:accounting',  module: 'reports' },
     ],
   },

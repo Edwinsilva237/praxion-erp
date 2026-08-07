@@ -323,6 +323,9 @@ export default function Sidebar({ onClose }) {
       const visible = section.items.filter(it => {
         if (it.hideWhenSelfStart && selfStartOn) return false
         if (it.module && !moduleEnabled(it.module)) return false
+        // `modules: [a, b]` — TODOS deben estar prendidos (ej. un reporte exige
+        // el módulo de reportes Y el módulo del que se alimenta).
+        if (it.modules && !it.modules.every(moduleEnabled)) return false
         if (it.flag && !flagOn(it.flag)) return false
         if (!it.permission) return true
         if (isSuperAdmin) return true
