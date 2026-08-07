@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { purchasesApi } from '@/api/purchases'
+import { cxpApi } from '@/api/cxp'
 import { partnersApi } from '@/api/partners'
 import { productsApi } from '@/api/products'
 import { rawMaterialsApi } from '@/api/rawMaterials'
@@ -628,6 +629,12 @@ function FiscalResolutionForm({ ret, onResolved, onError }) {
   const [supplierInvoiceId, setSupplierInvoiceId] = useState(ret.supplier_invoice_id || '')
   const [cn, setCn] = useState({ invoiceNumber: '', uuidSat: '', folio: '', invoiceDate: '', subtotal: '', tax: '', total: '' })
   const [sub, setSub] = useState({ invoiceNumber: '', uuidSat: '', invoiceDate: '', subtotal: '', tax: '', total: '' })
+  // XML adjunto por vía (se manda al backend como respaldo del documento fiscal).
+  const [cnXml, setCnXml]   = useState(null)
+  const [subXml, setSubXml] = useState(null)
+  const [xmlMsg, setXmlMsg] = useState(null)   // { tone: 'ok'|'err', text }
+  const [parsing, setParsing] = useState(false)
+  const [acuseFile, setAcuseFile] = useState(null)  // cancelación: acuse opcional
 
   const { data: invoices = [] } = useQuery({
     queryKey: ['supplier-invoices', ret.partner_id],
@@ -636,6 +643,78 @@ function FiscalResolutionForm({ ret, onResolved, onError }) {
     enabled: !!ret.partner_id,
   })
 
+  // Carga un XML CFDI, lo parsea en el backend y precarga los campos de la vía
+  // activa. Valida tipo de comprobante y emisor; si el XML trae CfdiRelacionados
+  // que apuntan a una factura registrada, la selecciona automáticamente.
+  async function handleXmlFile(file, kind) {
+    if (!file) return
+    setXmlMsg(null); setParsing(true)
+    try {
+      const text = await file.text()
+      const fd = new FormData(); fd.append('file', file)
+      const parsed = await purchasesApi.parseDocument(fd)
+
+      const expected = kind === 'cn' ? 'E' : 'I'
+      if (parsed.tipoComprobante !== expected) {
+        setXmlMsg({ tone: 'err', text: kind === 'cn'
+          ? `Ese XML es TipoDeComprobante "${parsed.tipoComprobante || '?'}" — la nota de crédito debe ser un CFDI de egreso (E).`
+          : `Ese XML es TipoDeComprobante "${parsed.tipoComprobante || '?'}" — la factura sustituta debe ser un CFDI de ingreso (I).` })
+        return
+      }
+      if (parsed.matchedPartner && parsed.matchedPartner.id !== ret.partner_id) {
+        setXmlMsg({ tone: 'err', text: `El XML lo emite otro proveedor (${parsed.matchedPartner.name}).` })
+        return
+      }
+
+      const folioCompuesto = [parsed.serie, parsed.folio].filter(Boolean).join('-') || parsed.folio || ''
+      const fields = {
+        uuidSat: parsed.uuid || '', invoiceDate: parsed.invoiceDate || '',
+        subtotal: parsed.subtotal != null ? String(parsed.subtotal) : '',
+        tax:      parsed.tax != null ? String(parsed.tax) : '',
+        total:    parsed.total != null ? String(parsed.total) : '',
+      }
+      if (kind === 'cn') {
+        setCn(p => ({ ...p, ...fields, invoiceNumber: folioCompuesto, folio: parsed.folio || '' }))
+        setCnXml(text)
+      } else {
+        setSub(p => ({ ...p, ...fields, invoiceNumber: folioCompuesto }))
+        setSubXml(text)
+      }
+
+      // Auto-selección de la factura original vía CfdiRelacionados (01=NC, 04=sustitución).
+      const relatedUuids = (parsed.relatedCfdis || []).flatMap(g => g.uuids || [])
+      const match = relatedUuids.length
+        ? invoices.find(i => i.uuid_sat && relatedUuids.includes(String(i.uuid_sat).toUpperCase()))
+        : null
+      if (match) {
+        setSupplierInvoiceId(match.id)
+        setXmlMsg({ tone: 'ok', text: `XML cargado. Relacionado con la factura ${match.invoice_number} — seleccionada automáticamente.` })
+      } else if (relatedUuids.length) {
+        setXmlMsg({ tone: 'ok', text: 'XML cargado. El CFDI relacionado no coincide con ninguna factura registrada — verifica la factura seleccionada.' })
+      } else {
+        setXmlMsg({ tone: 'ok', text: 'XML cargado y campos precargados — revisa y ajusta si hace falta.' })
+      }
+    } catch (e) {
+      setXmlMsg({ tone: 'err', text: e.response?.data?.error || 'No se pudo leer el XML.' })
+    } finally {
+      setParsing(false)
+    }
+  }
+
+  const xmlPicker = (kind, loaded) => (
+    <div className="flex items-center gap-2 flex-wrap">
+      <label className="btn-secondary btn-sm cursor-pointer">
+        {parsing ? <Spinner className="w-3 h-3" /> : '📄'} {loaded ? 'Reemplazar XML' : (kind === 'cn' ? 'Cargar XML de la nota de crédito' : 'Cargar XML de la factura nueva')}
+        <input type="file" accept=".xml,text/xml" className="hidden"
+          onChange={e => { handleXmlFile(e.target.files?.[0], kind); e.target.value = '' }} />
+      </label>
+      {loaded && <Badge variant="green" label="XML adjunto" />}
+      {xmlMsg && (
+        <p className={`text-xs ${xmlMsg.tone === 'err' ? 'text-status-danger' : 'text-brand-300'} w-full`}>{xmlMsg.text}</p>
+      )}
+    </div>
+  )
+
   const selected = invoices.find(i => i.id === supplierInvoiceId)
   const cnTotal = parseFloat(cn.total) || 0
   const pending = selected ? parseFloat(selected.ap_amount_pending || 0) : 0
@@ -643,7 +722,7 @@ function FiscalResolutionForm({ ret, onResolved, onError }) {
   const toAdvance = Math.max(0, cnTotal - reduces)
 
   const mut = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const body = { resolution, supplierInvoiceId }
       if (resolution === 'credit_note') {
         body.creditNote = {
@@ -652,6 +731,7 @@ function FiscalResolutionForm({ ret, onResolved, onError }) {
           subtotal: cn.subtotal === '' ? null : parseFloat(cn.subtotal),
           tax: cn.tax === '' ? 0 : parseFloat(cn.tax),
           total: parseFloat(cn.total),
+          xmlContent: cnXml || null,
         }
       } else if (resolution === 'substitution') {
         body.substitute = {
@@ -659,9 +739,19 @@ function FiscalResolutionForm({ ret, onResolved, onError }) {
           subtotal: sub.subtotal === '' ? null : parseFloat(sub.subtotal),
           tax: sub.tax === '' ? 0 : parseFloat(sub.tax),
           total: parseFloat(sub.total),
+          xmlContent: subXml || null,
         }
       }
-      return purchasesApi.resolveReturn(ret.id, body)
+      const result = await purchasesApi.resolveReturn(ret.id, body)
+      // Cancelación: adjuntar el acuse del SAT (opcional) a la factura anulada,
+      // best-effort — la resolución ya quedó registrada.
+      if (resolution === 'cancellation' && acuseFile) {
+        try {
+          await cxpApi.uploadAttachment(supplierInvoiceId, acuseFile,
+            `Acuse de cancelación SAT (devolución ${ret.return_number})`)
+        } catch { /* el acuse se puede adjuntar después desde la factura */ }
+      }
+      return result
     },
     onSuccess: onResolved,
     onError: (e) => onError?.(e.response?.data?.error || 'No se pudo registrar la resolución.'),
@@ -683,7 +773,7 @@ function FiscalResolutionForm({ ret, onResolved, onError }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <label className="label">Vía</label>
-          <select className="select" value={resolution} onChange={e => setResolution(e.target.value)}>
+          <select className="select" value={resolution} onChange={e => { setResolution(e.target.value); setXmlMsg(null) }}>
             <option value="credit_note">Nota de crédito (CFDI de egreso)</option>
             <option value="cancellation">Cancelación del CFDI</option>
             <option value="substitution">Sustitución del CFDI</option>
@@ -704,6 +794,7 @@ function FiscalResolutionForm({ ret, onResolved, onError }) {
 
       {resolution === 'credit_note' && (
         <div className="flex flex-col gap-2">
+          {xmlPicker('cn', !!cnXml)}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             <div><label className="label">Folio NC</label><input className="input" placeholder="NC-123" value={cn.invoiceNumber} onChange={e => setCn(p => ({ ...p, invoiceNumber: e.target.value }))} /></div>
             <div><label className="label">Fecha</label><input type="date" className="input" value={cn.invoiceDate} onChange={e => setCn(p => ({ ...p, invoiceDate: e.target.value }))} /></div>
@@ -724,15 +815,27 @@ function FiscalResolutionForm({ ret, onResolved, onError }) {
       )}
 
       {resolution === 'cancellation' && (
-        <p className="text-xs text-ink-muted">
-          Anula la factura seleccionada y su cuenta por pagar. Si ya la habías pagado, lo pagado queda como
-          saldo a favor del proveedor.
-        </p>
+        <div className="flex flex-col gap-2">
+          <p className="text-xs text-ink-muted">
+            Anula la factura seleccionada y su cuenta por pagar. Si ya la habías pagado, lo pagado queda como
+            saldo a favor del proveedor. La cancelación no genera un CFDI nuevo — si tienes el
+            <b> acuse de cancelación del SAT</b>, adjúntalo como evidencia (queda en la factura anulada).
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="btn-secondary btn-sm cursor-pointer">
+              📎 {acuseFile ? 'Cambiar acuse' : 'Adjuntar acuse del SAT (opcional)'}
+              <input type="file" accept=".xml,.pdf" className="hidden"
+                onChange={e => { setAcuseFile(e.target.files?.[0] || null); e.target.value = '' }} />
+            </label>
+            {acuseFile && <span className="text-xs text-ink-secondary truncate">{acuseFile.name}</span>}
+          </div>
+        </div>
       )}
 
       {resolution === 'substitution' && (
         <div className="flex flex-col gap-2">
           <p className="text-xs text-ink-muted">Cancela la factura seleccionada y registra la nueva que la sustituye.</p>
+          {xmlPicker('sub', !!subXml)}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             <div><label className="label">Folio nueva *</label><input className="input" placeholder="F-124" value={sub.invoiceNumber} onChange={e => setSub(p => ({ ...p, invoiceNumber: e.target.value }))} /></div>
             <div><label className="label">Fecha</label><input type="date" className="input" value={sub.invoiceDate} onChange={e => setSub(p => ({ ...p, invoiceDate: e.target.value }))} /></div>

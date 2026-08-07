@@ -258,4 +258,87 @@ describe('Devoluciones a proveedor — Fase 2 (resolución fiscal)', () => {
     })
     expect(r.status).toBe(400)
   })
+
+  // ── XML adjunto (precarga + respaldo del documento fiscal) ────────────────
+  const cfdiXml = ({ tipo, uuid, rfc = 'XAXX010101000', subtotal, total, relacionUuid, tipoRelacion = '01' }) =>
+    `<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0" Serie="NC" Folio="77" Fecha="2026-06-05T10:00:00" SubTotal="${subtotal}" Total="${total}" Moneda="MXN" TipoDeComprobante="${tipo}" MetodoPago="PUE">
+  ${relacionUuid ? `<cfdi:CfdiRelacionados TipoRelacion="${tipoRelacion}"><cfdi:CfdiRelacionado UUID="${relacionUuid}"/></cfdi:CfdiRelacionados>` : ''}
+  <cfdi:Emisor Rfc="${rfc}" Nombre="PROV F" RegimenFiscal="601"/>
+  <cfdi:Receptor Rfc="AAA010101AAA" Nombre="X" DomicilioFiscalReceptor="01000" RegimenFiscalReceptor="601" UsoCFDI="G03"/>
+  <cfdi:Complemento><tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" UUID="${uuid}"/></cfdi:Complemento>
+</cfdi:Comprobante>`
+
+  test('parser: extrae CfdiRelacionados (TipoRelacion + UUIDs)', async () => {
+    const documentParserService = require('../../src/modules/purchases/documentParserService')
+    const rel = randomUUID().toUpperCase()
+    const parsed = await documentParserService.parseSupplierDocument(
+      Buffer.from(cfdiXml({ tipo: 'E', uuid: randomUUID(), subtotal: 500, total: 580, relacionUuid: rel })),
+      'text/xml', 'nc.xml')
+    expect(parsed.tipoComprobante).toBe('E')
+    expect(parsed.relatedCfdis).toEqual([{ tipoRelacion: '01', uuids: [rel] }])
+  })
+
+  test('NC con XML tipo E: resuelve, toma el UUID del XML y guarda xml_content', async () => {
+    const ctx = await setupTenant('cn-xml')
+    const inv = await mkInvoice(ctx, { number: 'F-1', total: 1160, tax: 160, subtotal: 1000 })
+    const retId = await mkConfirmedReturn(ctx)
+    const ncUuid = randomUUID().toUpperCase()
+    const xml = cfdiXml({ tipo: 'E', uuid: ncUuid, subtotal: 500, total: 580 })
+
+    const res = await ctx.client.post(`/api/purchases/returns/${retId}/resolve`, {
+      resolution: 'credit_note', supplierInvoiceId: inv.id,
+      creditNote: { invoiceNumber: 'NC-77', total: 580, tax: 80, subtotal: 500, invoiceDate: '2026-06-05', xmlContent: xml },
+    }).expect(200)
+    expect(res.body.credit_status).toBe('resolved')
+
+    const { rows } = await withBypass(() => query(
+      `SELECT uuid_sat, xml_content FROM supplier_invoices
+        WHERE tenant_id = $1 AND type = 'credit_note' AND invoice_number = 'NC-77'`, [ctx.tenantId]))
+    expect(rows[0].uuid_sat.toUpperCase()).toBe(ncUuid)   // UUID tomado del XML
+    expect(rows[0].xml_content).toContain('TipoDeComprobante="E"')
+  })
+
+  test('NC con XML tipo I → 400 (debe ser CFDI de egreso)', async () => {
+    const ctx = await setupTenant('cn-xml-tipoi')
+    const inv = await mkInvoice(ctx, { number: 'F-1', total: 1160, tax: 160, subtotal: 1000 })
+    const retId = await mkConfirmedReturn(ctx)
+    const r = await ctx.client.post(`/api/purchases/returns/${retId}/resolve`, {
+      resolution: 'credit_note', supplierInvoiceId: inv.id,
+      creditNote: { total: 580, xmlContent: cfdiXml({ tipo: 'I', uuid: randomUUID(), subtotal: 500, total: 580 }) },
+    })
+    expect(r.status).toBe(400)
+    expect(r.body.error).toMatch(/egreso/i)
+  })
+
+  test('NC con XML de OTRO RFC emisor → 400', async () => {
+    const ctx = await setupTenant('cn-xml-rfc')
+    const inv = await mkInvoice(ctx, { number: 'F-1', total: 1160, tax: 160, subtotal: 1000 })
+    const retId = await mkConfirmedReturn(ctx)
+    const r = await ctx.client.post(`/api/purchases/returns/${retId}/resolve`, {
+      resolution: 'credit_note', supplierInvoiceId: inv.id,
+      creditNote: { total: 580, xmlContent: cfdiXml({ tipo: 'E', uuid: randomUUID(), rfc: 'ZZZ010101ZZ9', subtotal: 500, total: 580 }) },
+    })
+    expect(r.status).toBe(400)
+    expect(r.body.error).toMatch(/RFC/i)
+  })
+
+  test('Sustitución con XML tipo I: guarda xml_content en la factura nueva', async () => {
+    const ctx = await setupTenant('sust-xml')
+    const inv = await mkInvoice(ctx, { number: 'F-1', total: 1160, tax: 160, subtotal: 1000 })
+    const retId = await mkConfirmedReturn(ctx)
+    const newUuid = randomUUID().toUpperCase()
+
+    await ctx.client.post(`/api/purchases/returns/${retId}/resolve`, {
+      resolution: 'substitution', supplierInvoiceId: inv.id,
+      substitute: { invoiceNumber: 'F-1-SUST', total: 580, tax: 80, subtotal: 500, invoiceDate: '2026-06-06',
+                    xmlContent: cfdiXml({ tipo: 'I', uuid: newUuid, subtotal: 500, total: 580, relacionUuid: inv.uuid_sat, tipoRelacion: '04' }) },
+    }).expect(200)
+
+    const { rows } = await withBypass(() => query(
+      `SELECT uuid_sat, xml_content FROM supplier_invoices
+        WHERE tenant_id = $1 AND invoice_number = 'F-1-SUST'`, [ctx.tenantId]))
+    expect(rows[0].uuid_sat.toUpperCase()).toBe(newUuid)
+    expect(rows[0].xml_content).toContain('TipoRelacion="04"')
+  })
 })

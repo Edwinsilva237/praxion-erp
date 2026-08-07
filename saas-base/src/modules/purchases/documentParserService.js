@@ -109,6 +109,11 @@ function parseXMLCFDI(buffer) {
   // Conceptos (líneas)
   const lines = extractXMLConceptos(xml)
 
+  // CFDIs relacionados: en un Egreso (NC) la relación 01/03 apunta a la factura
+  // que bonifica; en una sustitución (Ingreso) la relación 04 apunta al CFDI
+  // cancelado. CFDI 4.0 permite VARIOS nodos CfdiRelacionados.
+  const relatedCfdis = extractXMLCfdiRelacionados(xml)
+
   const result = {
     documentType: 'xml_cfdi',
     uuid,
@@ -136,6 +141,7 @@ function parseXMLCFDI(buffer) {
       useCfdi: usoCfdi || null,
     },
     lines,
+    relatedCfdis,
     method: 'xml',
   }
 
@@ -237,6 +243,29 @@ function extractXMLConceptos(xml) {
   }
 
   return lines
+}
+
+/**
+ * Extrae los nodos CfdiRelacionados del comprobante:
+ *   <cfdi:CfdiRelacionados TipoRelacion="01">
+ *     <cfdi:CfdiRelacionado UUID="..."/>
+ *   </cfdi:CfdiRelacionados>
+ * Devuelve [{ tipoRelacion, uuids: [...] }]. Tipos comunes: 01 = NC de
+ * documentos relacionados, 03 = devolución de mercancía, 04 = sustitución.
+ */
+function extractXMLCfdiRelacionados(xml) {
+  const groups = []
+  const groupRegex = /<(?:cfdi:)?CfdiRelacionados\b([^>]*)>([\s\S]*?)<\/(?:cfdi:)?CfdiRelacionados>/gi
+  let g
+  while ((g = groupRegex.exec(xml)) !== null) {
+    const tipoRelacion = extractAttrFromString(g[1], 'TipoRelacion')
+    const uuids = []
+    const uuidRegex = /<(?:cfdi:)?CfdiRelacionado\b[^>]*UUID="([^"]+)"/gi
+    let u
+    while ((u = uuidRegex.exec(g[2])) !== null) uuids.push(u[1].trim().toUpperCase())
+    if (uuids.length) groups.push({ tipoRelacion: tipoRelacion || null, uuids })
+  }
+  return groups
 }
 
 function extractXMLAttr(xml, regex) {

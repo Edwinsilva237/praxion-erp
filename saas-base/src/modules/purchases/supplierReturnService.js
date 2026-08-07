@@ -623,11 +623,38 @@ async function cancelReturn({ tenantId, returnId, userId, ipAddress, userAgent }
 //                  pagado → saldo a favor (aplicable a la nueva).
 const RESOLUTIONS = ['credit_note', 'cancellation', 'substitution']
 
+/**
+ * Valida el XML CFDI adjunto de una resolución (NC o sustituta) y devuelve el
+ * parseado. Candados: tipo de comprobante correcto (E/I), RFC emisor = RFC del
+ * proveedor (si el socio tiene RFC capturado) y UUID consistente con el tecleado.
+ */
+async function parseAndValidateResolutionXml({ xmlContent, expectedTipo, tipoLabel, partnerRfc, sentUuid }) {
+  const documentParserService = require('./documentParserService')
+  let parsed
+  try {
+    parsed = await documentParserService.parseSupplierDocument(
+      Buffer.from(String(xmlContent), 'utf8'), 'text/xml', 'cfdi.xml')
+  } catch {
+    throw badReq('No se pudo leer el XML adjunto — ¿es un CFDI válido?')
+  }
+  if (parsed?.tipoComprobante !== expectedTipo) {
+    throw badReq(`El XML adjunto no es un CFDI ${tipoLabel} (TipoDeComprobante="${parsed?.tipoComprobante || '?'}").`)
+  }
+  const norm = (r) => String(r || '').toUpperCase().replace(/\s+/g, '')
+  if (norm(partnerRfc) && norm(parsed?.emisor?.rfc) && norm(partnerRfc) !== norm(parsed.emisor.rfc)) {
+    throw badReq(`El RFC emisor del XML (${parsed.emisor.rfc}) no coincide con el del proveedor (${partnerRfc}).`)
+  }
+  if (sentUuid && parsed?.uuid && norm(sentUuid) !== norm(parsed.uuid)) {
+    throw badReq('El UUID capturado no coincide con el del XML adjunto.')
+  }
+  return parsed
+}
+
 async function resolveFiscal({
   tenantId, returnId, resolution,
   supplierInvoiceId,   // factura original objetivo (default: la ligada en el return)
-  creditNote,          // { invoiceNumber, uuidSat, serie, folio, rfcEmisor, invoiceDate, subtotal, tax, total }
-  substitute,          // datos de la nueva factura (igual que registerInvoice)
+  creditNote,          // { invoiceNumber, uuidSat, serie, folio, rfcEmisor, invoiceDate, subtotal, tax, total, xmlContent }
+  substitute,          // datos de la nueva factura (igual que registerInvoice) + xmlContent
   notes,
   userId, ipAddress, userAgent,
 }) {
@@ -677,9 +704,23 @@ async function resolveFiscal({
     let substituteInvoiceId = null
     let advance = null
 
+    // RFC del proveedor (para validar el XML adjunto, si viene).
+    const { rows: bpRows } = await client.query(
+      `SELECT rfc FROM business_partners WHERE id = $1 AND tenant_id = $2`,
+      [ret.partner_id, tenantId]
+    )
+    const partnerRfc = bpRows[0]?.rfc || null
+
     if (resolution === 'credit_note') {
       if (!creditNote || !(parseFloat(creditNote.total) > 0)) {
         throw badReq('Captura los datos de la nota de crédito (total mayor a cero).')
+      }
+      if (creditNote.xmlContent) {
+        const parsed = await parseAndValidateResolutionXml({
+          xmlContent: creditNote.xmlContent, expectedTipo: 'E',
+          tipoLabel: 'de egreso (nota de crédito)', partnerRfc, sentUuid: creditNote.uuidSat,
+        })
+        if (!creditNote.uuidSat && parsed.uuid) creditNote.uuidSat = parsed.uuid
       }
       const cn = await registerSupplierCreditNote(client, {
         tenantId, partnerId: ret.partner_id, creditNote, userId, returnNumber: ret.return_number,
@@ -727,6 +768,13 @@ async function resolveFiscal({
       if (!substitute || !(parseFloat(substitute.total) > 0)) {
         throw badReq('Captura los datos de la factura sustituta (total mayor a cero).')
       }
+      if (substitute.xmlContent) {
+        const parsed = await parseAndValidateResolutionXml({
+          xmlContent: substitute.xmlContent, expectedTipo: 'I',
+          tipoLabel: 'de ingreso (factura)', partnerRfc, sentUuid: substitute.uuidSat,
+        })
+        if (!substitute.uuidSat && parsed.uuid) substitute.uuidSat = parsed.uuid
+      }
       cancelledInvoiceId = original.id
       if (ap) {
         await voidInvoiceAndAp(client, { tenantId, invoice: original, ap })
@@ -744,6 +792,7 @@ async function resolveFiscal({
         rfcEmisor: substitute.rfcEmisor, invoiceDate: substitute.invoiceDate,
         currency: substitute.currency || original.currency || 'MXN',
         subtotal: substitute.subtotal, tax: substitute.tax, total: substitute.total,
+        xmlContent: substitute.xmlContent || null,
         notes: `Sustituye a ${original.invoice_number} (devolución ${ret.return_number})`,
         userId, ipAddress, userAgent, client,
       })
@@ -816,16 +865,17 @@ async function registerSupplierCreditNote(client, { tenantId, partnerId, creditN
        (tenant_id, invoice_number, type, status, partner_id,
         uuid_sat, xml_uuid, rfc_emisor, serie, folio,
         currency, subtotal, tax, total, total_mxn, balance,
-        invoice_date, received_date, created_by, notes)
+        invoice_date, received_date, xml_content, created_by, notes)
      VALUES ($1,$2,'credit_note','pending',$3,
              $4::uuid,$4::varchar,$5,$6,$7,
              'MXN',$8,$9,$10,$10,0,
-             $11::date,$11::date,$12,$13)
+             $11::date,$11::date,$12,$13,$14)
      RETURNING *`,
     [tenantId, number, partnerId,
      creditNote.uuidSat || null, creditNote.rfcEmisor || null, creditNote.serie || null, creditNote.folio || null,
      subtotal, tax, total,
-     issueDate, userId, `Nota de crédito recibida (devolución ${returnNumber})`]
+     issueDate, creditNote.xmlContent || null, userId,
+     `Nota de crédito recibida (devolución ${returnNumber})`]
   )
   return rows[0]
 }
