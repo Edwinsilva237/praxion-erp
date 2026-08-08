@@ -60,15 +60,37 @@ async function qIssuedInvoices(tenantId, from, to) {
   return rows
 }
 
+/**
+ * NC emitidas. Viven en `invoices` con cfdi_type='E' (modelo actual); la tabla
+ * `credit_notes` es legacy y se suma para tenants viejos, descartando por UUID
+ * las que ya vinieron del modelo actual. `entity` dice de dónde bajar el XML
+ * adjunto cuando el PAC no lo tiene.
+ */
 async function qCreditNotes(tenantId, from, to) {
   const { rows } = await query(`
-    SELECT cn.id, cn.document_number, cn.cfdi_uuid, cn.status, cn.notes,
-           cn.issue_date
+    SELECT i.id, i.document_number, i.cfdi_uuid, i.status::text AS status, i.notes,
+           COALESCE(i.stamp_date::date, i.issue_date) AS issue_date,
+           'invoice'::text AS entity
+      FROM invoices i
+     WHERE i.tenant_id = $1 AND i.type = 'issued' AND i.cfdi_type = 'E'
+       AND i.status IN ('stamped', 'cancelled')
+       AND COALESCE(i.stamp_date, i.issue_date::timestamptz) >= $2
+       AND COALESCE(i.stamp_date, i.issue_date::timestamptz) <  $3
+
+    UNION ALL
+
+    SELECT cn.id, cn.document_number, cn.cfdi_uuid, cn.status::text, cn.notes,
+           cn.issue_date, 'credit_note'::text
       FROM credit_notes cn
      WHERE cn.tenant_id = $1
        AND cn.status IN ('stamped', 'cancelled')
        AND cn.issue_date >= $2 AND cn.issue_date < $3
-     ORDER BY cn.issue_date`, [tenantId, from, to])
+       AND NOT EXISTS (
+         SELECT 1 FROM invoices i2
+          WHERE i2.tenant_id = cn.tenant_id AND i2.cfdi_type = 'E'
+            AND i2.cfdi_uuid IS NOT NULL AND i2.cfdi_uuid = cn.cfdi_uuid)
+
+     ORDER BY 6`, [tenantId, from, to])
   return rows
 }
 
@@ -188,7 +210,7 @@ async function generateAccountingPackage({ tenantId, from, to, tenantName }) {
         const viaFacturapi = await facturapiXml(facturapi, facturapiIdFromNotes(d.notes))
           .catch(() => null)
         if (viaFacturapi) return viaFacturapi
-        return attachmentXmlBuffer(tenantId, 'credit_note', d.id)
+        return attachmentXmlBuffer(tenantId, d.entity, d.id)
       },
     })
   }

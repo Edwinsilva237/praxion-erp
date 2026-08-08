@@ -81,25 +81,50 @@ async function fetchSales(tenantId, from, to, fiscalOnly = true) {
 }
 
 async function fetchCreditNotes(tenantId, from, to, fiscalOnly = true) {
+  // Las NC emitidas viven en `invoices` con cfdi_type='E' (creditNoteService las
+  // timbra ahí y mig 237 les dio `related_invoice_id`). La tabla `credit_notes`
+  // es el modelo LEGACY: se sigue leyendo para no perder las de tenants viejos,
+  // descartando por UUID las que ya vengan del modelo actual.
   // Modo fiscal: solo NC con valor SAT (timbradas o canceladas ante el SAT).
-  // Se excluyen borradores locales (status='draft').
-  const fiscalFilter = fiscalOnly ? `AND cn.status IN ('stamped', 'cancelled')` : ''
+  const fiscalFilter    = fiscalOnly ? `AND i.status IN ('stamped', 'cancelled')` : ''
+  const fiscalFilterLeg = fiscalOnly ? `AND cn.status IN ('stamped', 'cancelled')` : ''
 
   const { rows } = await query(`
-    SELECT cn.document_number, cn.cfdi_uuid, cn.issue_date,
+    SELECT i.document_number, i.cfdi_uuid,
+           COALESCE(i.stamp_date::date, i.issue_date) AS issue_date,
            bp.tax_name AS partner_legal_name, bp.name AS partner_commercial,
            bp.rfc AS partner_rfc,
+           i.subtotal AS amount, i.tax_transferred AS tax_amount, i.total_mxn AS total,
+           NULL::text AS reason, i.status::text AS status, i.notes,
+           orig.document_number AS original_invoice_number,
+           orig.cfdi_uuid       AS original_invoice_uuid
+      FROM invoices i
+      JOIN business_partners bp ON bp.id = i.partner_id
+      LEFT JOIN invoices orig ON orig.id = i.related_invoice_id
+     WHERE i.tenant_id = $1 AND i.type = 'issued' AND i.cfdi_type = 'E'
+       ${fiscalFilter}
+       AND COALESCE(i.stamp_date, i.issue_date::timestamptz) >= $2
+       AND COALESCE(i.stamp_date, i.issue_date::timestamptz) <  $3
+
+    UNION ALL
+
+    SELECT cn.document_number, cn.cfdi_uuid, cn.issue_date,
+           bp.tax_name, bp.name, bp.rfc,
            cn.amount, cn.tax_amount, cn.total,
-           cn.reason, cn.status, cn.notes,
-           inv.document_number AS original_invoice_number,
-           inv.cfdi_uuid       AS original_invoice_uuid
+           cn.reason::text, cn.status::text, cn.notes,
+           inv.document_number, inv.cfdi_uuid
       FROM credit_notes cn
       JOIN business_partners bp ON bp.id = cn.partner_id
       LEFT JOIN invoices inv ON inv.id = cn.original_doc_id AND cn.original_doc_type = 'invoice'
      WHERE cn.tenant_id = $1
-       ${fiscalFilter}
+       ${fiscalFilterLeg}
        AND cn.issue_date >= $2 AND cn.issue_date < $3
-     ORDER BY cn.issue_date ASC
+       AND NOT EXISTS (
+         SELECT 1 FROM invoices i2
+          WHERE i2.tenant_id = cn.tenant_id AND i2.cfdi_type = 'E'
+            AND i2.cfdi_uuid IS NOT NULL AND i2.cfdi_uuid = cn.cfdi_uuid)
+
+     ORDER BY 3 ASC
   `, [tenantId, from, to])
   return rows
 }
