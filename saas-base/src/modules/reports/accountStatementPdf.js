@@ -368,6 +368,22 @@ function drawPartnerDocuments(doc, data, t, labels) {
     fitFontSize(doc, fmtMXN(d.amount_pending), cols.pending.w, 9)
     doc.text(fmtMXN(d.amount_pending), cols.pending.x, ry + 2, { width: cols.pending.w, align: 'right' })
     doc.y = ry + 22
+
+    // Renglón explicativo del crédito ya aplicado. Sin esto el cliente ve un
+    // pendiente menor que total − pagado y no sabe de dónde salió la rebaja.
+    if ((d.amount_credited || 0) > 0.005) {
+      const cy = doc.y
+      const detalle = d.credits && d.credits.length
+        ? d.credits.map(c => `${c.document_number}${c.issue_date ? ` del ${fmtDate(c.issue_date)}` : ''}`).join(', ')
+        : 'crédito aplicado'
+      doc.fillColor('#1D4ED8').font('Helvetica-Oblique').fontSize(8)
+         .text(`(-) Nota de crédito ${detalle}`, cols.doc.x + 8, cy,
+               { width: cols.total.x - cols.doc.x - 16, ellipsis: true })
+      doc.font('Helvetica-Bold').fontSize(8)
+         .text(`- ${fmtMXN(d.amount_credited)}`, cols.paid.x, cy,
+               { width: cols.paid.w, align: 'right' })
+      doc.y = cy + 13
+    }
   }
 
   // Total
@@ -384,6 +400,22 @@ function drawPartnerDocuments(doc, data, t, labels) {
   fitFontSize(doc, totPending, cols.pending.w, 10)
   doc.text(totPending, cols.pending.x, ry + 4, { width: cols.pending.w, align: 'right' })
   doc.y = ry + 24
+
+  // Con notas de crédito de por medio, total − pagado ≠ pendiente. Se explica
+  // el renglón que falta para que la columna cuadre a la vista.
+  const totCredited = data.summary?.credits_applied?.amount || 0
+  if (totCredited > 0.005) {
+    const cy = doc.y
+    doc.fillColor('#1D4ED8').font('Helvetica').fontSize(8)
+       .text('(-) Notas de crédito aplicadas a los documentos de arriba',
+             cols.doc.x, cy, { width: cols.total.x - cols.doc.x - 8 })
+    doc.font('Helvetica-Bold')
+       .text(`- ${fmtMXN(totCredited)}`, cols.paid.x, cy, { width: cols.paid.w, align: 'right' })
+    doc.fillColor('#606060').font('Helvetica-Oblique')
+       .text('Total menos pagado menos notas de crédito = pendiente', cols.doc.x, cy + 11,
+             { width: 400 })
+    doc.y = cy + 26
+  }
 }
 
 function drawPartnerAdvances(doc, data, t) {

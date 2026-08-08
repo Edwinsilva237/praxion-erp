@@ -113,6 +113,12 @@ function addDocsSheet(wb, data, labels) {
     { header: 'Días vencido',    key: 'days_overdue',     width: 13 },
     { header: 'Total',           key: 'amount_total',     width: 14, style: { numFmt: '"$"#,##0.00' } },
     { header: 'Pagado',          key: 'amount_paid',      width: 14, style: { numFmt: '"$"#,##0.00' } },
+    // El crédito ya está descontado del pendiente: la columna existe para que
+    // total - pagado - NC = pendiente cuadre a la vista del contador.
+    ...(showPO ? [
+      { header: 'NC aplicadas',  key: 'amount_credited',  width: 14, style: { numFmt: '"$"#,##0.00' } },
+      { header: 'Folios NC',     key: 'credit_folios',    width: 26 },
+    ] : []),
     { header: 'Pendiente',       key: 'amount_pending',   width: 14, style: { numFmt: '"$"#,##0.00' } },
   ]
   styleHeader(ws)
@@ -128,6 +134,7 @@ function addDocsSheet(wb, data, labels) {
     const r = ws.addRow({
       ...d,
       aging_status: STATUS_LABEL[d.aging_status] || d.aging_status,
+      credit_folios: (d.credits || []).map(c => c.document_number).join(', '),
     })
     const fill = FILL[d.aging_status]
     if (fill) {
@@ -141,6 +148,7 @@ function addDocsSheet(wb, data, labels) {
       aging_status: 'TOTAL',
       amount_total:   data.documents.reduce((s, d) => s + d.amount_total, 0),
       amount_paid:    data.documents.reduce((s, d) => s + d.amount_paid, 0),
+      amount_credited: data.documents.reduce((s, d) => s + (d.amount_credited || 0), 0),
       amount_pending: data.documents.reduce((s, d) => s + d.amount_pending, 0),
     })
     r.font = { bold: true }

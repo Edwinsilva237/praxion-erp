@@ -9,7 +9,7 @@
 // no actividad histórica.
 
 const { query } = require('../../db')
-const { LOCAL_TODAY } = require('../../utils/sqlTime')
+const { LOCAL_TODAY, localTodayISO } = require('../../utils/sqlTime')
 
 const DUE_SOON_DAYS = 7
 
@@ -35,6 +35,8 @@ function getConfig(direction) {
       // Status de la factura origen: habilita descargar PDF/XML del CFDI
       // (timbradas e importadas quedan en 'stamped').
       invoiceStatusSelect: `inv.status`,
+      // Notas de crédito ya aplicadas al saldo (solo CXC tiene la columna).
+      creditedSelect:      `d.amount_credited`,
     }
   }
   if (direction === 'out') {
@@ -49,6 +51,7 @@ function getConfig(direction) {
       poSelect:         `NULL::varchar`,
       poJoins:          ``,
       invoiceStatusSelect: `NULL::varchar`,
+      creditedSelect:      `0::numeric`,
     }
   }
   const err = new Error(`direction debe ser 'in' u 'out' (recibió '${direction}')`)
@@ -89,7 +92,7 @@ async function getAccountStatement({ tenantId, direction, filters = {} }) {
 
   return {
     direction,
-    snapshot_date: new Date().toISOString().slice(0, 10),
+    snapshot_date: localTodayISO(),
     due_soon_days: DUE_SOON_DAYS,
     summary,
     by_partner: byPartner,
@@ -133,7 +136,7 @@ async function getPartnerStatement({ tenantId, direction, partnerId }) {
 
   return {
     direction,
-    snapshot_date: new Date().toISOString().slice(0, 10),
+    snapshot_date: localTodayISO(),
     due_soon_days: DUE_SOON_DAYS,
     partner:   partnerRows.rows[0],
     contacts:  contacts.rows,
@@ -172,6 +175,7 @@ async function getOpenDocuments(tenantId, cfg, filters) {
            d.partner_id, bp.name AS partner_name, bp.rfc AS partner_rfc,
            d.issue_date, d.due_date,
            d.amount_total, d.amount_paid, d.amount_pending,
+           ${cfg.creditedSelect} AS amount_credited,
            d.status AS doc_status,
            ${cfg.poSelect} AS po_number,
            ${cfg.invoiceStatusSelect} AS invoice_status,
@@ -208,7 +212,10 @@ async function getOpenDocuments(tenantId, cfg, filters) {
     due_date:        r.due_date,
     amount_total:    parseFloat(r.amount_total)   || 0,
     amount_paid:     parseFloat(r.amount_paid)    || 0,
+    amount_credited: parseFloat(r.amount_credited) || 0,
     amount_pending:  parseFloat(r.amount_pending) || 0,
+    // Folios de las NC que produjeron ese amount_credited (se llena aparte).
+    credits:         [],
     doc_status:      r.doc_status,
     po_number:       r.po_number || null,
     aging_status:    r.aging_status,
@@ -220,7 +227,51 @@ async function getOpenDocuments(tenantId, cfg, filters) {
     documents = documents.filter(d => d.aging_status === filters.statusFilter)
   }
 
+  await attachAppliedCreditNotes(tenantId, documents)
+
   return documents
+}
+
+/**
+ * Cuelga de cada factura las NC que YA le bajaron el saldo, para poder decir
+ * en el estado de cuenta POR QUÉ una factura de $11,600 aparece en $9,280.
+ *
+ * Ojo: esto es informativo, no cambia ningún importe — el descuento ya vive en
+ * `amount_credited`. Ver el comentario de getApplicableCreditNotes.
+ *
+ * Una devolución sin factura también acredita el AR de la remisión y ahí no hay
+ * NC que mostrar: en ese caso el documento queda con amount_credited > 0 y
+ * `credits` vacío, y el reporte lo rotula como "crédito aplicado".
+ */
+async function attachAppliedCreditNotes(tenantId, documents) {
+  const invoiceIds = documents
+    .filter(d => d.document_type === 'invoice' && d.amount_credited > 0.005 && d.document_id)
+    .map(d => d.document_id)
+  if (!invoiceIds.length) return
+
+  const { rows } = await query(`
+    SELECT nc.related_invoice_id, nc.document_number, nc.cfdi_uuid, nc.total_mxn,
+           COALESCE(nc.stamp_date::date, nc.issue_date) AS issue_date
+      FROM invoices nc
+     WHERE nc.tenant_id = $1 AND nc.type = 'issued' AND nc.cfdi_type = 'E'
+       AND nc.status = 'stamped'
+       AND nc.related_invoice_id = ANY($2::uuid[])
+     ORDER BY 5
+  `, [tenantId, invoiceIds])
+
+  const byInvoice = new Map()
+  for (const r of rows) {
+    if (!byInvoice.has(r.related_invoice_id)) byInvoice.set(r.related_invoice_id, [])
+    byInvoice.get(r.related_invoice_id).push({
+      document_number: r.document_number,
+      cfdi_uuid:       r.cfdi_uuid,
+      total:           parseFloat(r.total_mxn) || 0,
+      issue_date:      r.issue_date,
+    })
+  }
+  for (const d of documents) {
+    d.credits = byInvoice.get(d.document_id) || []
+  }
 }
 
 async function getByPartner(tenantId, cfg, filters) {
@@ -318,6 +369,14 @@ async function getApplicableCreditNotes(tenantId, partnerId) {
   // NCs timbradas que aún tienen saldo aplicable. El modelo no tiene
   // amount_applied/available — para simplificar las traemos todas las que
   // estén con status='stamped' y se muestran como "saldo a favor".
+  //
+  // ⚠️ LEE A PROPÓSITO LA TABLA LEGACY `credit_notes`, NO las NC del modelo
+  // actual (invoices con cfdi_type='E'). No es un descuido: una NC actual YA
+  // bajó el saldo cobrable de su factura vía accounts_receivable.amount_credited
+  // (amount_pending = total − pagado − acreditado, mig 081). Si además se
+  // listara aquí, el crédito se descontaría DOS VECES y el cliente aparecería
+  // debiendo de menos. El bucket "saldo a favor" existe solo para las NC legacy,
+  // que no tocaban el AR. Fijado en tests/integration/account-statement-credit-notes.test.js.
   const conditions = [
     'cn.tenant_id = $1',
     `cn.status = 'stamped'`,
@@ -360,6 +419,10 @@ function buildSummary(documents, advances, creditNotes) {
   const advancesAmount = advances.reduce((s, a) => s + a.amount_available, 0)
   const creditNotesAmount = creditNotes.reduce((s, c) => s + c.total, 0)
   const totalPending = sum(documents)
+  // Crédito YA descontado de los saldos de arriba. Es informativo: sirve para
+  // que total − pagado − acreditado = pendiente cuadre a la vista. NO entra en
+  // net_balance, o se descontaría dos veces.
+  const creditedApplied = documents.reduce((s, d) => s + (d.amount_credited || 0), 0)
 
   return {
     total_pending_amount: totalPending,
@@ -370,6 +433,10 @@ function buildSummary(documents, advances, creditNotes) {
     no_due:   { amount: sum(groups.no_due),   count: groups.no_due.length },
     advances_available:     { amount: advancesAmount,    count: advances.length },
     credit_notes_available: { amount: creditNotesAmount, count: creditNotes.length },
+    credits_applied: {
+      amount: creditedApplied,
+      count:  documents.filter(d => (d.amount_credited || 0) > 0.005).length,
+    },
     net_balance: totalPending - advancesAmount - creditNotesAmount,
   }
 }

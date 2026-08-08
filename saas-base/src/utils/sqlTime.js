@@ -26,4 +26,14 @@ const BUSINESS_TZ = /^[A-Za-z][A-Za-z0-9_+\-/]{1,63}$/.test(config.timezone || '
 //   Ej: `WHERE due_date < ${LOCAL_TODAY}`
 const LOCAL_TODAY = `((NOW() AT TIME ZONE '${BUSINESS_TZ}')::date)`
 
-module.exports = { LOCAL_TODAY, BUSINESS_TZ }
+// "Hoy" en la zona del negocio como 'YYYY-MM-DD', para las fechas que se
+// IMPRIMEN (las comparaciones en SQL usan LOCAL_TODAY). `new Date()
+// .toISOString().slice(0,10)` da la fecha UTC: en México, después de las 18:00
+// locales imprime el día siguiente. 'en-CA' formatea justo como YYYY-MM-DD.
+function localTodayISO(date = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: BUSINESS_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(date)
+}
+
+module.exports = { LOCAL_TODAY, BUSINESS_TZ, localTodayISO }

@@ -311,6 +311,7 @@ function DocumentsTable({ data, labels, direction, onOpenPartner, onPay }) {
                   </span>
                   <span className="font-mono font-semibold text-brand-300">{d.document_number}</span>
                 </div>
+                <CreditLine d={d} />
               </td>
               <td>
                 <p className="font-medium text-ink-primary">{d.partner_name}</p>
@@ -359,6 +360,24 @@ function DocumentsTable({ data, labels, direction, onOpenPartner, onPay }) {
         </tr>
       </tfoot>
     </table>
+  )
+}
+
+/**
+ * Renglón que explica una rebaja por nota de crédito. El importe YA está
+ * descontado del pendiente: sin esta línea el cliente ve un saldo menor que
+ * total − pagado y no sabe de dónde salió.
+ */
+function CreditLine({ d }) {
+  if (!(Number(d.amount_credited || 0) > 0.005)) return null
+  // Los folios de NC ya suelen venir con el prefijo "NC-": no repetirlo.
+  const folios = (d.credits || [])
+    .map(c => /^nc[-\s]/i.test(c.document_number) ? c.document_number : `NC ${c.document_number}`)
+    .join(', ')
+  return (
+    <span className="block text-[10px] text-status-info mt-0.5">
+      − {fmtMXN(d.amount_credited)} · {folios || 'crédito aplicado'}
+    </span>
   )
 }
 
@@ -481,6 +500,7 @@ function StatementDocumentRow({ d, direction }) {
               <InvoiceFileButtons invoiceId={d.document_id} documentNumber={d.document_number} />
             </span>
           )}
+          <CreditLine d={d} />
         </td>
         <td className="text-xs">{fmtDate(d.issue_date)}</td>
         <td className="text-xs">{fmtDate(d.due_date)}{d.days_overdue > 0 && <span className="text-[10px] text-status-danger ml-1">+{d.days_overdue}d</span>}</td>
