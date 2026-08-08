@@ -702,7 +702,7 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
             )}
             {/* Fase 2: recepción confirmada SIN documento → generar CXP sin factura.
                 Las reposiciones de devolución NO generan CxP (factura vigente = la original). */}
-            {receipt.status === 'confirmed' && !receipt.invoiced_at && !receipt.replacement_return_id && (
+            {receipt.status === 'confirmed' && !receipt.invoiced_at && !receipt.has_linked_invoice && !receipt.replacement_return_id && (
               <Can do="purchases:create">
                 <button onClick={() => { setActErr(null); setRemit(true) }}
                   className="btn-secondary btn-sm text-status-info hover:bg-status-info/10"
@@ -712,7 +712,7 @@ function DetallePanel({ receiptId, onClose, onEdit }) {
               </Can>
             )}
             {/* Solicitar al proveedor la factura de la recepción (espejo de Gastos). */}
-            {receipt.status === 'confirmed' && !receipt.invoiced_at && !receipt.replacement_return_id && receipt.partner_id && (
+            {receipt.status === 'confirmed' && !receipt.invoiced_at && !receipt.has_linked_invoice && !receipt.replacement_return_id && receipt.partner_id && (
               requestMsg ? (
                 <span className="text-xs text-brand-300 self-center">{requestMsg}</span>
               ) : (
@@ -1879,6 +1879,15 @@ export default function ComprasRecepciones() {
                           title={`Parcialmente facturada — ${r.invoiced_line_count} de ${r.line_count} líneas con factura`}>
                           <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
                           Parcial · {r.invoiced_line_count}/{r.line_count}
+                        </span>
+                      ) : r.has_linked_invoice ? (
+                        // Factura fiscal ligada aunque la recepción no tenga
+                        // `invoiced_at` ni líneas marcadas: pasa con facturas
+                        // viejas, anteriores al marcado por línea.
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-status-success/15 text-status-success"
+                          title={r.invoice_number ? `Factura ${r.invoice_number}` : 'Facturada'}>
+                          <span className="w-1.5 h-1.5 rounded-full bg-status-success shrink-0" />
+                          Facturada{r.invoice_number ? ` · ${r.invoice_number}` : ''}
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-status-warning/15 text-status-warning">

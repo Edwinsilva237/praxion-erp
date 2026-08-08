@@ -18,6 +18,33 @@ const RECEIPT_SORT_COLUMNS = {
   estatus:   'sr.status',
 }
 
+// Documento de CxP ligado a una recepción (alias `sr` en la query).
+//
+// La liga vive en `invoice_receipt_links` (N:N, mig 042) PERO las facturas
+// registradas ANTES de esa tabla solo dejaron rastro en la columna directa
+// `supplier_invoices.supplier_receipt_id`. Mirar solo la tabla N:N hacía que
+// recepciones con factura aparecieran como "Sin factura" en el listado — y que
+// "Solicitar factura" dejara pedirle al proveedor una factura que ya llegó.
+// Mismo patrón que la liga remisión↔factura consolidada (invoice_remissions).
+const LINKED_DOC_IDS = `(
+  SELECT si.id FROM supplier_invoices si
+   WHERE si.tenant_id = sr.tenant_id AND si.status <> 'cancelled'
+     AND (si.supplier_receipt_id = sr.id
+       OR EXISTS (SELECT 1 FROM invoice_receipt_links irl
+                   WHERE irl.supplier_invoice_id = si.id
+                     AND irl.supplier_receipt_id = sr.id)))`
+
+/** Campo del documento ligado más reciente (folio, tipo, uuid…). */
+const linkedDoc = (col) => `(
+  SELECT si2.${col} FROM supplier_invoices si2
+   WHERE si2.id IN ${LINKED_DOC_IDS}
+   ORDER BY si2.created_at DESC LIMIT 1)`
+
+/** ¿Tiene una FACTURA fiscal vigente ligada (no una remisión-CxP)? */
+const HAS_LINKED_INVOICE = `EXISTS (
+  SELECT 1 FROM supplier_invoices si3
+   WHERE si3.id IN ${LINKED_DOC_IDS} AND si3.type = 'invoice')`
+
 async function nextReceiptNumber(client, tenantId, opts = {}) {
   const result = await documentSeriesService.generateDocumentNumber({
     client, tenantId, entityType: 'supplier_receipt', opts,
@@ -65,9 +92,9 @@ async function listReceipts({
        AND ci2.status <> 'cancelled' AND ci2.type = 'invoice')`
   // Las reposiciones de devolución no esperan factura (la vigente es la
   // original) → no cuentan como "sin factura".
-  if (invoiceStatus === 'pending')  filters.push(`sr.invoiced_at IS NULL AND sr.replacement_return_id IS NULL AND NOT ${REAL_INVOICED_LINE}`)
+  if (invoiceStatus === 'pending')  filters.push(`sr.invoiced_at IS NULL AND sr.replacement_return_id IS NULL AND NOT ${REAL_INVOICED_LINE} AND NOT ${HAS_LINKED_INVOICE}`)
   if (invoiceStatus === 'partial')  filters.push(`sr.status = 'confirmed' AND sr.invoiced_at IS NULL AND ${REAL_INVOICED_LINE}`)
-  if (invoiceStatus === 'invoiced') filters.push(`sr.invoiced_at IS NOT NULL`)
+  if (invoiceStatus === 'invoiced') filters.push(`sr.invoiced_at IS NOT NULL OR ${HAS_LINKED_INVOICE}`)
   if (search) {
     params.push(`%${search}%`)
     const sN = params.length
@@ -82,22 +109,15 @@ async function listReceipts({
             sr.generic_supplier, sr.notes,
             sr.document_type, sr.document_number,
             sr.confirmed_at, sr.invoiced_at,
-            -- Folio de la factura de proveedor ligada (la más reciente NO cancelada).
-            -- La liga N:N vive en invoice_receipt_links; el folio es invoice_number.
-            (SELECT si.invoice_number
-               FROM invoice_receipt_links irl
-               JOIN supplier_invoices si
-                 ON si.id = irl.supplier_invoice_id AND si.status <> 'cancelled'
-              WHERE irl.supplier_receipt_id = sr.id
-              ORDER BY si.created_at DESC LIMIT 1) AS invoice_number,
+            -- Folio del documento de CxP ligado (el más reciente NO cancelado),
+            -- por CUALQUIERA de las dos vías de liga (ver LINKED_DOC_IDS).
+            ${linkedDoc('invoice_number')} AS invoice_number,
             -- Tipo del documento ligado: 'remission' = CXP sin factura (Fase 2),
             -- 'invoice' = factura fiscal. Para distinguir el chip en la lista.
-            (SELECT si.type
-               FROM invoice_receipt_links irl
-               JOIN supplier_invoices si
-                 ON si.id = irl.supplier_invoice_id AND si.status <> 'cancelled'
-              WHERE irl.supplier_receipt_id = sr.id
-              ORDER BY si.created_at DESC LIMIT 1) AS invoice_type,
+            ${linkedDoc('type')} AS invoice_type,
+            -- Bandera para el chip: hay factura fiscal ligada aunque las líneas
+            -- no estén marcadas (facturas viejas, previas a la mig 202).
+            ${HAS_LINKED_INVOICE} AS has_linked_invoice,
             CASE WHEN sr.evidence_path IS NOT NULL THEN sr.evidence_filename ELSE NULL END AS evidence_filename,
             po.order_number  AS purchase_order_number,
             sr.replacement_return_id,
@@ -169,7 +189,12 @@ async function getReceipt({ tenantId, receiptId }) {
                        WHERE irl.supplier_receipt_id = sr.id
                          AND si.status <> 'cancelled' AND si.type = 'invoice'), 0)::numeric AS invoiced_amount,
             u.full_name  AS created_by_name,
-            cb.full_name AS confirmed_by_name
+            cb.full_name AS confirmed_by_name,
+            -- Igual que en el listado: la liga puede venir por la tabla N:N o
+            -- por la columna directa de las facturas viejas. Sin esto, el panel
+            -- ofrecía "Solicitar factura" y "No se espera factura → CXP" sobre
+            -- recepciones que YA tienen su factura.
+            ${HAS_LINKED_INVOICE} AS has_linked_invoice
      FROM supplier_receipts sr
      LEFT JOIN purchase_orders    po ON po.id  = sr.purchase_order_id
      LEFT JOIN supplier_returns   rret ON rret.id = sr.replacement_return_id
@@ -913,11 +938,17 @@ async function fetchReceiptForInvoiceRequest({ tenantId, id }) {
             COALESCE((SELECT SUM(srl.subtotal) FROM supplier_receipt_lines srl
                        WHERE srl.supplier_receipt_id = sr.id), 0)::numeric AS receipt_subtotal,
             -- ¿Ya hay factura REAL activa ligada? (parcial también cuenta como "ya llegó algo")
-            EXISTS (SELECT 1 FROM invoice_receipt_links irl
-                      JOIN supplier_invoices si ON si.id = irl.supplier_invoice_id
-                     WHERE irl.supplier_receipt_id = sr.id
+            -- Por las DOS vías de liga: pedirle al proveedor una factura que ya
+            -- mandó (y que solo estaba ligada por la columna directa) era el
+            -- mismo punto ciego que marcaba la recepción como "Sin factura".
+            EXISTS (SELECT 1 FROM supplier_invoices si
+                     WHERE si.tenant_id = sr.tenant_id
                        AND si.status <> 'cancelled' AND si.type = 'invoice'
-                       AND si.uuid_sat IS NOT NULL) AS has_real_invoice
+                       AND si.uuid_sat IS NOT NULL
+                       AND (si.supplier_receipt_id = sr.id
+                         OR EXISTS (SELECT 1 FROM invoice_receipt_links irl
+                                     WHERE irl.supplier_invoice_id = si.id
+                                       AND irl.supplier_receipt_id = sr.id))) AS has_real_invoice
        FROM supplier_receipts sr
        LEFT JOIN purchase_orders   po ON po.id = sr.purchase_order_id
        LEFT JOIN business_partners bp ON bp.id = sr.partner_id
