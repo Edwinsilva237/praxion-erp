@@ -1,5 +1,10 @@
 {
   "appId": "com.praxionops.erp",
   "appName": "Praxion",
-  "webDir": "dist"
+  "webDir": "dist",
+  "plugins": {
+    "CapacitorUpdater": {
+      "autoUpdate": true
+    }
+  }
 }

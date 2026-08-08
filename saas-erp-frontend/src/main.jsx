@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Sentry, initSentry } from './config/sentry'
+import { notifyLiveUpdateReady } from './utils/liveUpdates'
 import './index.css'
 import App from './App'
 
@@ -68,3 +69,9 @@ if (preloader) {
     setTimeout(() => preloader.remove(), 800) // respaldo si transitionend no dispara
   }))
 }
+
+// App nativa: confirmarle al actualizador que este paquete arrancó bien. Va aquí
+// —después del primer render y sin depender del backend— porque si no se avisa a
+// tiempo, el plugin da por roto el paquete nuevo y regresa solo al anterior.
+// En web es no-op. Ver src/utils/liveUpdates.js.
+notifyLiveUpdateReady()

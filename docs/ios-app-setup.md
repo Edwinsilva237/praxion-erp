@@ -127,6 +127,14 @@ Esto crea el `AppIcon.appiconset` (todos los tamaños) + el splash. Label de la 
 re-corre el comando de arriba. *(El `icon-only.png` se aplana sin canal alfa a
 propósito — App Store rechaza iconos con transparencia.)*
 
+## ⚡ Actualizaciones por aire (OTA) — ver `docs/ota-live-updates.md`
+
+La app **empaqueta** la web (`webDir: "dist"`): lo instalado se congela en el build. Desde el
+2026-08-07 el repo ya trae el plugin de Capgo cableado (`@capgo/capacitor-updater` +
+`src/utils/liveUpdates.js` llamado desde `main.jsx` + `autoUpdate` en `capacitor.config.json`).
+**El siguiente build de iOS debe llevarlo** — de ahí en adelante las pantallas nuevas llegan
+solas, sin revisión. La receta completa (incluida la de Android) está en ese doc.
+
 ## Después del Simulador (siguiente)
 
 1. **Correr en iPhone físico** (Apple ID gratis, firma caduca cada 7 días).

@@ -24,6 +24,7 @@
     "@capacitor/push-notifications": "^8.1.1",
     "@capacitor/share": "^8.0.1",
     "@capgo/capacitor-printer": "^8.0.14",
+    "@capgo/capacitor-updater": "^8.51.3",
     "@hookform/resolvers": "^3.9.0",
     "@sentry/react": "^10.53.1",
     "@tanstack/react-query": "^5.51.1",
