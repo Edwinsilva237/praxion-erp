@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { reportsApi } from '@/api/reports'
 import Spinner from '@/components/ui/Spinner'
 
@@ -121,6 +122,16 @@ export default function ReporteContable() {
 
   const busy = excel.isPending || paquete.isPending
 
+  // Semáforo del periodo: si hay incidencias fiscales, mejor resolverlas antes
+  // de mandarle el paquete al contador.
+  const { data: cuadre } = useQuery({
+    queryKey: ['fiscal-reconciliation', from, to],
+    queryFn:  () => reportsApi.getFiscalReconciliation({ from, to }),
+    enabled:  Boolean(rangeValid),
+    staleTime: 60_000,
+    retry: false,
+  })
+
   return (
     <div className="page-enter max-w-3xl mx-auto py-6 px-4 flex flex-col gap-6">
       <div>
@@ -171,6 +182,31 @@ export default function ReporteContable() {
         )}
         {error && <div className="alert-error text-sm">{error}</div>}
       </section>
+
+      {/* ── Semáforo del cuadre fiscal ──────────────────────────────────── */}
+      {cuadre && (
+        <Link
+          to="/reportes/cuadre-fiscal"
+          className={cuadre.issues.total === 0
+            ? 'card px-4 py-3 flex items-start gap-3 hover:bg-surface-elevated/40 border-l-[3px] border-l-status-success'
+            : `card px-4 py-3 flex items-start gap-3 hover:bg-surface-elevated/40 border-l-[3px] ${cuadre.issues.danger ? 'border-l-status-danger' : 'border-l-status-warning'}`}>
+          <span className="text-lg leading-none mt-0.5">
+            {cuadre.issues.total === 0 ? '✅' : cuadre.issues.danger ? '⛔' : '⚠️'}
+          </span>
+          <div className="flex-1">
+            <p className="text-sm font-medium text-ink-primary">
+              {cuadre.issues.total === 0
+                ? 'El periodo cuadra: sin incidencias fiscales.'
+                : `${cuadre.issues.total} incidencia${cuadre.issues.total === 1 ? '' : 's'} en el periodo${cuadre.issues.danger ? ` · ${cuadre.issues.danger} bloquean el cierre` : ''}`}
+            </p>
+            <p className="text-xs text-ink-muted mt-0.5">
+              {cuadre.iva.en_riesgo > 0.005
+                ? `Hay ${new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(cuadre.iva.en_riesgo)} de IVA que aún no es acreditable por falta de REP. Ver el cuadre fiscal →`
+                : 'Ver el cuadre fiscal del periodo →'}
+            </p>
+          </div>
+        </Link>
+      )}
 
       {/* ── Paquete ZIP para el contador ────────────────────────────────── */}
       <section className="card flex flex-col gap-4">

@@ -22,6 +22,10 @@ const { generateInventoryPdf } = require('./inventoryReportPdf')
 const { getAccountStatement, getPartnerStatement, getDocumentLines, getDocumentPayments } = require('./accountStatementReport')
 const { getPurchaseTraceability } = require('./purchaseTraceability')
 const { generatePurchaseTraceabilityWorkbook } = require('./purchaseTraceabilityExcel')
+const { getSalesTraceability } = require('./salesTraceability')
+const { generateSalesTraceabilityWorkbook } = require('./salesTraceabilityExcel')
+const { getFiscalReconciliation } = require('./fiscalReconciliation')
+const { generateFiscalReconciliationWorkbook } = require('./fiscalReconciliationExcel')
 const { generateAccountStatementWorkbook } = require('./accountStatementExcel')
 const { generateAccountStatementPdf } = require('./accountStatementPdf')
 const { enqueueEmail } = require('../../queues/emailQueue')
@@ -418,6 +422,118 @@ router.get('/purchase-traceability/excel',
         tenantId: req.tenant.id, from, to, tenantName, partnerId: partnerId || null,
       })
       const filename = `trazabilidad-compras-${from}-a-${to}.xlsx`
+      res.setHeader('Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+      res.send(Buffer.from(buffer))
+    } catch (err) { next(err) }
+  }
+)
+
+// ─── Trazabilidad de ventas — expediente remisión → factura → cobros → REP ─
+
+/**
+ * GET /api/reports/sales-traceability?from&to&partnerId&onlyIssues
+ * Expediente de cada factura emitida del periodo: pedido, remisiones,
+ * devoluciones del cliente y su NC, cancelación/sustitución, cobros (y
+ * reversas) y complementos de pago. `onlyIssues=true` deja solo los
+ * expedientes que hay que revisar — los totales no cambian. `to` exclusivo.
+ */
+router.get('/sales-traceability',
+  checkPermission('reports', 'cxc'),
+  async (req, res, next) => {
+    try {
+      const { from, to, partnerId, onlyIssues } = req.query
+      if (!isValidDate(from) || !isValidDate(to)) {
+        return res.status(400).json({ error: 'from y to en formato YYYY-MM-DD requeridos.' })
+      }
+      if (from >= to) {
+        return res.status(400).json({ error: '"from" debe ser anterior a "to".' })
+      }
+      const data = await getSalesTraceability({
+        tenantId: req.tenant.id, from, to,
+        partnerId: partnerId || null,
+        onlyIssues: onlyIssues === 'true',
+      })
+      res.json(data)
+    } catch (err) { next(err) }
+  }
+)
+
+/** GET /api/reports/sales-traceability/excel — Excel de la cadena documental. */
+router.get('/sales-traceability/excel',
+  checkPermission('reports', 'cxc'),
+  async (req, res, next) => {
+    try {
+      const { from, to, partnerId } = req.query
+      if (!isValidDate(from) || !isValidDate(to)) {
+        return res.status(400).json({ error: 'from y to en formato YYYY-MM-DD requeridos.' })
+      }
+      const { rows } = await query(
+        `SELECT COALESCE(display_name, name) AS tenant_name FROM tenants WHERE id = $1`,
+        [req.tenant.id]
+      )
+      const tenantName = rows[0]?.tenant_name || 'Empresa'
+      const buffer = await generateSalesTraceabilityWorkbook({
+        tenantId: req.tenant.id, from, to, tenantName, partnerId: partnerId || null,
+      })
+      const filename = `trazabilidad-ventas-${from}-a-${to}.xlsx`
+      res.setHeader('Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+      res.send(Buffer.from(buffer))
+    } catch (err) { next(err) }
+  }
+)
+
+// ─── Cuadre fiscal — universo CFDI del periodo + incidencias ───────────────
+
+/**
+ * GET /api/reports/fiscal-reconciliation?from&to
+ * Universo de documentos fiscales del periodo (emitidos, recibidos y sus REP)
+ * con la lista de excepciones que impiden cerrar el mes: REP faltantes de los
+ * dos lados, NC sin factura origen, cancelaciones que pegan a un mes ya
+ * declarado, CxP sin CFDI, remisiones sin facturar y XML no resguardados.
+ * Mismos criterios de corte que /accounting y /accounting-package. `to` exclusivo.
+ */
+router.get('/fiscal-reconciliation',
+  checkPermission('reports', 'accounting'),
+  async (req, res, next) => {
+    try {
+      const { from, to } = req.query
+      if (!isValidDate(from) || !isValidDate(to)) {
+        return res.status(400).json({ error: 'from y to en formato YYYY-MM-DD requeridos.' })
+      }
+      if (from >= to) {
+        return res.status(400).json({ error: '"from" debe ser anterior a "to".' })
+      }
+      const data = await getFiscalReconciliation({ tenantId: req.tenant.id, from, to })
+      res.json(data)
+    } catch (err) { next(err) }
+  }
+)
+
+/** GET /api/reports/fiscal-reconciliation/excel — resumen + incidencias. */
+router.get('/fiscal-reconciliation/excel',
+  checkPermission('reports', 'accounting'),
+  async (req, res, next) => {
+    try {
+      const { from, to } = req.query
+      if (!isValidDate(from) || !isValidDate(to)) {
+        return res.status(400).json({ error: 'from y to en formato YYYY-MM-DD requeridos.' })
+      }
+      if (from >= to) {
+        return res.status(400).json({ error: '"from" debe ser anterior a "to".' })
+      }
+      const { rows } = await query(
+        `SELECT COALESCE(display_name, name) AS tenant_name FROM tenants WHERE id = $1`,
+        [req.tenant.id]
+      )
+      const tenantName = rows[0]?.tenant_name || 'Empresa'
+      const buffer = await generateFiscalReconciliationWorkbook({
+        tenantId: req.tenant.id, from, to, tenantName,
+      })
+      const filename = `cuadre-fiscal-${from}-a-${to}.xlsx`
       res.setHeader('Content-Type',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)

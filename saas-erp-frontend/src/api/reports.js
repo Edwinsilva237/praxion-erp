@@ -26,6 +26,31 @@ export const reportsApi = {
     }),
 
   /**
+   * Trazabilidad de ventas: expediente de cada factura emitida (pedido,
+   * remisiones, devoluciones/NC, cancelación, cobros y complementos).
+   * onlyIssues deja solo los expedientes que hay que revisar.
+   */
+  getSalesTraceability: ({ from, to, partnerId, onlyIssues }) =>
+    api.get(`${B}/sales-traceability`, {
+      params: { from, to, partnerId, onlyIssues: onlyIssues ? 'true' : undefined },
+    }).then(r => r.data),
+
+  /** Excel de la trazabilidad de ventas (siempre con todos los expedientes). */
+  downloadSalesTraceabilityExcel: ({ from, to, partnerId }) =>
+    api.get(`${B}/sales-traceability/excel`, { params: { from, to, partnerId }, responseType: 'blob' }),
+
+  /**
+   * Cuadre fiscal del periodo: universo de CFDI (emitidos, recibidos y REP) e
+   * incidencias que impiden cerrar el mes. from inclusivo, to exclusivo.
+   */
+  getFiscalReconciliation: ({ from, to }) =>
+    api.get(`${B}/fiscal-reconciliation`, { params: { from, to } }).then(r => r.data),
+
+  /** Excel del cuadre fiscal: resumen + una fila por incidencia. */
+  downloadFiscalReconciliationExcel: ({ from, to }) =>
+    api.get(`${B}/fiscal-reconciliation/excel`, { params: { from, to }, responseType: 'blob' }),
+
+  /**
    * Snapshot financiero del mes en curso (o el indicado en YYYY-MM).
    * Devuelve { period, sales, iva }. Pensado para refresco frecuente (60s).
    */

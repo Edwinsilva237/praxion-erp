@@ -184,6 +184,12 @@ const icons = {
       <path d="M12 3C7.58 3 4 4.79 4 7s3.58 4 8 4 8-1.79 8-4-3.58-4-8-4zM4 9v3c0 2.21 3.58 4 8 4s8-1.79 8-4V9c0 2.21-3.58 4-8 4s-8-1.79-8-4zm0 5v3c0 2.21 3.58 4 8 4s8-1.79 8-4v-3c0 2.21-3.58 4-8 4s-8-1.79-8-4z" />
     </svg>
   ),
+  // Escudo con paloma — cumplimiento fiscal (cuadre del periodo).
+  shield: (
+    <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+      <path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1.2 15.4L7 12.6l1.4-1.4 2.4 2.4 5-5 1.4 1.4-6.4 6.4z" />
+    </svg>
+  ),
   // Comprobante/recibo de gasto — distinto del icono $ (money) de Pagos emitidos.
   expense: (
     <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">

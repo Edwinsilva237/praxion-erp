@@ -53,7 +53,11 @@ export const NAV_SECTIONS = [
       { label: 'Producción',          to: '/reportes/produccion',         iconKey: 'chartLine', permission: 'reports:production',  modules: ['reports', 'production'] },
       { label: 'Cuentas por cobrar',  to: '/reportes/cuentas-por-cobrar', iconKey: 'card',      permission: 'reports:cxc',         modules: ['reports', 'sales'] },
       { label: 'Cuentas por pagar',   to: '/reportes/cuentas-por-pagar',  iconKey: 'money',     permission: 'reports:cxp',         modules: ['reports', 'purchases'] },
+      { label: 'Trazabilidad de ventas',  to: '/reportes/trazabilidad-ventas',  iconKey: 'history', permission: 'reports:cxc',    modules: ['reports', 'sales'] },
       { label: 'Trazabilidad de compras', to: '/reportes/trazabilidad-compras', iconKey: 'history', permission: 'reports:cxp',    modules: ['reports', 'purchases'] },
+      // Cuadre fiscal y Contable solo dependen del módulo de reportes: el
+      // universo CFDI existe aunque el tenant no use ventas ni compras.
+      { label: 'Cuadre fiscal',       to: '/reportes/cuadre-fiscal',      iconKey: 'shield',    permission: 'reports:accounting',  module: 'reports' },
       { label: 'Contable',            to: '/finanzas/reporte-contable',   iconKey: 'book',      permission: 'reports:accounting',  module: 'reports' },
     ],
   },
