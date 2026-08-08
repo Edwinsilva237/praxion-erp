@@ -252,6 +252,13 @@ export default function ReporteContable() {
             El mismo Reporte Contable del ZIP, por separado: Resumen IVA, Ventas, Notas de crédito,
             Cobros, Compras y Pagos — con filtros automáticos en cada hoja.
           </p>
+          <p className="text-xs text-ink-secondary mt-2">
+            Cada factura —emitida y recibida— lleva su <strong>rastro para conciliar contra el banco</strong>:
+            fecha y banco del cobro o pago (o la tarjeta con que se pagó), forma de pago, complemento
+            de pago con su UUID —o &ldquo;No aplica (PUE)&rdquo;—, si está cancelada y por cuál se
+            sustituye, y sus notas de crédito. En la hoja de pagos se ve además a qué factura se
+            aplicó cada salida de dinero.
+          </p>
         </div>
 
         <label className="flex items-start gap-3 cursor-pointer">
