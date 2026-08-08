@@ -1162,12 +1162,25 @@ async function createAdjustmentDocument({
     let totalIn  = 0
     let totalOut = 0
 
+    // Si la línea no trae unidad, la de la materia prima en su catálogo — no
+    // "kg" para todas. Se cachea porque el ajuste puede repetir el artículo.
+    const unitCache = new Map()
+    const catalogUnit = async (itemType, itemId) => {
+      if (itemType !== 'raw_material') return 'pza'
+      if (unitCache.has(itemId)) return unitCache.get(itemId)
+      const { rows } = await client.query(
+        `SELECT unit FROM raw_materials WHERE id = $1 AND tenant_id = $2`, [itemId, tenantId])
+      const u = rows[0]?.unit || 'kg'
+      unitCache.set(itemId, u)
+      return u
+    }
+
     for (const ln of lines) {
       const qtyAbs   = parseFloat(ln.quantity)
       const isIn     = ln.direction === 'in'
       const signedQ  = isIn ? qtyAbs : -qtyAbs
       const unitCost = parseFloat(ln.unitCost || 0)
-      const unit     = ln.unit || (ln.itemType === 'raw_material' ? 'kg' : 'pza')
+      const unit     = ln.unit || await catalogUnit(ln.itemType, ln.itemId)
       const lineVal  = qtyAbs * unitCost
 
       await recordMovement(client, {
@@ -1415,7 +1428,8 @@ async function recomputeStockFromMovements({ tenantId, apply = false }) {
             c.computed_qty,
             COALESCE(s.quantity, 0)::numeric AS current_qty,
             s.id AS stock_id,
-            COALESCE(s.unit, CASE c.item_type WHEN 'raw_material'::inventory_item_type THEN 'kg' ELSE 'pza' END) AS unit,
+            COALESCE(s.unit, CASE c.item_type WHEN 'raw_material'::inventory_item_type
+                             THEN COALESCE(rm.unit, 'kg') ELSE 'pza' END) AS unit,
             COALESCE(s.avg_cost, 0)::numeric AS avg_cost,
             w.name AS warehouse_name,
             CASE c.item_type
@@ -1766,7 +1780,7 @@ async function searchItems({ tenantId, q = '', type = null, warehouseId = null, 
   if (!type || type === 'raw_material') {
     parts.push(`
       SELECT rm.id, rm.name, NULL AS sku,
-             'raw_material' AS item_type, 'kg' AS unit,
+             'raw_material' AS item_type, COALESCE(rm.unit, 'kg') AS unit,
              ${stockColsMP}
       FROM raw_materials rm
       ${stockJoinMP}

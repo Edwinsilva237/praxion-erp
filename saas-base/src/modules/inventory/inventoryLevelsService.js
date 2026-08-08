@@ -12,15 +12,19 @@ async function getLevelsByItem({ tenantId, itemType, itemId }) {
   }
 
   const itemTable = itemType === 'raw_material' ? 'raw_materials' : 'products'
+  // La unidad de una MATERIA PRIMA se elige por material en su catálogo (kg,
+  // ton, lt, pza…). Se lee aquí para no etiquetar todo como "kg" cuando el
+  // almacén todavía no tiene existencia de la cual tomarla.
   const { rows: itemRows } = await query(
     `SELECT id, name, lead_time_days,
-            ${itemType === 'product' ? 'sku,' : ''}
+            ${itemType === 'product' ? 'sku,' : 'unit,'}
             is_active
      FROM ${itemTable}
      WHERE id = $1 AND tenant_id = $2`,
     [itemId, tenantId]
   )
   if (!itemRows[0]) throw createError(404, 'Item no encontrado.')
+  const fallbackUnit = itemType === 'raw_material' ? (itemRows[0].unit || 'kg') : 'pza'
 
   const { rows: levels } = await query(
     `SELECT
@@ -41,7 +45,7 @@ async function getLevelsByItem({ tenantId, itemType, itemId }) {
        AND il.item_type = $2::inventory_item_type
        AND il.item_id = $3
      ORDER BY w.type, w.name`,
-    [tenantId, itemType, itemId, itemType === 'raw_material' ? 'kg' : 'pza']
+    [tenantId, itemType, itemId, fallbackUnit]
   )
 
   return { item: itemRows[0], levels }
@@ -216,9 +220,11 @@ async function listWithStatus({ tenantId, status }) {
           ELSE NULL
         END AS sku,
         COALESCE(s.quantity, 0)::numeric AS current_stock,
+        -- Sin existencia de la cual tomar la unidad, la del catálogo del
+        -- material (kg, ton, lt…) — no "kg" para todo.
         COALESCE(s.unit,
           CASE il.item_type
-            WHEN 'raw_material'::inventory_item_type THEN 'kg'
+            WHEN 'raw_material'::inventory_item_type THEN COALESCE(rm.unit, 'kg')
             ELSE 'pza'
           END
         ) AS unit,
@@ -495,7 +501,8 @@ async function checkLowStock(tenantId) {
             w.name AS warehouse_name,
             COALESCE(s.quantity, 0)::numeric AS current_stock,
             COALESCE(s.unit,
-              CASE il.item_type WHEN 'raw_material'::inventory_item_type THEN 'kg' ELSE 'pza' END) AS unit,
+              CASE il.item_type WHEN 'raw_material'::inventory_item_type
+                   THEN COALESCE(rm.unit, 'kg') ELSE 'pza' END) AS unit,
             CASE il.item_type
               WHEN 'raw_material'::inventory_item_type THEN rm.name
               WHEN 'product'::inventory_item_type      THEN p.name END AS item_name,

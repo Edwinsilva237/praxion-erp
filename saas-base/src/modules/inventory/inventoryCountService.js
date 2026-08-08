@@ -170,7 +170,10 @@ async function createCount({
              COALESCE(s.quantity, 0)::numeric AS system_qty,
              COALESCE(s.avg_cost, 0)::numeric AS system_avg_cost,
              COALESCE(s.unit,
-               CASE WHEN $2::inventory_item_type = 'raw_material' THEN 'kg' ELSE 'pza' END
+               CASE WHEN $2::inventory_item_type = 'raw_material'
+                    THEN COALESCE((SELECT rm.unit FROM raw_materials rm
+                                    WHERE rm.id = $3::uuid AND rm.tenant_id = $1), 'kg')
+                    ELSE 'pza' END
              ) AS unit
            FROM (SELECT 1) x
            LEFT JOIN inventory_stock s
@@ -226,7 +229,7 @@ async function createCount({
               $2::uuid AS warehouse_id,
               0::numeric AS system_qty,
               0::numeric AS system_avg_cost,
-              'kg'::text AS unit
+              COALESCE(rm.unit, 'kg')::text AS unit
             FROM raw_materials rm
             WHERE rm.tenant_id = $1 AND rm.is_active = true
               AND NOT EXISTS (
@@ -276,7 +279,9 @@ async function createCount({
             COALESCE(s.avg_cost, 0)::numeric  AS system_avg_cost,
             COALESCE(s.unit,
               CASE
-                WHEN COALESCE(s.item_type, il.item_type) = 'raw_material' THEN 'kg'
+                WHEN COALESCE(s.item_type, il.item_type) = 'raw_material'
+                THEN COALESCE((SELECT rm2.unit FROM raw_materials rm2
+                                WHERE rm2.id = COALESCE(s.item_id, il.item_id)), 'kg')
                 ELSE 'pza'
               END
             ) AS unit

@@ -88,7 +88,10 @@ async function suggestItemsToCount({
         (COALESCE(s.quantity, 0) * COALESCE(s.avg_cost, 0))::numeric AS stock_value,
         COALESCE(s.unit,
           CASE COALESCE(s.item_type, il.item_type)
-            WHEN 'raw_material' THEN 'kg' ELSE 'pza'
+            WHEN 'raw_material'
+            THEN COALESCE((SELECT rm.unit FROM raw_materials rm
+                            WHERE rm.id = COALESCE(s.item_id, il.item_id)), 'kg')
+            ELSE 'pza'
           END
         ) AS unit
       FROM inventory_stock s
